@@ -1,0 +1,761 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+import { gzipSync } from 'node:zlib';
+import { collect } from './dist/index.js';
+import { identityExclusions } from './src/policy.ts';
+
+const { values } = parseArgs({
+	allowNegative: true,
+	options: {
+		references: { type: 'boolean', default: true },
+		chrome: { type: 'boolean', default: false },
+		headed: { type: 'boolean', default: false },
+		out: { type: 'string', default: '.test-results/headless.json' }
+	}
+});
+for (const [ua, vendor, expected] of [
+	['Version/17.0 Safari/605.1.15', 'Apple Computer, Inc.', true],
+	['Version/26.6.1 Safari/605.1.15', 'Apple Computer, Inc.', true],
+	['Version/16.6 Safari/605.1.15', 'Apple Computer, Inc.', false],
+	['Chrome/156.0.0.0 Safari/537.36', 'Google Inc.', false],
+	['CriOS/156.0.0.0 Safari/604.1', 'Apple Computer, Inc.', false],
+	['FxiOS/143.1 Safari/604.1', 'Apple Computer, Inc.', false],
+	['Version/26.0 Safari/605.1.15', 'Google Inc.', false],
+	['AppleWebKit/605.1.15 Mobile/15E148', 'Apple Computer, Inc.', false]
+])
+	assert.equal(identityExclusions(ua, vendor).length > 0, expected);
+await assert.rejects(collect(), /secure browser context/);
+const require = createRequire(new URL('./package.json', import.meta.url));
+const { chromium, firefox, webkit } = require('playwright-core');
+const sources = { custom: await readFile(new URL('dist/index.iife.js', import.meta.url), 'utf8') };
+for (const file of ['dist/index.js', 'dist/index.iife.js']) {
+	const code = await readFile(new URL(file, import.meta.url), 'utf8');
+	assert(code.includes('Copyright (c) 2025 FingerprintJS, Inc'));
+	assert(code.includes('MIT License'));
+}
+const runners = {
+	custom:
+		'async () => { const r = await OpenFingerprint.collect(); return { id: r.fingerprint, components: Object.keys(r.components).length, hints:Object.keys(r.hints).length, unavailable: r.unavailable, timings:r.timings }; }'
+};
+if (values.references) {
+	const { build } = require('esbuild');
+	const web = fileURLToPath(new URL('.', import.meta.url));
+	for (const [name, contents, run] of [
+		[
+			'thumbmark',
+			`import { Thumbmark } from '@thumbmarkjs/thumbmarkjs'; window.Reference = Thumbmark;`,
+			'async () => { const r = await new Reference({logging:false}).get(); return {id:r.thumbmark,components:Object.keys(r.components).length}; }'
+		],
+		[
+			'fpjs',
+			`import FingerprintJS, {sources} from '@fingerprintjs/fingerprintjs'; window.Reference = FingerprintJS; window.fontPreferenceReference=sources.fontPreferences;`,
+			'async () => { const a = await Reference.load({monitoring:false}); const r = await a.get(); return {id:r.visitorId,components:Object.keys(r.components).length}; }'
+		]
+	]) {
+		const built = await build({
+			stdin: { contents, resolveDir: web },
+			bundle: true,
+			write: false,
+			minify: true,
+			target: 'es2022',
+			format: 'iife',
+			logLevel: 'silent'
+		});
+		sources[name] = built.outputFiles[0].text;
+		runners[name] = run;
+	}
+}
+const report = {
+	at: new Date().toISOString(),
+	headed: values.headed,
+	scope:
+		'One automated host, isolated localhost profiles; library collection only, not physical-device accuracy or network latency.',
+	bundles: {},
+	browsers: [],
+	checks: [],
+	measurements: []
+};
+for (const [name, code] of Object.entries(sources))
+	report.bundles[name] = {
+		bytes: Buffer.byteLength(code),
+		gzip_bytes: gzipSync(code).byteLength,
+		sha256: createHash('sha256').update(code).digest('hex')
+	};
+const server = createServer((req, res) => {
+	res.setHeader('Cache-Control', 'no-store');
+	res.setHeader(
+		'Content-Security-Policy',
+		"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; frame-src 'self'"
+	);
+	const name = (req.url || '').slice(1).replace('.js', '');
+	if ((req.url || '').endsWith('.js') && Object.hasOwn(sources, name)) {
+		res.setHeader('Content-Type', 'text/javascript');
+		res.end(sources[name]);
+	} else if (Object.hasOwn(runners, name)) {
+		res.setHeader('Content-Type', 'text/html');
+		res.end(
+			`<!doctype html><html><meta charset="utf-8"><body><script>window.violations=[];document.addEventListener('securitypolicyviolation', e => violations.push(e.violatedDirective))</script><script src="/${name}.js"></script><script>window.run = ${runners[name]};</script></body></html>`
+		);
+	} else {
+		res.writeHead(404);
+		res.end();
+	}
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const origin = `http://localhost:${server.address().port}`;
+const output = resolve(values.out);
+await mkdir(dirname(output), { recursive: true });
+const checkpoint = () => writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+
+function valid(r) {
+	assert.equal(r.version, 4);
+	assert(Array.isArray(r.excluded));
+	assert(r.fingerprint === null || /^[0-9a-f]{64}$/.test(r.fingerprint));
+	assert(r.coreFingerprint === null || /^[0-9a-f]{64}$/.test(r.coreFingerprint));
+	for (const map of [r.components, r.hints])
+		for (const v of Object.values(map)) assert.match(v, /^[0-9a-f]{64}$/);
+	assert(
+		Object.values(r.unavailable).every((v) =>
+			['unsupported', 'unstable', 'error', 'timeout'].includes(v)
+		)
+	);
+	for (const k of Object.keys(r.unavailable)) assert(!(k in r.components) && !(k in r.hints));
+}
+
+try {
+	for (const [name, engine, extra] of [
+		...(values.chrome
+			? [['chrome', chromium, { channel: 'chrome', args: ['--enable-automation'] }]]
+			: []),
+		['chromium', chromium, {}],
+		['firefox', firefox, {}],
+		['webkit', webkit, {}]
+	]) {
+		const browser = await engine.launch({ ...extra, headless: !values.headed, timeout: 30000 });
+		const external = [];
+		report.browsers.push({ name, version: browser.version() });
+		const context = await browser.newContext();
+		await context.route('**/*', (route) => {
+			if (new URL(route.request().url()).origin !== origin) {
+				external.push('blocked');
+				return route.abort();
+			}
+			return route.continue();
+		});
+		const page = await context.newPage();
+		const fresh = async (init, arg) => {
+			const p = await context.newPage();
+			if (init) await p.addInitScript(init, arg);
+			await p.goto(`${origin}/custom`);
+			return p;
+		};
+		try {
+			await page.goto(`${origin}/custom`);
+			const a = await page.evaluate(() =>
+				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 5000 })
+			);
+			valid(a);
+			assert(a.fingerprint);
+			assert(a.storageId);
+			const b = await page.evaluate(() =>
+				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 1000 })
+			);
+			valid(b);
+			assert.equal(a.storageId, b.storageId);
+			await page.evaluate(() => {
+				Object.defineProperty(navigator, 'languages', { value: ['zz-ZZ'], configurable: true });
+				Object.defineProperty(screen, 'width', { value: 999, configurable: true });
+				Object.defineProperty(navigator, 'hardwareConcurrency', { value: 1, configurable: true });
+			});
+			const changedHints = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+			assert.notDeepEqual(a.hints, changedHints.hints);
+			assert.equal(a.coreFingerprint, changedHints.coreFingerprint);
+			assert.notEqual(a.fingerprint, changedHints.fingerprint);
+			assert.equal(await page.locator('iframe').count(), 0);
+			const differentTenant = await page.evaluate(() =>
+				OpenFingerprint.collect({ storageKey: 'other', timeoutMs: 1000 })
+			);
+			assert.notEqual(a.storageId, differentTenant.storageId);
+			await page.reload();
+			const afterReload = await page.evaluate(() =>
+				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 1000 })
+			);
+			assert.equal(a.storageId, afterReload.storageId);
+			await page.evaluate(() => {
+				localStorage.clear();
+				sessionStorage.clear();
+			});
+			const noStorage = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+			assert.equal(noStorage.storageId, null);
+			assert.equal(await page.evaluate(() => localStorage.length), 0);
+			const order = ([x], [y]) => (x < y ? -1 : x > y ? 1 : 0);
+			const components = Object.entries(a.components)
+				.filter(([name]) => !a.excluded.includes(name))
+				.sort(order);
+			const hints = Object.entries(a.hints)
+				.filter(([name]) => !a.excluded.includes(name))
+				.sort(order);
+			const canonical = 'stealth-agent:4\0' + JSON.stringify({ components, hints });
+			assert.equal(a.fingerprint, createHash('sha256').update(canonical).digest('hex'));
+			assert.equal(
+				a.coreFingerprint,
+				createHash('sha256')
+					.update('stealth-core:4\0' + JSON.stringify(components))
+					.digest('hex')
+			);
+			report.checks.push({
+				browser: name,
+				check: 'hashed output, aggregate, optional namespaced storage, reload, DOM cleanup',
+				passed: true
+			});
+
+			const cancelled = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1 }));
+			valid(cancelled);
+			assert.equal(await page.locator('iframe').count(), 0);
+			const rejected = await page.evaluate(async () => {
+				for (const options of [
+					{ timeoutMs: NaN },
+					{ timeoutMs: 0 },
+					{ timeoutMs: 5001 },
+					{ storageKey: '' },
+					{ storageKey: 42 }
+				]) {
+					try {
+						await OpenFingerprint.collect(options);
+						return false;
+					} catch {}
+				}
+				return true;
+			});
+			assert(rejected);
+			let p = await fresh(() => {
+				Object.defineProperty(globalThis, 'OfflineAudioContext', { value: undefined });
+				Object.defineProperty(globalThis, 'webkitOfflineAudioContext', { value: undefined });
+				HTMLCanvasElement.prototype.getContext = () => null;
+				Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', { get: () => null });
+			});
+			let r = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+			valid(r);
+			for (const k of ['audio', 'canvas', 'fonts', 'fontFallbacks', 'fontPreferences', 'gpu'])
+				assert.equal(r.unavailable[k], 'unsupported');
+			assert.equal(r.fingerprint, null);
+			await p.close();
+
+			p = await fresh(() => {
+				Storage.prototype.getItem = () => {
+					throw new Error('Denied');
+				};
+				Storage.prototype.setItem = () => {
+					throw new Error('Denied');
+				};
+			});
+			r = await p.evaluate(() => OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 1000 }));
+			valid(r);
+			assert.equal(r.storageId, null);
+			assert(r.fingerprint);
+			await p.close();
+
+			p = await fresh(() => {
+				const Original = globalThis.OfflineAudioContext;
+				if (Original) Original.prototype.startRendering = () => new Promise(() => {});
+			});
+			r = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 100 }));
+			valid(r);
+			assert.equal(r.unavailable.audio, 'timeout');
+			assert(r.durationMs < 1500);
+			await p.close();
+
+			p = await fresh(() => {
+				let tick = 0;
+				const original = CanvasRenderingContext2D.prototype.getImageData;
+				CanvasRenderingContext2D.prototype.getImageData = function (...args) {
+					const data = original.apply(this, args);
+					data.data[0] = ++tick % 256;
+					return data;
+				};
+			});
+			r = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+			valid(r);
+			assert.equal(r.unavailable.canvas, 'unstable');
+			assert(!r.components.canvas);
+			await p.close();
+
+			p = await fresh(() => {
+				Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', {
+					get() {
+						throw new Error('Denied');
+					}
+				});
+			});
+			r = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+			valid(r);
+			assert.equal(r.unavailable.fonts, 'error');
+			assert.equal(await p.locator('iframe').count(), 0);
+			await p.close();
+			p = await fresh(() => {
+				const original = HTMLCanvasElement.prototype.getContext;
+				HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+					if (type === 'webgl') {
+						const end = performance.now() + 1100;
+						while (performance.now() < end) {}
+					}
+					return original.call(this, type, ...args);
+				};
+			});
+			r = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+			valid(r);
+			assert(
+				r.components.fonts &&
+					r.components.fontPreferences &&
+					(r.excluded.includes('canvas') || r.components.canvas),
+				'A slow GPU must not discard earlier trusted hashes'
+			);
+			if (r.excluded.includes('canvas')) assert.equal(r.unavailable.canvas, 'timeout');
+			assert.equal(r.unavailable.gpu, 'timeout');
+			await p.close();
+			for (const failure of ['render', 'start', 'fidelity']) {
+				p = await fresh((mode) => {
+					let count = 0;
+					window.audioDisconnects = 0;
+					globalThis.OfflineAudioContext = class {
+						id = ++count;
+						createOscillator() {
+							return {
+								frequency: { value: 0 },
+								connect() {},
+								disconnect() {
+									window.audioDisconnects++;
+								},
+								start() {
+									if (mode === 'start') throw new Error('Denied');
+								}
+							};
+						}
+						createDynamicsCompressor() {
+							return {
+								threshold: { value: 0 },
+								knee: { value: 0 },
+								ratio: { value: 0 },
+								connect() {},
+								disconnect() {
+									window.audioDisconnects++;
+								}
+							};
+						}
+						startRendering() {
+							if (mode === 'fidelity')
+								return Promise.resolve({
+									getChannelData: () => new Float32Array(4096).fill(window.audioLevel ?? 0.25)
+								});
+							return this.id === 1 ? Promise.reject(new Error('Denied')) : new Promise(() => {});
+						}
+					};
+				}, failure);
+				r = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+				if (failure === 'fidelity') {
+					assert(r.components.audio);
+					await p.evaluate(() => {
+						window.audioLevel = 0.25000003;
+					});
+					const precise = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+					assert(precise.components.audio);
+					assert.notEqual(
+						r.components.audio,
+						precise.components.audio,
+						'Small audio differences must not be rounded away'
+					);
+				} else {
+					assert.equal(r.unavailable.audio, 'error');
+					assert.equal(await p.evaluate(() => window.audioDisconnects), 4);
+				}
+				await p.close();
+			}
+
+			p = await fresh();
+			const detailBefore = await p.evaluate(() => OpenFingerprint.collect());
+			await p.evaluate(() => {
+				const descriptor = Object.getOwnPropertyDescriptor(
+					HTMLIFrameElement.prototype,
+					'contentDocument'
+				);
+				Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', {
+					configurable: true,
+					get() {
+						const doc = descriptor.get.call(this);
+						const proto = doc.defaultView.CanvasRenderingContext2D.prototype;
+						const original = proto.measureText;
+						proto.measureText = function (...args) {
+							const metrics = original.apply(this, args);
+							return new Proxy(metrics, {
+								get(target, key) {
+									return key === 'width' ? target.width + 0.125 : Reflect.get(target, key, target);
+								}
+							});
+						};
+						return doc;
+					}
+				});
+				const original = WebGLRenderingContext.prototype.getParameter;
+				WebGLRenderingContext.prototype.getParameter = function (parameter) {
+					const value = original.call(this, parameter);
+					return parameter === this.MAX_VERTEX_ATTRIBS ? value + 1 : value;
+				};
+			});
+			const detailAfter = await p.evaluate(() => OpenFingerprint.collect());
+			for (const component of ['fonts', 'fontFallbacks', 'gpu']) {
+				assert(detailBefore.components[component] && detailAfter.components[component]);
+				assert.notEqual(
+					detailBefore.components[component],
+					detailAfter.components[component],
+					`${component} must preserve measured detail`
+				);
+			}
+			await p.close();
+			report.checks.push({
+				browser: name,
+				check:
+					'font metrics, canvas fallback metrics, extra GPU limits and sub-quantization audio differences are preserved',
+				passed: true
+			});
+			p = await fresh();
+			if (sources.fpjs) await p.addScriptTag({ url: `${origin}/fpjs.js` });
+			const preferenceBefore = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
+			assert(preferenceBefore.components.fontPreferences);
+			if (sources.fpjs) {
+				const parity = await p.evaluate(async () => {
+					const expected = await window.fontPreferenceReference();
+					const bytes = await crypto.subtle.digest(
+						'SHA-256',
+						new TextEncoder().encode(JSON.stringify(expected))
+					);
+					const reference = Array.from(new Uint8Array(bytes), (b) =>
+						b.toString(16).padStart(2, '0')
+					).join('');
+					const actual = await OpenFingerprint.collect({ timeoutMs: 5000 });
+					return actual.components.fontPreferences === reference;
+				});
+				assert(parity, `${name}: layout-font preferences must match the pinned reference`);
+			}
+			await p.addStyleTag({
+				content:
+					'html { font-size: 48px; } body, span {font: bold 40px fantasy !important;letter-spacing:12px !important;} iframe {display:none !important;width:0 !important;height:0 !important;}'
+			});
+			const hostStyled = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
+			assert.equal(
+				hostStyled.components.fontPreferences,
+				preferenceBefore.components.fontPreferences,
+				'Host CSS must not contaminate preferences'
+			);
+			await p.evaluate(() => {
+				const descriptor = Object.getOwnPropertyDescriptor(
+					HTMLIFrameElement.prototype,
+					'contentDocument'
+				);
+				Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', {
+					configurable: true,
+					get() {
+						const doc = descriptor.get.call(this);
+						if (!doc) return doc;
+						const proto = doc.defaultView.Element.prototype;
+						if (!doc.preferencePatched) {
+							doc.preferencePatched = true;
+							const original = proto.getBoundingClientRect;
+							proto.getBoundingClientRect = function () {
+								const rect = original.call(this);
+								return this.tagName === 'SPAN'
+									? new Proxy(rect, {
+											get: (target, key) =>
+												key === 'width' ? target.width + 0.125 : Reflect.get(target, key, target)
+										})
+									: rect;
+							};
+						}
+						return doc;
+					}
+				});
+			});
+			const preferenceAfter = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
+			assert.notEqual(
+				preferenceAfter.components.fontPreferences,
+				preferenceBefore.components.fontPreferences,
+				'DOM font differences missed by canvas must survive hashing'
+			);
+			assert.equal(
+				preferenceAfter.components.fontFallbacks,
+				preferenceBefore.components.fontFallbacks
+			);
+			assert.notEqual(preferenceAfter.coreFingerprint, hostStyled.coreFingerprint);
+			assert.notEqual(preferenceAfter.fingerprint, hostStyled.fingerprint);
+			assert.equal(await p.locator('iframe').count(), 0);
+			await p.close();
+			p = await fresh(() => {
+				const append = Element.prototype.append;
+				Element.prototype.append = function (...nodes) {
+					for (const node of nodes) {
+						if (
+							node instanceof HTMLIFrameElement &&
+							node.title === 'Fraud-prevention font preferences'
+						)
+							window.pendingFontFrame = node;
+						else append.call(this, node);
+					}
+				};
+			});
+			const loadTimeout = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+			assert.equal(loadTimeout.unavailable.fontPreferences, 'timeout');
+			assert(
+				await p.evaluate(
+					() =>
+						!!window.pendingFontFrame &&
+						!pendingFontFrame.isConnected &&
+						pendingFontFrame.onload === null &&
+						pendingFontFrame.onerror === null
+				)
+			);
+			assert.equal(await p.locator('iframe').count(), 0);
+			await p.close();
+			if (sources.fpjs)
+				for (const deviceScaleFactor of [1.25, 2, 3]) {
+					const scaled = await browser.newContext({ deviceScaleFactor });
+					try {
+						const q = await scaled.newPage();
+						await q.goto(`${origin}/custom`);
+						await q.addScriptTag({ url: `${origin}/fpjs.js` });
+						assert(
+							await q.evaluate(async () => {
+								const native = await window.fontPreferenceReference();
+								const bytes = await crypto.subtle.digest(
+									'SHA-256',
+									new TextEncoder().encode(JSON.stringify(native))
+								);
+								const expected = Array.from(new Uint8Array(bytes), (b) =>
+									b.toString(16).padStart(2, '0')
+								).join('');
+								const actual = await OpenFingerprint.collect({ timeoutMs: 5000 });
+								return actual.components.fontPreferences === expected;
+							}),
+							`${name}: fractional/high-DPI calibration must match the reference`
+						);
+					} finally {
+						await scaled.close();
+					}
+				}
+			report.checks.push({
+				browser: name,
+				check:
+					'Calibrated layout-font preferences, host-CSS isolation, canvas-independent distinctions, load-timeout cleanup, and optional pinned-reference parity at DPR 1/1.25/2/3. Not a physical-device test.',
+				passed: true
+			});
+			p = await fresh(() => {
+				Object.defineProperty(navigator, 'userAgent', {
+					value: 'Mozilla/5.0 Version/26.6.1 Safari/605.1.15',
+					configurable: true
+				});
+				Object.defineProperty(navigator, 'vendor', {
+					value: 'Apple Computer, Inc.',
+					configurable: true
+				});
+				for (const [key, regular, privateValue] of [
+					['width', 800, 1600],
+					['height', 600, 900]
+				])
+					Object.defineProperty(screen, key, {
+						configurable: true,
+						get: () => (window.privacyMode ? privateValue : regular)
+					});
+				Object.defineProperty(window, 'devicePixelRatio', {
+					configurable: true,
+					get: () => (window.privacyMode ? 3 : 1)
+				});
+				const image = CanvasRenderingContext2D.prototype.getImageData;
+				CanvasRenderingContext2D.prototype.getImageData = function (...args) {
+					const data = image.apply(this, args);
+					data.data[0] = window.privacyMode ? 47 : 33;
+					return data;
+				};
+				let count = 0;
+				globalThis.OfflineAudioContext = class {
+					id = ++count;
+					createOscillator() {
+						return { frequency: { value: 0 }, connect() {}, disconnect() {}, start() {} };
+					}
+					createDynamicsCompressor() {
+						return {
+							threshold: { value: 0 },
+							knee: { value: 0 },
+							ratio: { value: 0 },
+							connect() {},
+							disconnect() {}
+						};
+					}
+					startRendering() {
+						if (window.audioHang) return new Promise(() => {});
+						const level = window.privacyMode ? 0.25 + this.id * 1e-6 : 0.25;
+						return Promise.resolve({ getChannelData: () => new Float32Array(4096).fill(level) });
+					}
+				};
+			});
+			const regular = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
+			assert(
+				regular.fingerprint &&
+					regular.coreFingerprint &&
+					regular.components.audio &&
+					regular.components.canvas
+			);
+			assert.deepEqual(regular.excluded, ['audio', 'canvas', 'screen']);
+			await p.evaluate(() => {
+				window.privacyMode = true;
+			});
+			const privateMode = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
+			valid(privateMode);
+			assert.equal(
+				privateMode.fingerprint,
+				regular.fingerprint,
+				'Safari policy must ignore protected diagnostic changes'
+			);
+			assert.equal(privateMode.coreFingerprint, regular.coreFingerprint);
+			assert.notEqual(privateMode.components.canvas, regular.components.canvas);
+			assert.notEqual(privateMode.hints.screen, regular.hints.screen);
+			assert.equal(privateMode.hints.display, regular.hints.display);
+			assert.equal(privateMode.unavailable.audio, 'unstable');
+			await p.evaluate(() => {
+				const original = WebGLRenderingContext.prototype.getParameter;
+				WebGLRenderingContext.prototype.getParameter = function (parameter) {
+					const value = original.call(this, parameter);
+					return parameter === this.MAX_VERTEX_ATTRIBS ? value + 1 : value;
+				};
+			});
+			const hardwareChange = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
+			assert.notEqual(
+				hardwareChange.fingerprint,
+				privateMode.fingerprint,
+				'Trusted GPU differences must still separate profiles'
+			);
+			assert.notEqual(hardwareChange.coreFingerprint, privateMode.coreFingerprint);
+			await p.evaluate(() =>
+				Object.defineProperty(screen, 'colorDepth', { value: 16, configurable: true })
+			);
+			const colorChange = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
+			assert.notEqual(
+				colorChange.fingerprint,
+				hardwareChange.fingerprint,
+				'Stable display information must not be discarded with geometry'
+			);
+			await p.evaluate(() => {
+				window.audioHang = true;
+			});
+			const diagnosticTimeout = await p.evaluate(() =>
+				OpenFingerprint.collect({ timeoutMs: 1000 })
+			);
+			assert.equal(diagnosticTimeout.unavailable.audio, 'timeout');
+			assert.equal(
+				diagnosticTimeout.fingerprint,
+				colorChange.fingerprint,
+				'A diagnostic timeout must not erase a completed identity'
+			);
+			await p.evaluate(() => {
+				window.audioHang = false;
+				window.privacyMode = false;
+				HTMLCanvasElement.prototype.getContext = () => null;
+				Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', {
+					configurable: true,
+					get: () => null
+				});
+			});
+			const diagnosticsOnly = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 2000 }));
+			assert(diagnosticsOnly.components.audio);
+			assert.equal(
+				diagnosticsOnly.fingerprint,
+				null,
+				'Excluded diagnostic evidence alone must never mint an identity'
+			);
+			assert.equal(diagnosticsOnly.coreFingerprint, null);
+			await p.close();
+			report.checks.push({
+				browser: name,
+				check:
+					'Simulated Safari privacy: protected diagnostics differ without splitting IDs; GPU/color-depth evidence retained; diagnostic timeouts preserve IDs. Not a physical-iPhone accuracy test.',
+				passed: true
+			});
+			p = await fresh(() => {
+				const original = crypto.subtle.digest.bind(crypto.subtle);
+				window.aggregateSeen = false;
+				crypto.subtle.digest = (algorithm, data) => {
+					if (new TextDecoder().decode(data).startsWith('stealth-agent:4')) {
+						window.aggregateSeen = true;
+						return new Promise(() => {});
+					}
+					return original(algorithm, data);
+				};
+			});
+			r = await p.evaluate(() =>
+				Promise.race([
+					OpenFingerprint.collect({ timeoutMs: 1000 }),
+					new Promise((_, reject) =>
+						setTimeout(() => reject(new Error('Aggregate hash exceeded deadline')), 2500)
+					)
+				])
+			);
+			assert.equal(await p.evaluate(() => window.aggregateSeen), true);
+			assert.equal(r.fingerprint, null);
+			assert(r.durationMs < 2000);
+			await p.close();
+			report.checks.push({
+				browser: name,
+				check:
+					'invalid inputs, unavailable APIs, blocked storage, hung audio and aggregate deadlines, unstable canvas, failed iframe cleanup, slow GPU retains earlier hashes, audio setup and sibling failure cleanup',
+				passed: true
+			});
+
+			for (let i = 0; i < 9; i++) {
+				const libraries = Object.keys(runners);
+				for (let j = 0; j < libraries.length; j++) {
+					const library = libraries[(i + j) % libraries.length];
+					await page.goto(`${origin}/${library}`);
+					const measured = await page.evaluate(async () => {
+						const start = performance.now();
+						const result = await window.run();
+						return {
+							...result,
+							elapsed_ms: Math.round((performance.now() - start) * 10) / 10,
+							csp: window.violations
+						};
+					});
+					assert(measured.id, `${name}/${library} did not return an ID`);
+					assert.equal(measured.csp.length, 0);
+					report.measurements.push({
+						browser: name,
+						library,
+						round: i,
+						elapsed_ms: measured.elapsed_ms,
+						components: measured.components,
+						...(measured.hints !== undefined ? { hint_components: measured.hints } : {}),
+						unavailable: measured.unavailable || {},
+						...(measured.timings ? { timings: measured.timings } : {})
+					});
+				}
+				await checkpoint();
+			}
+			assert.equal(external.length, 0);
+			console.log(
+				`${name}: checks passed; ${9 * Object.keys(runners).length} benchmark observations; no external requests`
+			);
+			await checkpoint();
+		} finally {
+			await browser.close();
+		}
+	}
+	await checkpoint();
+	console.log(`Report: ${output}`);
+} catch (error) {
+	console.error(String(error.stack ?? error).replace(/[0-9a-f]{64}/gi, '[redacted]'));
+	process.exitCode = 1;
+} finally {
+	await new Promise((r) => server.close(r));
+}

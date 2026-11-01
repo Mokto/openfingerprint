@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.test-results/
+*.tgz
+.env
+.env.*
+.DS_Store
