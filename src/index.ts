@@ -143,8 +143,8 @@ function canvas(): Value {
 }
 
 async function fontDocument(
-	read: (ctx: CanvasRenderingContext2D) => Value | Promise<Value>,
-	signal?: AbortSignal
+	read: (ctx: CanvasRenderingContext2D, pause: () => Promise<boolean>) => Value | Promise<Value>,
+	signal: AbortSignal
 ): Promise<Value> {
 	// A separate document excludes the customer's @font-face definitions.
 	const frame = document.createElement('iframe');
@@ -153,81 +153,89 @@ async function fontDocument(
 	frame.tabIndex = -1;
 	frame.hidden = true;
 	frame.width = frame.height = '0';
-	const cleanup = () => frame.remove();
-	signal?.addEventListener('abort', cleanup, { once: true });
+	const channel = new MessageChannel();
+	let resume: (() => void) | undefined;
+	let sliceStart = -Infinity;
+	const stop = () => {
+		frame.remove();
+		resume?.();
+	};
+	channel.port1.onmessage = () => {
+		resume?.();
+		resume = undefined;
+	};
+	const pause = async () => {
+		if (signal.aborted) return false;
+		if (performance.now() - sliceStart >= 4) {
+			await new Promise<void>((resolve) => {
+				resume = resolve;
+				channel.port2.postMessage(null);
+			});
+			sliceStart = performance.now();
+		}
+		return !signal.aborted;
+	};
+	signal.addEventListener('abort', stop, { once: true });
 	try {
 		document.documentElement.append(frame);
 		const ctx = frame.contentDocument?.createElement('canvas').getContext('2d');
 		if (!ctx) return unsupported;
-		return await read(ctx);
+		return await read(ctx, pause);
 	} finally {
-		cleanup();
-		signal?.removeEventListener('abort', cleanup);
+		frame.remove();
+		signal.removeEventListener('abort', stop);
+		channel.port1.close();
+		channel.port2.close();
 	}
 }
 
 function fontMetrics(signal: AbortSignal): Promise<Value> {
-	return fontDocument(async (ctx) => {
+	return fontDocument(async (ctx, pause) => {
 		const measure = (font: string) => {
 			ctx.font = `64px ${font}`;
 			return ctx.measureText('WWmm 0123456789 Il');
 		};
 		const bases = ['monospace', 'sans-serif', 'serif'];
-		const widths = bases.map((base) => measure(base).width);
+		const widths: number[] = [];
+		for (const base of bases) {
+			if (!(await pause())) return unsupported;
+			widths.push(measure(base).width);
+		}
 		const found: [string, number, number, number][] = [];
-		const channel = new MessageChannel();
-		let resume: (() => void) | undefined;
-		const stop = () => resume?.();
-		channel.port1.onmessage = () => {
-			resume?.();
-			resume = undefined;
-		};
-		signal.addEventListener('abort', stop, { once: true });
-		try {
-			for (let index = 0; index < fonts.length; index++) {
-				if (signal.aborted) return unsupported;
-				if (index % 8 === 0) {
-					await new Promise<void>((resolve) => {
-						resume = resolve;
-						channel.port2.postMessage(null);
-					});
-					if (signal.aborted) return unsupported;
-				}
-				const font = fonts[index]!;
-				for (let i = 0; i < bases.length; i++) {
-					const metric = measure(`"${font}",${bases[i]}`);
-					if (metric.width !== widths[i]) {
-						found.push([
-							font,
-							metric.width,
-							metric.actualBoundingBoxAscent,
-							metric.actualBoundingBoxDescent
-						]);
-						break;
-					}
+		for (const font of fonts) {
+			for (let i = 0; i < bases.length; i++) {
+				if (!(await pause())) return unsupported;
+				const metric = measure(`"${font}",${bases[i]}`);
+				if (metric.width !== widths[i]) {
+					found.push([
+						font,
+						metric.width,
+						metric.actualBoundingBoxAscent,
+						metric.actualBoundingBoxDescent
+					]);
+					break;
 				}
 			}
-			return found.length ? JSON.stringify(found) : unsupported;
-		} finally {
-			signal.removeEventListener('abort', stop);
-			channel.port1.close();
-			channel.port2.close();
 		}
+		return found.length ? JSON.stringify(found) : unsupported;
 	}, signal);
 }
 
-function fontFallbacks(): Promise<Value> {
-	return fontDocument((ctx) =>
-		JSON.stringify(
-			['serif', 'sans-serif', 'monospace', 'system-ui', 'cursive', 'fantasy'].map((family) =>
-				[12, 64].map((size) => {
-					ctx.font = `${size}px ${family}`;
-					const metric = ctx.measureText('Aa fi Ω 012345 WWW iii');
-					return [metric.width, metric.actualBoundingBoxAscent, metric.actualBoundingBoxDescent];
-				})
-			)
-		)
-	);
+function fontFallbacks(signal: AbortSignal): Promise<Value> {
+	return fontDocument(async (ctx, pause) => {
+		const values: number[][][] = [];
+		for (const family of ['serif', 'sans-serif', 'monospace', 'system-ui', 'cursive', 'fantasy']) {
+			const sizes: number[][] = [];
+			for (const size of [12, 64]) {
+				if (!(await pause())) return unsupported;
+				ctx.font = `${size}px ${family}`;
+				const metric = ctx.measureText('Aa fi Ω 012345 WWW iii');
+				sizes.push([metric.width, metric.actualBoundingBoxAscent, metric.actualBoundingBoxDescent]);
+			}
+			values.push(sizes);
+		}
+		return JSON.stringify(values);
+	}, signal);
 }
 
 async function fontPreferences(signal: AbortSignal): Promise<Value> {
@@ -450,6 +458,7 @@ type Name = keyof typeof probes;
 export interface Options {
 	timeoutMs?: number;
 	storageKey?: string;
+	onIdentity?: (snapshot: Result) => unknown;
 }
 export interface Result {
 	version: 4;
@@ -479,7 +488,7 @@ function storageId(key: string | undefined): string | null {
 }
 
 export async function collect(options: Options = {}): Promise<Result> {
-	const { timeoutMs = 2000, storageKey } = options;
+	const { timeoutMs = 2000, storageKey, onIdentity } = options;
 	if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000)
 		throw new RangeError('timeoutMs must be between 1 and 5000');
 	if (
@@ -487,6 +496,8 @@ export async function collect(options: Options = {}): Promise<Result> {
 		(typeof storageKey !== 'string' || !storageKey.length || storageKey.length > 128)
 	)
 		throw new TypeError('storageKey must contain 1–128 characters');
+	if (onIdentity !== undefined && typeof onIdentity !== 'function')
+		throw new TypeError('onIdentity must be a function');
 	if (typeof window === 'undefined' || !globalThis.crypto?.subtle)
 		throw new Error('A secure browser context is required');
 	const start = performance.now();
@@ -568,10 +579,26 @@ export async function collect(options: Options = {}): Promise<Result> {
 			]);
 			controller.signal.removeEventListener('abort', onAbort);
 		}
+		result.storageId = storageId(storageKey);
+		if (onIdentity) {
+			const snapshot: Result = {
+				...result,
+				excluded: [...result.excluded],
+				components: { ...result.components },
+				hints: { ...result.hints },
+				unavailable: { ...result.unavailable },
+				timings: Object.fromEntries(
+					Object.entries(result.timings).map(([name, timing]) => [name, { ...timing }])
+				),
+				durationMs: Math.round((performance.now() - start) * 10) / 10
+			};
+			try {
+				void Promise.resolve(onIdentity(snapshot)).catch(() => {});
+			} catch {}
+		}
 		// Diagnostic timeouts must not erase an already-computed identity.
 		for (const name of result.excluded) if (name !== 'audio') await run(name);
 		if (excluded.has('audio')) await run('audio');
-		result.storageId = storageId(storageKey);
 		result.durationMs = Math.round((performance.now() - start) * 10) / 10;
 		return result;
 	} finally {

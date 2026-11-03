@@ -161,7 +161,10 @@ try {
 				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 5000 })
 			);
 			valid(a);
-			assert(a.fingerprint);
+			assert(
+				a.fingerprint,
+				`${name}: no initial ID ${JSON.stringify({ durationMs: a.durationMs, unavailable: a.unavailable, components: Object.keys(a.components), timings: a.timings })}`
+			);
 			assert(a.storageId);
 			const b = await page.evaluate(() =>
 				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 1000 })
@@ -215,6 +218,136 @@ try {
 				passed: true
 			});
 
+			const batching = await fresh(() => {
+				const now = performance.now.bind(performance);
+				let offset = 0;
+				window.fontCalls = 0;
+				window.callsInSlice = 0;
+				window.maxCallsInSlice = 0;
+				window.fontYields = 0;
+				window.fontCandidates = new Set();
+				Object.defineProperty(performance, 'now', { value: () => now() + offset });
+				const getDocument = Object.getOwnPropertyDescriptor(
+					HTMLIFrameElement.prototype,
+					'contentDocument'
+				);
+				const seen = new WeakSet();
+				Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', {
+					get() {
+						const doc = getDocument.get.call(this);
+						if (
+							doc?.defaultView &&
+							this.title === 'Fraud-prevention font probe' &&
+							!seen.has(doc)
+						) {
+							seen.add(doc);
+							const proto = doc.defaultView.CanvasRenderingContext2D.prototype;
+							const measure = proto.measureText;
+							proto.measureText = function (...args) {
+								const candidate = /^64px\s+(.+?),\s*(monospace|sans-serif|serif)$/.exec(this.font);
+								if (candidate) window.fontCandidates.add(candidate[1].replace(/^["']|["']$/g, ''));
+								offset += 5;
+								window.fontCalls++;
+								window.callsInSlice++;
+								window.maxCallsInSlice = Math.max(window.maxCallsInSlice, window.callsInSlice);
+								return measure.apply(this, args);
+							};
+						}
+						return doc;
+					}
+				});
+				const Channel = MessageChannel;
+				globalThis.MessageChannel = class extends Channel {
+					constructor() {
+						super();
+						const post = this.port2.postMessage.bind(this.port2);
+						this.port2.postMessage = (...args) => {
+							window.callsInSlice = 0;
+							window.fontYields++;
+							return post(...args);
+						};
+					}
+				};
+			});
+			const batched = await batching.evaluate(async () => {
+				const r = await OpenFingerprint.collect({ timeoutMs: 5000 });
+				return {
+					identified: !!r.fingerprint,
+					fontCalls,
+					maxCallsInSlice,
+					fontYields,
+					candidates: fontCandidates.size
+				};
+			});
+			assert(batched.identified);
+			assert(batched.fontCalls > 96);
+			assert.equal(
+				batched.candidates,
+				96,
+				'The schema-4 catalogue must still test all 96 font families'
+			);
+			assert.equal(
+				batched.maxCallsInSlice,
+				1,
+				'Yield between native reads when a read consumes the slice'
+			);
+			assert(batched.fontYields > 12);
+			assert.equal(await batching.locator('iframe').count(), 0);
+			await batching.close();
+			report.checks.push({
+				browser: name,
+				check:
+					'Time-budgeted slices cover baseline, catalogue and fallback font reads without omitting measurements',
+				passed: true
+			});
+
+			const paused = await fresh(() => {
+				Object.defineProperty(performance, 'now', { value: () => 0 });
+				const timeout = setTimeout;
+				globalThis.setTimeout = (callback, ms, ...args) =>
+					ms === 5000 ? 0 : timeout(callback, ms, ...args);
+				const Controller = AbortController;
+				globalThis.AbortController = class extends Controller {
+					constructor() {
+						super();
+						window.collectionController = this;
+					}
+				};
+				window.channelsCreated = 0;
+				window.portsClosed = 0;
+				const Channel = MessageChannel;
+				globalThis.MessageChannel = class extends Channel {
+					constructor() {
+						super();
+						window.channelsCreated++;
+						for (const port of [this.port1, this.port2]) {
+							const close = port.close.bind(port);
+							port.close = () => {
+								window.portsClosed++;
+								close();
+							};
+						}
+						this.port2.postMessage = () => {
+							window.pauseQueued = true;
+						};
+					}
+				};
+			});
+			await paused.evaluate(() => {
+				window.pausedCollection = OpenFingerprint.collect({ timeoutMs: 5000 });
+			});
+			await paused.waitForFunction(() => window.pauseQueued);
+			const stopped = await paused.evaluate(async () => {
+				window.collectionController.abort();
+				const result = await window.pausedCollection;
+				return { status: result.unavailable.fonts, channelsCreated, portsClosed };
+			});
+			assert.equal(stopped.status, 'timeout');
+			assert(stopped.channelsCreated > 0);
+			assert.equal(stopped.portsClosed, stopped.channelsCreated * 2);
+			assert.equal(await paused.locator('iframe').count(), 0);
+			await paused.close();
+
 			const cancelled = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1 }));
 			valid(cancelled);
 			assert.equal(await page.locator('iframe').count(), 0);
@@ -223,6 +356,7 @@ try {
 					{ timeoutMs: NaN },
 					{ timeoutMs: 0 },
 					{ timeoutMs: 5001 },
+					{ onIdentity: 42 },
 					{ storageKey: '' },
 					{ storageKey: 42 }
 				]) {
@@ -258,7 +392,7 @@ try {
 			r = await p.evaluate(() => OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 1000 }));
 			valid(r);
 			assert.equal(r.storageId, null);
-			assert(r.fingerprint);
+			assert(r.fingerprint, `${name}: blocked storage must not erase a completed identity`);
 			await p.close();
 
 			p = await fresh(() => {
@@ -650,15 +784,78 @@ try {
 			await p.evaluate(() => {
 				window.audioHang = true;
 			});
-			const diagnosticTimeout = await p.evaluate(() =>
-				OpenFingerprint.collect({ timeoutMs: 1000 })
-			);
+			const early = await p.evaluate(async () => {
+				let ready;
+				const identity = new Promise((resolve) => {
+					ready = resolve;
+				});
+				window.identityCalls = 0;
+				window.collectionFinished = false;
+				window.finalCollection = OpenFingerprint.collect({
+					timeoutMs: 1000,
+					onIdentity(snapshot) {
+						window.identityCalls++;
+						window.earlySnapshot = snapshot;
+						ready(snapshot);
+					}
+				}).then((result) => {
+					window.collectionFinished = true;
+					return result;
+				});
+				return { snapshot: await identity, finished: window.collectionFinished };
+			});
+			assert.equal(early.finished, false);
+			assert.equal(early.snapshot.fingerprint, colorChange.fingerprint);
+			assert.equal(early.snapshot.coreFingerprint, colorChange.coreFingerprint);
+			assert.equal(early.snapshot.components.audio, undefined);
+			assert.equal(early.snapshot.components.canvas, undefined);
+			await p.evaluate(() => {
+				const snapshot = window.earlySnapshot;
+				snapshot.fingerprint = 'corrupt';
+				snapshot.components.gpu = 'corrupt';
+				snapshot.hints.display = 'corrupt';
+				snapshot.excluded.push('fonts');
+				snapshot.unavailable.audio = 'error';
+				snapshot.timings.gpu.durationMs = -1;
+			});
+			const diagnosticTimeout = await p.evaluate(() => window.finalCollection);
+			assert.equal(await p.evaluate(() => window.identityCalls), 1);
+			assert.equal(diagnosticTimeout.components.gpu, colorChange.components.gpu);
+			assert.equal(diagnosticTimeout.hints.display, colorChange.hints.display);
+			assert(!diagnosticTimeout.excluded.includes('fonts'));
+			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
+			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
+			assert(diagnosticTimeout.components.canvas);
+			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
+			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);
 			assert.equal(diagnosticTimeout.unavailable.audio, 'timeout');
 			assert.equal(
 				diagnosticTimeout.fingerprint,
 				colorChange.fingerprint,
 				'A diagnostic timeout must not erase a completed identity'
 			);
+			await p.evaluate(() => {
+				window.audioHang = false;
+			});
+			for (const mode of ['throw', 'reject', 'pending']) {
+				const contained = await p.evaluate(async (mode) => {
+					let calls = 0;
+					const result = await OpenFingerprint.collect({
+						timeoutMs: 1000,
+						onIdentity() {
+							calls++;
+							if (mode === 'throw') throw new Error('Caller failed');
+							if (mode === 'reject') return Promise.reject(new Error('Caller rejected'));
+							return new Promise(() => {});
+						}
+					});
+					return { result, calls };
+				}, mode);
+				assert.equal(contained.calls, 1);
+				assert.equal(contained.result.fingerprint, colorChange.fingerprint);
+				assert(contained.result.components.canvas);
+				assert.equal(await p.locator('iframe').count(), 0);
+			}
 			await p.evaluate(() => {
 				window.audioHang = false;
 				window.privacyMode = false;
@@ -668,7 +865,19 @@ try {
 					get: () => null
 				});
 			});
-			const diagnosticsOnly = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 2000 }));
+			const diagnosticsOnly = await p.evaluate(async () => {
+				window.emptyIdentityCalls = 0;
+				window.emptyIdentity = undefined;
+				return await OpenFingerprint.collect({
+					timeoutMs: 2000,
+					onIdentity(snapshot) {
+						window.emptyIdentityCalls++;
+						window.emptyIdentity = snapshot;
+					}
+				});
+			});
+			assert.equal(await p.evaluate(() => window.emptyIdentityCalls), 1);
+			assert.equal(await p.evaluate(() => window.emptyIdentity.fingerprint), null);
 			assert(diagnosticsOnly.components.audio);
 			assert.equal(
 				diagnosticsOnly.fingerprint,

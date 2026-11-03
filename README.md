@@ -50,17 +50,55 @@ Neither import nor loading the script starts collection automatically.
 
 Options:
 
-| Option       | Default | Meaning                                                                                |
-| ------------ | ------- | -------------------------------------------------------------------------------------- |
-| `timeoutMs`  | `2000`  | Cooperative budget, from 1 to 5000 ms. Native browser calls can overrun it.            |
-| `storageKey` | omitted | Optional namespaced random UUID in localStorage, separate from all fingerprint hashes. |
+| Option       | Default | Meaning                                                                                      |
+| ------------ | ------- | -------------------------------------------------------------------------------------------- |
+| `timeoutMs`  | `2000`  | Cooperative budget, from 1 to 5000 ms. Native browser calls can overrun it.                  |
+| `storageKey` | omitted | Optional namespaced random UUID in localStorage, separate from all fingerprint hashes.       |
+| `onIdentity` | omitted | Receives a detached result snapshot after identity calculation, before excluded diagnostics. |
 
 No persistence is used by default. Explicitly enabling `storageKey` reads/writes
 only that marker, not arbitrary localStorage data. Blocked storage returns `null`.
 
+### Identity readiness and cooperative batching
+
+`collect()` still resolves only after diagnostic collection finishes or times out.
+An optional `onIdentity(snapshot)` callback exposes the earlier identity phase:
+
+```js
+const finalResult = await collect({
+	onIdentity(snapshot) {
+		handleIdentity(snapshot);
+	}
+});
+```
+
+`handleIdentity` is your application handler; the SDK sends nothing. The callback
+runs once before excluded diagnostic work, including when no identity could be
+computed (`fingerprint`/`coreFingerprint` can be null). Invalid options or a missing
+secure browser context still reject without calling it. Check the IDs before use.
+
+The snapshot has the normal result shape, with elapsed duration, independent
+copies of maps/arrays/timing entries, and the optional storage marker. It contains
+only results available at that point; excluded diagnostics may be absent until
+the final result. When no diagnostics are excluded, the callback may run only
+shortly before the final promise; it is not an earlier, weaker identity. Callback
+mutations cannot alter the final result. Callback
+throws/rejections are contained, and returned promises are not awaited. Keep the
+handler's synchronous work short: a blocking caller can still delay diagnostics.
+No callback is installed or invoked unless explicitly supplied.
+
+Font catalogue and fallback measurements now use approximately four-millisecond
+work slices, checked between native reads, rather than yielding every eight fonts.
+All candidates, texts, metrics, ordering and hashes are retained. A MessageChannel
+task gives other event-loop work an opportunity to run; it guarantees neither a
+paint nor an input-latency bound. A single native call, GPU initialization or other
+browser work can still block longer than a slice. This targets responsiveness,
+not a guaranteed reduction in total collection time. The default budget remains
+two seconds.
+
 ## Result and schema
 
-Version **0.4.0**, result **schema 4**:
+Version **0.5.0**, result **schema 4**:
 
 - `fingerprint`: full SHA-256 over selected component and environment-hint hashes.
 - `coreFingerprint`: separately domain-separated hash of selected rendering probes;
@@ -74,6 +112,8 @@ Version **0.4.0**, result **schema 4**:
 - `unavailable`: explicit `unsupported`, `unstable`, `timeout` or `error` per probe.
 - `storageId`: optional random UUID, otherwise `null`.
 - `durationMs` and `timings`: collection diagnostics, not a hard CPU-time limit.
+  `blockingMs` covers only the initial synchronous portion of a probe call, not
+  cumulative CPU work or the longest later task.
 
 Missing probes do not receive a common success-like placeholder. Aggregate IDs
 may be null; excluded diagnostic evidence alone cannot produce an identity.
@@ -100,6 +140,9 @@ Schema-4 hash domains (`stealth-agent:4`, `stealth-core:4`) and optional marker
 namespace (`stealth:`) intentionally retain their original spellings. Renaming the
 project must not silently change existing IDs or markers. Compare IDs only within
 the same schema; any future change to identity inputs requires versioning.
+Version 0.5 changes scheduling and adds early notification, not identity inputs.
+Fully collected IDs remain schema-4 compatible; availability can still vary when
+scheduling, browser load or deadlines differ.
 
 ## Tests and reference comparison
 
@@ -109,8 +152,10 @@ pnpm test
 ```
 
 Tests use isolated browser contexts and block external page requests. They cover
-canonical hashes, optional storage, availability, deadlines/cleanup, Safari-policy
-fixtures, retained signal detail and calibrated font-preference parity with
+canonical hashes, optional storage, availability, deadlines/cleanup, all 96 font
+candidates, time-budgeted yields, aborting a paused slice, port/frame cleanup,
+identity-before-diagnostics delivery, detached snapshots, callback failure isolation,
+Safari-policy fixtures, retained signal detail and calibrated font-preference parity with
 FingerprintJS 5.3.0 at DPR 1, 1.25, 2 and 3. Reference collectors are development
 fixtures, not part of the standalone client. Monitoring/beacons are disabled.
 
@@ -127,6 +172,32 @@ need `pnpm exec playwright-core install --with-deps chromium firefox webkit`.
 Reports under `.test-results/` are ignored by git. Benchmarks rotate collectors in
 fresh documents, measuring collection rather than download/parse. Automation and
 Playwright WebKit are not physical-device ground truth or shipping Safari.
+
+## Reference scheduling comparison
+
+Pinned development references are FingerprintJS 5.3.0 and ThumbmarkJS 1.12.0.
+They use different signals, stabilization and hashing, so timings alone do not
+establish equivalent quality.
+
+| Library         | Scheduling and latency considerations                                                                                                                                                                                                                                                                                                                                         |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenFingerprint | Native audio overlaps; canvas/font/hint probes finish before GPU initialization. Font work yields by time budget. Optional early identity precedes excluded diagnostics; the final promise still includes them.                                                                                                                                                               |
+| FingerprintJS   | `load()` waits for idle, with a 50 ms timer fallback and a 100 ms idle-callback timeout. Source dispatch yields roughly every 16 ms between sources, not inside an individual source. Async work overlaps across its load/get phases. Font DOM writes are batched, but font measurement itself is synchronous. Each `get()` waits for all components before producing the ID. |
+| ThumbmarkJS     | Eagerly dispatches components and overlaps their promises, but synchronous font/canvas/GPU work still blocks dispatch. Per-component timeouts default to five seconds and do not interrupt native work or cap the entire pipeline. Empty speech voices can add an 800 ms wait.                                                                                                |
+
+FingerprintJS reuses source-load state per agent and caches a WebGL context.
+Thumbmark reuses WebGL state where supported and exposes component/pipeline
+diagnostics with `performance: true`; its API-response cache does not skip local
+collection. Thumbmark's component elapsed timers start after eager dispatch, so
+include `_dispatch.*` and `_pipeline.dispatch` when examining synchronous cost. Our SDK deliberately recollects probe evidence per call.
+
+The comparison test includes FingerprintJS `load()` in elapsed time; idle waiting
+is not necessarily a fixed 50 ms delay. Thumbmark uses its default stabilization
+rules in this lab, which are not equivalent to Ocean's `stabilize: []` trial.
+Reference monitoring/logging is disabled and no API keys are configured. Timeout
+races do not guarantee cancellation of underlying browser work in any library.
+Reference IDs can still be produced from component sets containing errors or
+timeouts; ID presence alone does not establish equivalent evidence or accuracy.
 
 ## Privacy and limits
 
