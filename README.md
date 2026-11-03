@@ -96,9 +96,15 @@ browser work can still block longer than a slice. This targets responsiveness,
 not a guaranteed reduction in total collection time. The default budget remains
 two seconds.
 
+Version 0.5.1 checks the monotonic deadline before reads and after font-work yields,
+and aborts other pending probes whenever a deadline check observes expiry. This
+avoids continued work when the timeout callback is delayed. It still cannot
+interrupt an active native call or resume a suspended page; it is not a hard
+wall-time guarantee or a recovery mechanism for missing identities.
+
 ## Result and schema
 
-Version **0.5.0**, result **schema 4**:
+Version **0.5.1**, result **schema 4**:
 
 - `fingerprint`: full SHA-256 over selected component and environment-hint hashes.
 - `coreFingerprint`: separately domain-separated hash of selected rendering probes;
@@ -155,6 +161,7 @@ Tests use isolated browser contexts and block external page requests. They cover
 canonical hashes, optional storage, availability, deadlines/cleanup, all 96 font
 candidates, time-budgeted yields, aborting a paused slice, port/frame cleanup,
 identity-before-diagnostics delivery, detached snapshots, callback failure isolation,
+delayed-timeout cancellation before reads/after yields with concurrent pending audio,
 Safari-policy fixtures, retained signal detail and calibrated font-preference parity with
 FingerprintJS 5.3.0 at DPR 1, 1.25, 2 and 3. Reference collectors are development
 fixtures, not part of the standalone client. Monitoring/beacons are disabled.
