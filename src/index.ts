@@ -144,7 +144,8 @@ function canvas(): Value {
 
 async function fontDocument(
 	read: (ctx: CanvasRenderingContext2D, pause: () => Promise<boolean>) => Value | Promise<Value>,
-	signal: AbortSignal
+	signal: AbortSignal,
+	deadline: number
 ): Promise<Value> {
 	// A separate document excludes the customer's @font-face definitions.
 	const frame = document.createElement('iframe');
@@ -165,7 +166,7 @@ async function fontDocument(
 		resume = undefined;
 	};
 	const pause = async () => {
-		if (signal.aborted) return false;
+		if (signal.aborted || performance.now() >= deadline) return false;
 		if (performance.now() - sliceStart >= 4) {
 			await new Promise<void>((resolve) => {
 				resume = resolve;
@@ -173,7 +174,7 @@ async function fontDocument(
 			});
 			sliceStart = performance.now();
 		}
-		return !signal.aborted;
+		return !signal.aborted && performance.now() < deadline;
 	};
 	signal.addEventListener('abort', stop, { once: true });
 	try {
@@ -189,7 +190,7 @@ async function fontDocument(
 	}
 }
 
-function fontMetrics(signal: AbortSignal): Promise<Value> {
+function fontMetrics(signal: AbortSignal, deadline: number): Promise<Value> {
 	return fontDocument(async (ctx, pause) => {
 		const measure = (font: string) => {
 			ctx.font = `64px ${font}`;
@@ -218,10 +219,10 @@ function fontMetrics(signal: AbortSignal): Promise<Value> {
 			}
 		}
 		return found.length ? JSON.stringify(found) : unsupported;
-	}, signal);
+	}, signal, deadline);
 }
 
-function fontFallbacks(signal: AbortSignal): Promise<Value> {
+function fontFallbacks(signal: AbortSignal, deadline: number): Promise<Value> {
 	return fontDocument(async (ctx, pause) => {
 		const values: number[][][] = [];
 		for (const family of ['serif', 'sans-serif', 'monospace', 'system-ui', 'cursive', 'fantasy']) {
@@ -235,7 +236,7 @@ function fontFallbacks(signal: AbortSignal): Promise<Value> {
 			values.push(sizes);
 		}
 		return JSON.stringify(values);
-	}, signal);
+	}, signal, deadline);
 }
 
 async function fontPreferences(signal: AbortSignal): Promise<Value> {
@@ -504,6 +505,10 @@ export async function collect(options: Options = {}): Promise<Result> {
 	const deadline = start + timeoutMs;
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	const expired = () => {
+		if (performance.now() >= deadline) controller.abort();
+		return controller.signal.aborted;
+	};
 	const result: Result = {
 		version: 4,
 		excluded: identityExclusions(navigator.userAgent, navigator.vendor),
@@ -528,23 +533,19 @@ export async function collect(options: Options = {}): Promise<Result> {
 			});
 			const work = Promise.resolve()
 				.then(async (): Promise<{ hash: string } | { status: Status }> => {
-					if (controller.signal.aborted || performance.now() >= deadline)
-						return { status: 'timeout' };
+					if (expired()) return { status: 'timeout' };
 					began = performance.now();
-					const pending = probes[name](controller.signal);
+					const pending = probes[name](controller.signal, deadline);
 					blockingMs = performance.now() - began;
 					const value = await pending;
-					if (controller.signal.aborted || performance.now() >= deadline)
-						return { status: 'timeout' };
+					if (expired()) return { status: 'timeout' };
 					if (value === unsupported) return { status: 'unsupported' };
 					if (value === unstable) return { status: 'unstable' };
 					const digest = await hash(value);
-					return controller.signal.aborted || performance.now() >= deadline
-						? { status: 'timeout' }
-						: { hash: digest };
+					return expired() ? { status: 'timeout' } : { hash: digest };
 				})
 				.catch((): { status: Status } => ({
-					status: controller.signal.aborted || performance.now() >= deadline ? 'timeout' : 'error'
+					status: expired() ? 'timeout' : 'error'
 				}));
 			const done = await Promise.race([work, timeout]);
 			controller.signal.removeEventListener('abort', onAbort);
@@ -565,7 +566,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		const entries = Object.entries(result.components)
 			.filter(([name]) => !result.excluded.includes(name as Name))
 			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-		if (entries.length && !controller.signal.aborted && performance.now() < deadline) {
+		if (entries.length && !expired()) {
 			let onAbort: () => void = () => {};
 			const timeout = new Promise<[null, null]>((resolve) => {
 				onAbort = () => resolve([null, null]);

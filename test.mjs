@@ -361,6 +361,80 @@ try {
 			assert.equal(await paused.locator('iframe').count(), 0);
 			await paused.close();
 
+			for (const expire of ['between-reads', 'during-yield']) {
+				const delayed = await fresh((mode) => {
+					let clock = 0;
+					Object.defineProperty(performance, 'now', { value: () => clock });
+					Object.defineProperty(navigator, 'userAgent', { value: 'Chrome/156', configurable: true });
+					window.deadlineReads = 0;
+					window.lateReads = 0;
+					window.audioDisconnects = 0;
+					window.abortTimerFired = false;
+					window.realTimeout = setTimeout;
+					globalThis.setTimeout = (callback, ms, ...args) => window.realTimeout(() => {
+						if (ms === 2000) window.abortTimerFired = true;
+						callback(...args);
+					}, ms === 2000 ? 30000 : ms);
+					globalThis.OfflineAudioContext = class {
+						createOscillator() {
+							return { frequency: { value: 0 }, connect() {}, start() {}, disconnect() { window.audioDisconnects++; } };
+						}
+						createDynamicsCompressor() {
+							return { threshold: { value: 0 }, knee: { value: 0 }, ratio: { value: 0 }, connect() {}, disconnect() { window.audioDisconnects++; } };
+						}
+						startRendering() { return new Promise(() => {}); }
+					};
+					const getDocument = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentDocument');
+					Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', {
+						get() {
+							const doc = getDocument.get.call(this);
+							if (doc?.defaultView && this.title === 'Fraud-prevention font probe') {
+								doc.defaultView.HTMLCanvasElement.prototype.getContext = () => ({
+									font: '',
+									measureText() {
+										window.deadlineReads++;
+										if (clock >= 2000) window.lateReads++;
+										clock += 25;
+										return { width: this.font.includes(',') ? 11 : 10, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 };
+									}
+								});
+							}
+							return doc;
+						}
+					});
+					if (mode === 'during-yield') {
+						const Channel = MessageChannel;
+						globalThis.MessageChannel = class extends Channel {
+							constructor() {
+								super();
+								this.port1.addEventListener('message', () => { clock = 2000; }, { once: true });
+							}
+						};
+					}
+				}, expire);
+				const deadline = await delayed.evaluate(async () => {
+					let watchdog;
+					try {
+						return await Promise.race([
+							OpenFingerprint.collect().then(result => ({ result, lateReads, deadlineReads, audioDisconnects, abortTimerFired })),
+							new Promise(resolve => { watchdog = window.realTimeout(() => resolve({ watchdog: true }), 5000); })
+						]);
+					} finally { clearTimeout(watchdog); }
+				});
+				assert(!deadline.watchdog, 'Logical expiry must cancel pending work without waiting for a delayed timer');
+				assert.equal(deadline.lateReads, 0);
+				assert.equal(deadline.deadlineReads, expire === 'during-yield' ? 0 : 80);
+				assert.equal(deadline.abortTimerFired, false);
+				assert.equal(deadline.audioDisconnects, 4);
+				assert.equal(deadline.result.fingerprint, null);
+				assert.equal(deadline.result.coreFingerprint, null);
+				assert.equal(deadline.result.unavailable.fonts, 'timeout');
+				assert.equal(deadline.result.unavailable.audio, 'timeout');
+				assert.equal(await delayed.locator('iframe').count(), 0);
+				await delayed.close();
+			}
+			report.checks.push({ browser: name, check: 'Logical expiry before reads or after yields cancels concurrent audio even with a delayed abort timer', passed: true });
+
 			const cancelled = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1 }));
 			valid(cancelled);
 			assert.equal(await page.locator('iframe').count(), 0);
