@@ -149,8 +149,21 @@ try {
 			return route.continue();
 		});
 		const page = await context.newPage();
-		const fresh = async (init, arg) => {
+		const mockGpu = () => {
+				const original = HTMLCanvasElement.prototype.getContext;
+				const gpu = new Proxy({
+					getParameter: parameter => parameter === 'MAX_VERTEX_ATTRIBS' ? (window.gpuLimit ?? 16) : 32,
+					getExtension: name => name === 'WEBGL_lose_context' ? { loseContext() {} } : null,
+					getShaderPrecisionFormat: () => ({ rangeMin: 127, rangeMax: 127, precision: 23 }),
+					getSupportedExtensions: () => [],
+				}, { get: (target, key) => key in target ? target[key] : key });
+				HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+					return type === 'webgl' ? gpu : original.call(this, type, ...args);
+				};
+			};
+		const fresh = async (init, arg, gpu = false) => {
 			const p = await context.newPage();
+			if (gpu) await p.addInitScript(mockGpu);
 			if (init) await p.addInitScript(init, arg);
 			await p.goto(`${origin}/custom`);
 			return p;
@@ -389,7 +402,7 @@ try {
 					throw new Error('Denied');
 				};
 			});
-			r = await p.evaluate(() => OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 1000 }));
+			r = await p.evaluate(() => OpenFingerprint.collect({ storageKey: 'test' }));
 			valid(r);
 			assert.equal(r.storageId, null);
 			assert(r.fingerprint, `${name}: blocked storage must not erase a completed identity`);
@@ -515,7 +528,7 @@ try {
 				await p.close();
 			}
 
-			p = await fresh();
+			p = await fresh(undefined, undefined, true);
 			const detailBefore = await p.evaluate(() => OpenFingerprint.collect());
 			await p.evaluate(() => {
 				const descriptor = Object.getOwnPropertyDescriptor(
@@ -539,11 +552,7 @@ try {
 						return doc;
 					}
 				});
-				const original = WebGLRenderingContext.prototype.getParameter;
-				WebGLRenderingContext.prototype.getParameter = function (parameter) {
-					const value = original.call(this, parameter);
-					return parameter === this.MAX_VERTEX_ATTRIBS ? value + 1 : value;
-				};
+				window.gpuLimit = 17;
 			});
 			const detailAfter = await p.evaluate(() => OpenFingerprint.collect());
 			for (const component of ['fonts', 'fontFallbacks', 'gpu']) {
@@ -738,7 +747,7 @@ try {
 						return Promise.resolve({ getChannelData: () => new Float32Array(4096).fill(level) });
 					}
 				};
-			});
+			}, undefined, true);
 			const regular = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
 			assert(
 				regular.fingerprint &&
@@ -762,13 +771,7 @@ try {
 			assert.notEqual(privateMode.hints.screen, regular.hints.screen);
 			assert.equal(privateMode.hints.display, regular.hints.display);
 			assert.equal(privateMode.unavailable.audio, 'unstable');
-			await p.evaluate(() => {
-				const original = WebGLRenderingContext.prototype.getParameter;
-				WebGLRenderingContext.prototype.getParameter = function (parameter) {
-					const value = original.call(this, parameter);
-					return parameter === this.MAX_VERTEX_ATTRIBS ? value + 1 : value;
-				};
-			});
+			await p.evaluate(() => { window.gpuLimit = 17; });
 			const hardwareChange = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
 			assert.notEqual(
 				hardwareChange.fingerprint,
