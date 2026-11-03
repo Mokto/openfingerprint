@@ -432,27 +432,31 @@ try {
 			assert.equal(r.unavailable.fonts, 'error');
 			assert.equal(await p.locator('iframe').count(), 0);
 			await p.close();
-			p = await fresh(() => {
-				const original = HTMLCanvasElement.prototype.getContext;
-				HTMLCanvasElement.prototype.getContext = function (type, ...args) {
-					if (type === 'webgl') {
-						const end = performance.now() + 1100;
-						while (performance.now() < end) {}
-					}
-					return original.call(this, type, ...args);
-				};
-			});
-			r = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
-			valid(r);
-			assert(
-				r.components.fonts &&
-					r.components.fontPreferences &&
-					(r.excluded.includes('canvas') || r.components.canvas),
-				'A slow GPU must not discard earlier trusted hashes'
-			);
-			if (r.excluded.includes('canvas')) assert.equal(r.unavailable.canvas, 'timeout');
-			assert.equal(r.unavailable.gpu, 'timeout');
-			await p.close();
+			for (const gpu of ['native', 'unsupported', 'error']) {
+				p = await fresh((mode) => {
+					const original = HTMLCanvasElement.prototype.getContext;
+					HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+						if (type === 'webgl') {
+							const end = performance.now() + 1100;
+							while (performance.now() < end) {}
+							if (mode === 'unsupported') return null;
+							if (mode === 'error') throw new Error('GPU unavailable');
+						}
+						return original.call(this, type, ...args);
+					};
+				}, gpu);
+				r = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+				valid(r);
+				assert(
+					r.components.fonts &&
+						r.components.fontPreferences &&
+						(r.excluded.includes('canvas') || r.components.canvas),
+					'A slow GPU must not discard earlier trusted hashes'
+				);
+				if (r.excluded.includes('canvas')) assert.equal(r.unavailable.canvas, 'timeout');
+				assert.equal(r.unavailable.gpu, 'timeout');
+				await p.close();
+			}
 			for (const failure of ['render', 'start', 'fidelity']) {
 				p = await fresh((mode) => {
 					let count = 0;

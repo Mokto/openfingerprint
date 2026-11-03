@@ -534,12 +534,18 @@ export async function collect(options: Options = {}): Promise<Result> {
 					const pending = probes[name](controller.signal);
 					blockingMs = performance.now() - began;
 					const value = await pending;
+					if (controller.signal.aborted || performance.now() >= deadline)
+						return { status: 'timeout' };
 					if (value === unsupported) return { status: 'unsupported' };
 					if (value === unstable) return { status: 'unstable' };
-					if (performance.now() >= deadline) return { status: 'timeout' };
-					return { hash: await hash(value) };
+					const digest = await hash(value);
+					return controller.signal.aborted || performance.now() >= deadline
+						? { status: 'timeout' }
+						: { hash: digest };
 				})
-				.catch(() => ({ status: 'error' as const }));
+				.catch((): { status: Status } => ({
+					status: controller.signal.aborted || performance.now() >= deadline ? 'timeout' : 'error'
+				}));
 			const done = await Promise.race([work, timeout]);
 			controller.signal.removeEventListener('abort', onAbort);
 			result.timings[name] = {
