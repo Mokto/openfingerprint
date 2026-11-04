@@ -155,6 +155,29 @@ catch accidental corruption, not dishonest clients. A signed token binds a rando
 observation to one customer and expiry; it does not prove a real browser, person
 or physical device. Excluded diagnostic evidence alone cannot create an identity.
 
+## Server-side profile verification
+
+Backends that already receive SDK reports can send the schema-4 result directly
+to `POST /v1/verify` with their server-only bearer secret and no Origin header.
+The same bounded signal validation and canonical full/core hash checks apply as
+for collection. This endpoint does not collect browser evidence itself or create
+an identity when the SDK returned no full fingerprint.
+
+A valid full profile returns
+`{ "status": "ok", "schema_version": 4, "fingerprint": "<full fingerprint>" }`.
+Valid evidence without a full fingerprint returns
+`{ "status": "insufficient_signals", "schema_version": null, "fingerprint": null }`.
+A core-only result is not a full identity. Invalid or inconsistent inputs return
+400; authentication, browser-origin, body-size and quota failures are HTTP errors.
+
+Verification is stateless: it creates no observations, email links or tokens and
+needs no email, account ID, storage marker or network metadata. Timings may be
+omitted; `durationMs` remains part of the SDK result contract. Callers may persist
+the returned full profile/schema alongside their own authenticated account after
+applicable disclosure and privacy review. The result verifies canonical hash
+consistency, not physical-device identity or honest probe execution. Verify in a
+background flow where failures remain unknown rather than blocking authentication.
+
 ## Response semantics
 
 `/v1/check` returns `verdict`, email `reasons`, email signals and a `linking` object.
@@ -194,8 +217,9 @@ Profiles can collide or change with settings and browser updates.
 
 - 256 live observations and 512 live links per site. Capacity does not evict valid
   records to admit new ones; it produces an explicit capacity/unknown result.
-- Separate fixed monotonic windows allow 60 collections and 60 authenticated
-  checks per minute per site. Authenticated malformed requests consume quota.
+- Separate fixed monotonic windows allow 60 collections, 60 authenticated
+  email checks and 60 profile verifications per minute per site. Authenticated
+  malformed requests consume quota.
 - Strict JSON, 64 KiB bodies, bounded names/email/token inputs and no-store replies.
 - Tokens and observations expire after 15 minutes. A monotonic deadline prevents
   backward wall-clock changes from extending observation lifetime.
