@@ -123,6 +123,43 @@ try {
 			.status,
 		403
 	);
+	phase = 'server-only stateless profile verification';
+	assert.equal((await request('/v1/verify', {}, 'not-json')).status, 401);
+	assert.equal((await request('/v1/verify', authHeaders({ secret_key: key() }), 'not-json')).status, 401);
+	assert.equal((await request('/v1/verify', { ...authHeaders(sites[0]), Origin: sites[0].origins[0] }, 'not-json')).status, 403);
+	const verifiedInput = signals();
+	delete verifiedInput.timings;
+	delete verifiedInput.storageId;
+	for (const site of sites.slice(0, 2)) {
+		const response = await request('/v1/verify', authHeaders(site), verifiedInput);
+		assert.equal(response.status, 200);
+		assert.equal(response.headers.get('cache-control'), 'no-store');
+		assert.equal(response.headers.get('access-control-allow-origin'), null);
+		assert.deepEqual(await response.json(), { status: 'ok', schema_version: 4, fingerprint: verifiedInput.fingerprint });
+	}
+	const fullOnly = { ...verifiedInput, coreFingerprint: null };
+	assert.equal((await request('/v1/verify', authHeaders(sites[0]), fullOnly)).status, 200);
+	for (const insufficient of [
+		{ ...verifiedInput, fingerprint: null },
+		{ ...verifiedInput, fingerprint: null, coreFingerprint: null, components: {}, hints: {} }
+	]) {
+		const response = await request('/v1/verify', authHeaders(sites[0]), insufficient);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), { status: 'insufficient_signals', schema_version: null, fingerprint: null });
+	}
+	for (const invalid of [
+		{ ...verifiedInput, fingerprint: digest('tampered') },
+		{ ...verifiedInput, coreFingerprint: digest('tampered') },
+		{ ...verifiedInput, version: 2 },
+		{ ...verifiedInput, storageId: 'unsolicited' },
+		{ ...verifiedInput, excluded: ['canvas', 'canvas'] },
+		{ ...verifiedInput, components: { fonts: 'raw' } },
+		{ ...verifiedInput, account_id: 'unsolicited' }
+	]) assert.equal((await request('/v1/verify', authHeaders(sites[0]), invalid)).status, 400);
+	assert.equal((await request('/v1/verify', authHeaders(sites[0]), 'not-json')).status, 400);
+	assert.equal((await request('/v1/verify', authHeaders(sites[0]), JSON.stringify({ padding: 'x'.repeat(65536) }))).status, 413);
+	assert.equal((await request('/v1/verify', { Origin: sites[0].origins[0] }, undefined, 'OPTIONS')).status, 405);
+	console.log('Server-only profile verification, nullable identities, exact canonical hashes and strict input boundaries passed.');
 	phase = 'CORS origin and preflight';
 	assert.equal(
 		(
@@ -286,6 +323,14 @@ try {
 	console.log(
 		'Tampering, degraded collection, concurrency, strict schema/hash/metadata validation and body limits passed.'
 	);
+	phase = 'independent per-site verification quota';
+	for (let i = 0; i < 60; i++) {
+		const response = await request('/v1/verify', authHeaders(sites[2]), signals());
+		assert.equal(response.status, 200);
+		await response.arrayBuffer();
+	}
+	assert.equal((await request('/v1/verify', authHeaders(sites[2]), signals())).status, 429);
+	assert.equal((await request('/v1/verify', authHeaders(sites[1]), signals())).status, 200);
 	phase = 'per-site bounded rate quota';
 	for (let i = 0; i < 60; i++) {
 		const response = await request('/v1/collect', collectHeaders(sites[2]), signals());

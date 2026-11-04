@@ -57,6 +57,7 @@ struct Site {
     origins: Vec<String>,
     collect_rate: Mutex<Rate>,
     check_rate: Mutex<Rate>,
+    verify_rate: Mutex<Rate>,
 }
 struct Rate {
     start: Instant,
@@ -134,6 +135,7 @@ impl AppState {
                 origins: c.origins,
                 collect_rate: Mutex::new(Rate::new()),
                 check_rate: Mutex::new(Rate::new()),
+                verify_rate: Mutex::new(Rate::new()),
             })
             .collect();
         Ok(Self {
@@ -392,6 +394,13 @@ impl Signals {
 }
 
 #[derive(Serialize)]
+struct Verified {
+    status: &'static str,
+    schema_version: Option<u16>,
+    fingerprint: Option<String>,
+}
+
+#[derive(Serialize)]
 struct Collected {
     visitor_token: String,
     expires_at: u64,
@@ -515,6 +524,37 @@ async fn collect_inner(
     Ok(Json(Collected {
         visitor_token: token,
         expires_at: expires,
+    })
+    .into_response())
+}
+
+pub async fn verify(
+    State(state): State<std::sync::Arc<AppState>>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let site = state.authenticate(request.headers())?;
+    if request.headers().contains_key(header::ORIGIN) {
+        return Err(ApiError::forbidden());
+    }
+    site.verify_rate
+        .lock()
+        .map_err(|_| ApiError::unavailable())?
+        .take(Instant::now())?;
+    let Json(signals) = Json::<Signals>::from_request(request, &())
+        .await
+        .map_err(json_error)?;
+    if !signals.valid() {
+        return Err(ApiError::invalid());
+    }
+    let available = signals.fingerprint.is_some();
+    Ok(Json(Verified {
+        status: if available {
+            "ok"
+        } else {
+            "insufficient_signals"
+        },
+        schema_version: available.then_some(signals.version),
+        fingerprint: signals.fingerprint,
     })
     .into_response())
 }
@@ -739,6 +779,38 @@ mod tests {
             },
         );
         state.token(site, &id, expires)
+    }
+
+    #[tokio::test]
+    async fn verification_does_not_store_observations_links_or_consume_other_quotas() {
+        let state = std::sync::Arc::new(state());
+        let signals = signals();
+        let payload = serde_json::json!({
+            "version": signals.version,
+            "fingerprint": signals.fingerprint,
+            "coreFingerprint": signals.core_fingerprint,
+            "components": signals.components,
+            "hints": signals.hints,
+            "unavailable": {},
+            "excluded": signals.excluded,
+            "durationMs": signals.duration_ms
+        });
+        let request = Request::builder()
+            .method("POST")
+            .header(header::AUTHORIZATION, format!("Bearer {}", "s".repeat(32)))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(payload.to_string()))
+            .unwrap();
+        let response = verify(State(std::sync::Arc::clone(&state)), request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let store = state.store.lock().unwrap();
+        assert!(store.observations.is_empty());
+        assert!(store.links.is_empty());
+        assert_eq!(state.sites[0].verify_rate.lock().unwrap().count, 1);
+        assert_eq!(state.sites[0].collect_rate.lock().unwrap().count, 0);
+        assert_eq!(state.sites[0].check_rate.lock().unwrap().count, 0);
     }
 
     #[test]

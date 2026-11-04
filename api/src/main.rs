@@ -18,6 +18,7 @@ fn app(state: Arc<poc::AppState>) -> Router {
         .route("/health", get(|| async { "ok" }))
         .route("/v1/collect", post(poc::collect).options(poc::preflight))
         .route("/v1/check", post(poc::check))
+        .route("/v1/verify", post(poc::verify))
         .layer(DefaultBodyLimit::max(poc::BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
