@@ -1,11 +1,13 @@
 # OpenFingerprint
 
-A small, standalone TypeScript browser-signal collector for fraud-prevention
-experiments. **MIT licensed. Zero runtime dependencies.**
+A small browser-signal collector and an experimental Rust signup-check API for
+fraud-prevention experiments. **Both are MIT licensed.** The standalone TypeScript
+browser SDK has **zero runtime dependencies**.
 
-No network requests, telemetry, remote code, WASM or import-time collection.
-Signals are hashed locally with Web Crypto. You choose whether and where to send
-results. This repository contains the browser client, not a hosted API or matcher.
+The browser SDK makes no network requests and has no telemetry, remote code, WASM
+or import-time collection. Signals are hashed locally with Web Crypto. You choose
+whether and where to send results. The optional API receives those results and
+checks emails; it is not a production hosted service.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Different
 devices can collide; settings, updates and missing signals can split repeat visits.
@@ -32,6 +34,23 @@ Node 24+ and pnpm 12.11.2 are used for development. Build outputs:
 The package exports resolve to the built ES module and declarations when used as
 a local dependency. Only development/build/test dependencies are installed; none
 are required by the emitted collector.
+
+## Rust API (experimental)
+
+The independent Cargo package in [`api/`](api/README.md) receives schema-4 SDK
+results, issues short-lived signed visitor tokens, and performs authenticated
+email checks with customer-specific exact-profile history.
+
+```sh
+pnpm api:check
+```
+
+This runs Rust formatting, linting, unit tests and a loopback HTTP self-check.
+It needs Rust stable and Node 24+, but no database or cloud account. The API is
+single-process RAM only: restart loses state, and it must not be deployed as a
+production matcher. It reports other emails checked, not confirmed accounts.
+Read the [API guide](api/README.md) for configuration, security and limitations.
+The SDK's public API, identity schema and transport-free behavior are unchanged.
 
 ## Use
 
@@ -200,7 +219,7 @@ include `_dispatch.*` and `_pipeline.dispatch` when examining synchronous cost. 
 
 The comparison test includes FingerprintJS `load()` in elapsed time; idle waiting
 is not necessarily a fixed 50 ms delay. Thumbmark uses its default stabilization
-rules in this lab, which are not equivalent to Ocean's `stabilize: []` trial.
+rules in this lab; integrations using `stabilize: []` are not configuration-equivalent.
 Reference monitoring/logging is disabled and no API keys are configured. Timeout
 races do not guarantee cancellation of underlying browser work in any library.
 Reference IDs can still be produced from component sets containing errors or

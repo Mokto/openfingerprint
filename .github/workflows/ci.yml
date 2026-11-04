@@ -17,3 +17,17 @@ jobs:
       - run: pnpm build
       - run: pnpm exec playwright-core install --with-deps chromium firefox webkit
       - run: pnpm test
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - run: cargo +stable fmt --manifest-path api/Cargo.toml --check
+      - run: cargo +stable clippy --manifest-path api/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo +stable test --manifest-path api/Cargo.toml --locked
+      - run: cargo +stable build --manifest-path api/Cargo.toml --locked
+      - run: node scripts/test-api.mjs
