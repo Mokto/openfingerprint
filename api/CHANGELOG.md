@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/Mokto/openfingerprint/compare/api-v0.2.0...api-v0.3.0) (2026-11-04)
+
+
+### Features
+
+* **api:** add stateless server profile verification ([#7](https://github.com/Mokto/openfingerprint/issues/7)) ([6f64264](https://github.com/Mokto/openfingerprint/commit/6f642648c92a44a3afece593c928fe04e1f920c4))
+
 ## [0.2.0](https://github.com/Mokto/openfingerprint/compare/api-v0.1.0...api-v0.2.0) (2026-11-04)
 
 
