@@ -51,10 +51,15 @@ letters/digits/underscore/dot. Public site keys and server-only secret keys are
 32–128 URL-safe ASCII characters. Generate random credentials; length validation
 cannot establish randomness. IDs and keys must be unique across sites and roles.
 
-`origins` contains 1–16 exact browser origins, without a path, trailing slash,
-credentials, query or wildcard. HTTPS is allowed; HTTP is restricted to localhost
-and loopback. Include non-default ports. Startup fails closed for invalid or
-missing configuration without printing its values.
+`origins` contains 1–16 exact browser origins or HTTPS subdomain patterns such as
+`https://*.example.test`. Patterns match one or more complete subdomain labels,
+not the apex, lookalike suffixes, paths, credentials or any explicit port. They
+never permit HTTP. Configure an exact origin separately for apex/non-default-port
+access. Exact HTTP origins are restricted to localhost/loopback. Neither form
+permits paths, trailing slashes or queries. Scope patterns only to zones you
+control; configuration does not prove domain ownership or check public suffixes.
+Responses reflect the accepted actual Origin, not the configured wildcard.
+Startup fails closed for invalid/missing configuration without printing values.
 
 The API does not serve the SDK or a web dashboard. Serve the built browser SDK
 from your application. Do not embed either signing or server secret keys in it.
@@ -141,7 +146,7 @@ advertise a public image until that verification succeeds.
 
 Authentication is checked before parsing the signup-check body or doing DNS work.
 `/v1/check` rejects browser-origin requests and does not enable browser CORS.
-Collection has exact-origin preflight handling; public site keys and Origin/CORS
+Collection applies the same exact/pattern origin checks to preflight and POST; public site keys and Origin/CORS
 are not authentication against a client that can forge requests.
 
 The server validates bounded signal maps, statuses, exclusions and timings, and

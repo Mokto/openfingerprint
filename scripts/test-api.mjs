@@ -20,7 +20,7 @@ const sites = ['alpha', 'beta', 'quota'].map((id) => ({
 	id,
 	site_key: key(),
 	secret_key: key(),
-	origins: [`https://${id}.test`]
+	origins: [`https://${id}.test`, ...(id === 'alpha' ? ['https://*.example.test', 'https://*.dc2.other.test'] : [])]
 }));
 assert(!values.platform || values.image, '--platform requires --image');
 const container = values.image ? `openfingerprint-test-${randomBytes(8).toString('hex')}` : null;
@@ -172,7 +172,28 @@ try {
 		).status,
 		403
 	);
-	console.log('Authentication and exact-origin/preflight checks passed.');
+	phase = 'wildcard origins require HTTPS subdomain boundaries';
+	for (const allowed of ['https://app.example.test', 'https://one.two.example.test', 'https://signup.dc2.other.test']) {
+		const response = await request('/v1/collect', { ...collectHeaders(sites[0]), Origin: allowed }, signals());
+		assert.equal(response.status, 200);
+		assert.equal(response.headers.get('access-control-allow-origin'), allowed);
+		await response.arrayBuffer();
+		const preflight = await request('/v1/collect', {
+			Origin: allowed, 'access-control-request-method': 'POST'
+		}, undefined, 'OPTIONS');
+		assert.equal(preflight.status, 204);
+		assert.equal(preflight.headers.get('access-control-allow-origin'), allowed);
+	}
+	for (const denied of ['https://example.test', 'http://app.example.test', 'https://appexample.test',
+		'https://app.example.test.evil.test', 'https://app.example.test:8443', 'https://*.example.test',
+		'https://user@app.example.test', 'https://app.example.test/path', 'https://app.other.test']) {
+		assert.equal((await request('/v1/collect', { ...collectHeaders(sites[0]), Origin: denied }, 'not-json')).status, 403);
+		assert.equal((await request('/v1/collect', {
+			Origin: denied, 'access-control-request-method': 'POST'
+		}, undefined, 'OPTIONS')).status, 403);
+	}
+	assert.equal((await request('/v1/collect', { ...collectHeaders(sites[1]), Origin: 'https://app.example.test' }, signals())).status, 403);
+	console.log('Authentication, exact/wildcard-origin boundaries and preflight checks passed.');
 	phase = 'exact-profile repeats and normalized-email retries';
 	const first = await collect();
 	const a = await check(sites[0], first, 'poc.first@gmail.com');
