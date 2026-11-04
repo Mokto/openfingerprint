@@ -102,10 +102,19 @@ when applying security updates.
 
 ### Publishing a release
 
-After merging and reviewing CI, a maintainer can push a tag such as `api-v0.1.0`.
-It must match `api/Cargo.toml` and point to a commit already on `main`. The release
-workflow builds and checks both architectures before combining their manifests,
-publishing the version tag and a `sha-<commit>` tag. Prefer a manifest digest when
+Release Please maintains an API release PR from conventional commits on `main`.
+Review and merge that PR to update `api/Cargo.toml`, its lockfile, changelog and
+release manifest, then create an `api-v<version>` GitHub release. The SDK's root
+package version is independent and is not managed by this configuration.
+
+The automation uses the short-lived `GITHUB_TOKEN`, not a stored PAT. Because its
+PR/tag events do not start other workflows automatically, it explicitly dispatches
+CI for release PRs and image publishing for released tags. Repository Actions
+settings must allow GitHub Actions to create pull requests.
+
+The image workflow checks that the tag matches `api/Cargo.toml` and its commit is
+already on `main`. It builds and checks both architectures before combining their
+manifests, publishing the version tag and a `sha-<commit>` tag. Prefer a manifest digest when
 an immutable deployment pin is required. There is no `latest` production-readiness
 promise, and publishing an image does not deploy a hosted API.
 
