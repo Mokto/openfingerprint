@@ -1,0 +1,103 @@
+name: Publish API image
+on:
+  push:
+    tags: ['api-v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: api-image-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  IMAGE: ghcr.io/mokto/openfingerprint-api
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - id: version
+        env:
+          API_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, tomllib
+          version = tomllib.loads(pathlib.Path('api/Cargo.toml').read_text())['package']['version']
+          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version) or os.environ['API_TAG'] != f'api-v{version}':
+              raise SystemExit('Tag must be api-v<version>, matching api/Cargo.toml')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print(f'version={version}', file=output)
+          PY
+  build:
+    needs: release
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      ARCH: ${{ matrix.arch }}
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - run: |
+          docker buildx build --load --provenance=false --platform "linux/$ARCH" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -f api/Dockerfile -t "$IMAGE:sha-$GITHUB_SHA-$ARCH" .
+          node scripts/test-api.mjs --image "$IMAGE:sha-$GITHUB_SHA-$ARCH"
+      - env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - run: docker push "$IMAGE:sha-$GITHUB_SHA-$ARCH"
+  manifest:
+    needs: [release, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - run: |
+          docker buildx imagetools create \
+            -t "$IMAGE:$VERSION" -t "$IMAGE:sha-$GITHUB_SHA" \
+            "$IMAGE:sha-$GITHUB_SHA-amd64" "$IMAGE:sha-$GITHUB_SHA-arm64"
+          printf 'Published `%s:%s` for linux/amd64 and linux/arm64.\n\nFirst release: set the GHCR package visibility to Public, then rerun if anonymous verification fails.\n' "$IMAGE" "$VERSION" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify public multi-architecture pulls
+        run: |
+          export DOCKER_CONFIG="$(mktemp -d)"
+          if ! docker manifest inspect "$IMAGE:$VERSION" > /tmp/api-manifest.json; then
+            echo '::error::Anonymous access failed. Set openfingerprint-api package visibility to Public in GitHub Package settings, then rerun this job.'
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          with open('/tmp/api-manifest.json') as source:
+              manifest = json.load(source)
+          platforms = {(item['platform']['os'], item['platform']['architecture']) for item in manifest['manifests']}
+          if platforms != {('linux', 'amd64'), ('linux', 'arm64')}:
+              raise SystemExit('Expected exactly linux/amd64 and linux/arm64')
+          PY
+          docker pull --platform linux/amd64 "$IMAGE:$VERSION"
+          docker pull --platform linux/arm64 "$IMAGE:$VERSION"

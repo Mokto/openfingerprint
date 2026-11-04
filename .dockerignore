@@ -1,0 +1,10 @@
+**
+!LICENSE
+!api/
+!api/Cargo.toml
+!api/Cargo.lock
+!api/src/
+!api/src/*.rs
+!api/data/
+!api/data/disposable_domains.txt
+!api/data/README.md
