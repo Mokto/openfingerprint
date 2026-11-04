@@ -167,7 +167,7 @@ impl AppState {
             .find(|s| s.site_key == key)
             .ok_or_else(ApiError::unauthorized)?;
         let origin = header_text(headers, "origin").ok_or_else(ApiError::forbidden)?;
-        if !site.origins.iter().any(|s| s == origin) {
+        if !site.origins.iter().any(|s| origin_matches(s, origin)) {
             return Err(ApiError::forbidden());
         }
         Ok((site, headers[header::ORIGIN].clone()))
@@ -566,7 +566,7 @@ pub async fn preflight(
     if !state
         .sites
         .iter()
-        .any(|s| s.origins.iter().any(|s| s == origin))
+        .any(|s| s.origins.iter().any(|s| origin_matches(s, origin)))
         || header_text(&headers, "access-control-request-method") != Some("POST")
         || header_text(&headers, "access-control-request-headers").is_some_and(|s| {
             s.split(',').any(|h| {
@@ -628,6 +628,12 @@ fn origin(s: &str) -> bool {
     if s.len() > 256 {
         return false;
     }
+    if let Some(host) = s.strip_prefix("https://*.") {
+        return host.contains('.') && dns_host(host);
+    }
+    if s.contains('*') {
+        return false;
+    }
     let Ok(uri) = s.parse::<Uri>() else {
         return false;
     };
@@ -639,6 +645,36 @@ fn origin(s: &str) -> bool {
         && !authority.as_str().contains('@')
         && s == format!("{scheme}://{authority}")
         && (scheme == "https" || ["localhost", "127.0.0.1", "[::1]"].contains(&authority.host()))
+}
+fn dns_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.as_bytes()[0].is_ascii_alphanumeric()
+                && label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+fn origin_matches(pattern: &str, value: &str) -> bool {
+    if value.contains('*') || !origin(value) {
+        return false;
+    }
+    if pattern == value {
+        return true;
+    }
+    let Some(suffix) = pattern.strip_prefix("https://*.") else {
+        return false;
+    };
+    let Some(host) = value.strip_prefix("https://") else {
+        return false;
+    };
+    host.strip_suffix(suffix)
+        .and_then(|prefix| prefix.strip_suffix('.'))
+        .is_some_and(|prefix| !prefix.is_empty() && dns_host(host))
 }
 fn ms(v: f64) -> bool {
     v.is_finite() && (0.0..=60000.0).contains(&v)
@@ -743,6 +779,71 @@ mod tests {
         ] {
             assert!(origin(value));
         }
+    }
+
+    #[test]
+    fn wildcard_origins_require_https_and_complete_subdomain_labels() {
+        for pattern in ["https://*.example.test", "https://*.dc2.other.test"] {
+            assert!(origin(pattern));
+        }
+        assert!(origin_matches(
+            "https://*.example.test",
+            "https://app.example.test"
+        ));
+        assert!(origin_matches(
+            "https://*.example.test",
+            "https://one.two.example.test"
+        ));
+        assert!(origin_matches(
+            "https://*.dc2.other.test",
+            "https://signup.dc2.other.test"
+        ));
+        assert!(origin_matches(
+            "https://exact.test:8443",
+            "https://exact.test:8443"
+        ));
+        for value in [
+            "https://example.test",
+            "http://app.example.test",
+            "https://appexample.test",
+            "https://app.example.test.evil.test",
+            "https://app.example.test:443",
+            "https://app.example.test:8443",
+            "https://app.example.test/path",
+            "https://app.example.test?query",
+            "https://user@app.example.test",
+            "https://.example.test",
+            "https://a..example.test",
+            "https://-a.example.test",
+            "https://*.example.test",
+            "https://app%2eexample.test",
+            "null",
+        ] {
+            assert!(!origin_matches("https://*.example.test", value));
+        }
+        for pattern in [
+            "http://*.example.test",
+            "https://*",
+            "https://*.test",
+            "https://*.*.example.test",
+            "https://*.example.test:443",
+            "https://*.example.test/path",
+            "https://*.example..test",
+        ] {
+            assert!(!origin(pattern));
+        }
+        assert!(!origin_matches(
+            "https://*.example.test",
+            &format!("https://{}.example.test", "a".repeat(64))
+        ));
+        assert!(!origin_matches(
+            "https://*.dc2.other.test",
+            "https://app.other.test"
+        ));
+        assert!(!origin_matches(
+            "https://exact.test",
+            "https://child.exact.test"
+        ));
     }
 
     #[test]
