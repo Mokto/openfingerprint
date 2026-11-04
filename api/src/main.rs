@@ -31,6 +31,21 @@ async fn no_store(request: Request, next: Next) -> Response {
     response
 }
 
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(poc::AppState::from_env()?);
@@ -46,6 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("OPENFINGERPRINT_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8180".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("listening on {}", listener.local_addr()?);
-    axum::serve(listener, app(state)).await?;
+    axum::serve(listener, app(state))
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
 }

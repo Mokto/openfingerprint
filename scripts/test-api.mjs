@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { once } from 'node:events';
@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const { values } = parseArgs({
 	options: {
+		image: { type: 'string' },
+		platform: { type: 'string' },
 		binary: {
 			type: 'string',
 			default: fileURLToPath(new URL('../api/target/debug/openfingerprint-api', import.meta.url))
@@ -20,10 +22,22 @@ const sites = ['alpha', 'beta', 'quota'].map((id) => ({
 	secret_key: key(),
 	origins: [`https://${id}.test`]
 }));
-const child = spawn(values.binary, [], {
+assert(!values.platform || values.image, '--platform requires --image');
+const container = values.image ? `openfingerprint-test-${randomBytes(8).toString('hex')}` : null;
+const args = container
+	? [
+			'run', '--rm', '--name', container, '--read-only', '--cap-drop=ALL',
+			'--security-opt=no-new-privileges', '-p', '127.0.0.1::8180',
+			'--env', 'OPENFINGERPRINT_LISTEN_ADDR', '--env', 'OPENFINGERPRINT_SIGNING_KEY',
+			'--env', 'OPENFINGERPRINT_SITES',
+			...(values.platform ? ['--platform', values.platform] : []),
+			values.image
+		]
+	: [];
+const child = spawn(container ? 'docker' : values.binary, args, {
 	env: {
 		...process.env,
-		OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0',
+		OPENFINGERPRINT_LISTEN_ADDR: container ? '0.0.0.0:8180' : '127.0.0.1:0',
 		OPENFINGERPRINT_SIGNING_KEY: key(),
 		OPENFINGERPRINT_SITES: JSON.stringify(sites)
 	},
@@ -35,15 +49,25 @@ const base = new Promise((resolve, reject) => {
 	let output = '';
 	child.stdout.on('data', (data) => {
 		output += data.toString();
-		const match = /listening on (127\.0\.0\.1:\d+)/.exec(output);
+		const match = /listening on (127\.0\.0\.1:\d+|0\.0\.0\.0:8180)/.exec(output);
 		if (match) {
 			clearTimeout(timer);
-			resolve(`http://${match[1]}`);
+			try {
+				const address = container
+					? execFileSync('docker', ['port', container, '8180/tcp'], {
+							encoding: 'utf8', timeout: 10000
+						}).trim()
+					: match[1];
+				assert(/^127\.0\.0\.1:\d+$/.test(address));
+				resolve(`http://${address}`);
+			} catch {
+				reject(new Error('Container port unavailable'));
+			}
 		}
 	});
 	child.on('error', () => reject(new Error('Startup failed')));
 	child.on('exit', () => reject(new Error('Server exited')));
-	timer = setTimeout(() => reject(new Error('Startup timed out')), 10000);
+	timer = setTimeout(() => reject(new Error('Startup timed out')), container ? 30000 : 10000);
 });
 child.stderr.on('data', () => {});
 const digest = (s) => createHash('sha256').update(s).digest('hex');
@@ -252,6 +276,34 @@ try {
 	console.log(
 		'Per-site quotas passed. POC smoke finished; no credentials, tokens, emails or fingerprint values printed.'
 	);
+	if (container) {
+		phase = 'non-root image, license retention and graceful SIGTERM';
+		const imageEnv = JSON.parse(execFileSync('docker', [
+			'image', 'inspect', '--format', '{{json .Config.Env}}', values.image
+		], { encoding: 'utf8' }));
+		assert(!imageEnv.some((value) => /^(OPENFINGERPRINT_SIGNING_KEY|OPENFINGERPRINT_SITES)=/.test(value)));
+		assert.equal(
+			execFileSync('docker', ['exec', container, 'id', '-u'], { encoding: 'utf8' }).trim(),
+			'65532'
+		);
+		assert.equal(
+			execFileSync('docker', ['inspect', '--format', '{{.HostConfig.ReadonlyRootfs}}', container], {
+				encoding: 'utf8'
+			}).trim(),
+			'true'
+		);
+		execFileSync('docker', ['exec', container, 'sh', '-c', [
+			'test -s /usr/share/licenses/openfingerprint-api/Cargo.lock',
+			'test -s /usr/share/licenses/openfingerprint-api/openfingerprint-api/LICENSE',
+			'test -d /usr/share/licenses/openfingerprint-api/rust'
+		].join(' && ')], { stdio: 'ignore' });
+		const exited = once(child, 'exit', { signal: AbortSignal.timeout(10000) });
+		execFileSync('docker', ['stop', '--time', '3', container], { stdio: 'ignore', timeout: 10000 });
+		const [code, signal] = await exited;
+		assert.equal(code, 0);
+		assert.equal(signal, null);
+		console.log('Non-root, read-only image, retained licenses and graceful SIGTERM checks passed.');
+	}
 } catch {
 	console.error(
 		`POC smoke failed during: ${phase}. Sensitive response/credential values suppressed.`
@@ -259,6 +311,11 @@ try {
 	process.exitCode = 1;
 } finally {
 	clearTimeout(timer);
+	if (container) {
+		try {
+			execFileSync('docker', ['rm', '--force', container], { stdio: 'ignore', timeout: 10000 });
+		} catch {}
+	}
 	if (child.exitCode === null) {
 		child.kill('SIGTERM');
 		await Promise.race([

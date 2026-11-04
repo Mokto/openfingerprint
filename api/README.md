@@ -61,6 +61,62 @@ from your application. Do not embed either signing or server secret keys in it.
 TLS is required before sending credentials over a non-loopback network; this
 process does not terminate TLS.
 
+## Docker images
+
+After an API release, the image is available at
+`ghcr.io/mokto/openfingerprint-api:<version>` for **linux/amd64** and **linux/arm64**.
+Docker selects the architecture automatically. Images are not published from PRs.
+No image has been released merely by adding this build configuration.
+
+With the signing key and site configuration already set privately in your shell:
+
+```sh
+docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+  -p 127.0.0.1:8180:8180 \
+  --env OPENFINGERPRINT_SIGNING_KEY --env OPENFINGERPRINT_SITES \
+  ghcr.io/mokto/openfingerprint-api:0.1.0
+```
+
+The image runs as UID/GID 65532 and listens on port 8180 inside the container.
+The host port above is loopback-only; use an appropriate TLS proxy for external
+access. No secrets are accepted as build arguments or copied into the image.
+SIGTERM/SIGINT initiate graceful shutdown. The filesystem can remain read-only;
+a volume does not make the in-memory state durable. Restart still loses all state.
+
+Build and check a local native-architecture image from the repository root:
+
+```sh
+docker buildx build --load --provenance=false -f api/Dockerfile -t openfingerprint-api:check .
+node scripts/test-api.mjs --image openfingerprint-api:check
+```
+
+To test another architecture with local emulation, add `--platform linux/amd64`
+or `--platform linux/arm64` to both commands. CI builds and runs the same HTTP
+checks on native AMD64 and ARM64 GitHub runners. Container checks also verify
+non-root execution, read-only operation, license retention and clean SIGTERM exit.
+The runtime includes application/data attribution, locked dependency licenses and
+Rust license notices under `/usr/share/licenses/openfingerprint-api/`. The build
+fails if a selected dependency has no recognized license/notice files. Base-image
+OS notices remain in their original locations. Update pinned base-image digests
+when applying security updates.
+
+### Publishing a release
+
+After merging and reviewing CI, a maintainer can push a tag such as `api-v0.1.0`.
+It must match `api/Cargo.toml` and point to a commit already on `main`. The release
+workflow builds and checks both architectures before combining their manifests,
+publishing the version tag and a `sha-<commit>` tag. Prefer a manifest digest when
+an immutable deployment pin is required. There is no `latest` production-readiness
+promise, and publishing an image does not deploy a hosted API.
+
+GitHub initially makes new personal-account packages private, even from a public
+repository. On the first release, the owner must open the `openfingerprint-api`
+package's **Package settings → Change visibility → Public**. This is irreversible.
+The workflow deliberately fails anonymous verification until that is done; rerun
+its failed manifest job afterward. Verification checks both manifest architectures
+and pulls both images with a fresh, unauthenticated Docker configuration. Do not
+advertise a public image until that verification succeeds.
+
 ## Collection and signup checks
 
 1. After applicable disclosure/consent, collect browser evidence ahead of signup.
@@ -112,8 +168,8 @@ The parser accepts unquoted ASCII dot-atom addresses with DNS-style domain
 labels. Quoted local parts, address literals and SMTPUTF8 are not supported;
 ASCII punycode domains are accepted. Normalization lowercases addresses, strips
 plus tags and folds Gmail dots and `googlemail.com`. This is an experimental
-alias policy, not universal mailbox semantics. One observation token binds to one normalized email. A different email
-needs a fresh token. Alias/retry recording is idempotent and does not extend link
+alias policy, not universal mailbox semantics. One observation token binds to one
+normalized email. A different email needs a fresh token. Alias/retry recording is idempotent and does not extend link
 retention. Comparison and recording are atomic.
 
 Matching uses only customer, schema and the exact full profile. It never merges
