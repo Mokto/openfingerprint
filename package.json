@@ -1,6 +1,6 @@
 {
 	"name": "openfingerprint",
-	"version": "0.5.1",
+	"version": "0.6.0",
 	"private": true,
 	"description": "A standalone browser signal collector for fraud-prevention experiments.",
 	"license": "MIT",

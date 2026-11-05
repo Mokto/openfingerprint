@@ -37,8 +37,8 @@ are required by the emitted collector.
 
 ## Rust API (experimental)
 
-The independent Cargo package in [`api/`](api/README.md) receives schema-4 SDK
-results, issues short-lived signed visitor tokens, and performs authenticated
+The independent Cargo package in [`api/`](api/README.md) receives schema-4 and
+schema-5 SDK results, issues short-lived signed visitor tokens, and performs authenticated
 email checks with customer-specific exact-profile history.
 
 ```sh
@@ -123,7 +123,7 @@ wall-time guarantee or a recovery mechanism for missing identities.
 
 ## Result and schema
 
-Version **0.5.1**, result **schema 4**:
+Version **0.6.0**, result **schema 5**:
 
 - `fingerprint`: full SHA-256 over selected component and environment-hint hashes.
 - `coreFingerprint`: separately domain-separated hash of selected rendering probes;
@@ -161,13 +161,18 @@ fallback metrics remain separate. Temporary frames are removed on failure/abort.
 
 ### Compatibility
 
-Schema-4 hash domains (`stealth-agent:4`, `stealth-core:4`) and optional marker
-namespace (`stealth:`) intentionally retain their original spellings. Renaming the
-project must not silently change existing IDs or markers. Compare IDs only within
-the same schema; any future change to identity inputs requires versioning.
-Version 0.5 changes scheduling and adds early notification, not identity inputs.
-Fully collected IDs remain schema-4 compatible; availability can still vary when
-scheduling, browser load or deadlines differ.
+Hash domains (`stealth-agent:5`, `stealth-core:5`) and the optional marker
+namespace (`stealth:`) intentionally retain their original `stealth` spelling.
+Renaming the project must not silently change existing IDs or markers. Compare IDs
+only within the same schema; any change to identity inputs requires versioning.
+
+Schema 5 (version 0.6.0) changes only the locale hint: it uses the primary
+`navigator.language`, time-zone name and resolved `Intl` locale. It no longer
+includes the full `navigator.languages` list, which Chrome incognito and Safari
+reduce to one entry, or the current UTC offset, which changes at daylight-saving
+transitions. Probes, canvas/font/GPU/audio inputs and the core ID inputs are
+unchanged, but every full and core ID differs from schema 4 because the hash domain
+changes. Schema-4 history does not match schema-5 IDs.
 
 ## Tests and reference comparison
 
