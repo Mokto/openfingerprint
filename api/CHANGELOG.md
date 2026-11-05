@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Mokto/openfingerprint/compare/api-v0.3.0...api-v0.4.0) (2026-11-05)
+
+
+### Features
+
+* make locale identity stable across incognito and DST (schema 5) ([#10](https://github.com/Mokto/openfingerprint/issues/10)) ([41f7f5c](https://github.com/Mokto/openfingerprint/commit/41f7f5c5e15038b96bad0eea70e2dad3625a3bc7))
+
 ## [0.3.0](https://github.com/Mokto/openfingerprint/compare/api-v0.2.0...api-v0.3.0) (2026-11-04)
 
 
