@@ -1,4 +1,4 @@
-name: Release API
+name: Release
 on:
   push:
     branches: [main]
@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: release-api
+  group: release
   cancel-in-progress: false
 jobs:
   release-please:
@@ -40,3 +40,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           API_TAG: ${{ steps.release.outputs['api--tag_name'] }}
         run: gh workflow run api-image.yml --repo "$GITHUB_REPOSITORY" --ref "$API_TAG"
+      - name: Publish released SDK to npm
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SDK_TAG: ${{ steps.release.outputs.tag_name }}
+        run: gh workflow run sdk-publish.yml --repo "$GITHUB_REPOSITORY" --ref "$SDK_TAG"

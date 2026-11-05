@@ -13,9 +13,20 @@ checks emails; it is not a production hosted service.
 devices can collide; settings, updates and missing signals can split repeat visits.
 Identification accuracy comparable to FingerprintJS has not been established.
 
+## Install
+
+```sh
+npm install @openfingerprint/sdk
+```
+
+Releases are published from GitHub Actions with npm trusted publishing, so each
+version carries a provenance attestation linking it to this repository, the release
+tag and the workflow run. The package ships only the built bundles, type
+declarations, license and notices; it has no runtime dependencies.
+
 ## Build from source
 
-This package is not published to npm. Clone and build it locally:
+Clone and build it locally:
 
 ```sh
 git clone https://github.com/Mokto/openfingerprint.git
@@ -31,9 +42,17 @@ Node 24+ and pnpm 12.11.2 are used for development. Build outputs:
 - `dist/index.iife.js`: script exposing `OpenFingerprint.collect`.
 - `dist/types/`: TypeScript declarations.
 
-The package exports resolve to the built ES module and declarations when used as
-a local dependency. Only development/build/test dependencies are installed; none
-are required by the emitted collector.
+The package exports resolve to the built ES module and declarations. Only
+development/build/test dependencies are installed; none are required by the
+emitted collector.
+
+### Releases
+
+Release Please versions the SDK (`sdk-v*` tags, root `CHANGELOG.md`) and the API
+(`api-v*` tags, `api/CHANGELOG.md`) independently. Merging an SDK release PR
+dispatches `.github/workflows/sdk-publish.yml`, which checks that the tag matches
+`package.json` and is on `main`, runs the type check, build and browser tests, verifies
+the package contents and publishes to npm. A version already on npm is skipped.
 
 ## Rust API (experimental)
 
@@ -58,7 +77,7 @@ Call after your application's fraud-prevention disclosure/consent requirements
 are satisfied. Collect ahead of signup rather than making authentication wait.
 
 ```js
-import { collect } from './dist/index.js';
+import { collect } from '@openfingerprint/sdk';
 
 const result = await collect();
 ```
