@@ -36,6 +36,7 @@ const { chromium, firefox, webkit } = require('playwright-core');
 const sources = { custom: await readFile(new URL('dist/index.iife.js', import.meta.url), 'utf8') };
 for (const file of ['dist/index.js', 'dist/index.iife.js']) {
 	const code = await readFile(new URL(file, import.meta.url), 'utf8');
+	assert(code.includes('Copyright (c) 2026 Théo Mathieu'));
 	assert(code.includes('Copyright (c) 2025 FingerprintJS, Inc'));
 	assert(code.includes('MIT License'));
 }

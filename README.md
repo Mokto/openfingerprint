@@ -266,7 +266,9 @@ physical devices before making decisions.
 
 ## License and provenance
 
-[MIT](LICENSE), copyright 2026 Théo Mathieu.
+[MIT](LICENSE), copyright 2026 Théo Mathieu. Both emitted bundles start with this
+notice as a preserved `/*!` comment, so bundlers that keep legal comments carry it
+into application builds.
 
 The DOM font-preference presets/calibration adapt
 [FingerprintJS 5.3.0](https://github.com/fingerprintjs/fingerprintjs/blob/v5.3.0/src/sources/font_preferences.ts),
