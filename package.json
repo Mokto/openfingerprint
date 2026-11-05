@@ -22,7 +22,8 @@
 		".": {
 			"types": "./dist/types/index.d.ts",
 			"import": "./dist/index.js"
-		}
+		},
+		"./package.json": "./package.json"
 	},
 	"publishConfig": {
 		"access": "public"
