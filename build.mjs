@@ -12,7 +12,13 @@ await build({
 		rolldownOptions: {
 			output: {
 				comments: { legal: true },
-				banner: `/*!\n${await readFile(new URL('THIRD-PARTY-NOTICES', import.meta.url), 'utf8')}*/`
+				banner: (
+					await Promise.all(
+						['LICENSE', 'THIRD-PARTY-NOTICES'].map((name) => readFile(new URL(name, import.meta.url), 'utf8'))
+					)
+				)
+					.map((notice) => `/*!\n${notice}*/`)
+					.join('\n')
 			}
 		},
 		lib: {
