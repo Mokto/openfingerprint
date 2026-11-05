@@ -71,18 +71,18 @@ const base = new Promise((resolve, reject) => {
 });
 child.stderr.on('data', () => {});
 const digest = (s) => createHash('sha256').update(s).digest('hex');
-function signals(locale = 'same', font = 'same') {
+function signals(locale = 'same', font = 'same', version = 4) {
 	const components = { fontFallbacks: digest('fallback'), fontPreferences: digest(font) };
 	const hints = { locale: digest(locale) };
 	const entries = (object) =>
 		Object.entries(object).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 	return {
-		version: 4,
+		version,
 		fingerprint: digest(
-			'stealth-agent:4\0' +
+			`stealth-agent:${version}\0` +
 				JSON.stringify({ components: entries(components), hints: entries(hints) })
 		),
-		coreFingerprint: digest('stealth-core:4\0' + JSON.stringify(entries(components))),
+		coreFingerprint: digest(`stealth-core:${version}\0` + JSON.stringify(entries(components))),
 		components,
 		hints,
 		excluded: ['audio', 'canvas', 'screen'],
@@ -137,6 +137,14 @@ try {
 		assert.equal(response.headers.get('access-control-allow-origin'), null);
 		assert.deepEqual(await response.json(), { status: 'ok', schema_version: 4, fingerprint: verifiedInput.fingerprint });
 	}
+	const schema5 = signals('same', 'same', 5);
+	delete schema5.timings;
+	delete schema5.storageId;
+	const schema5Response = await request('/v1/verify', authHeaders(sites[0]), schema5);
+	assert.equal(schema5Response.status, 200);
+	assert.deepEqual(await schema5Response.json(), { status: 'ok', schema_version: 5, fingerprint: schema5.fingerprint });
+	assert.notEqual(schema5.fingerprint, verifiedInput.fingerprint);
+	assert.equal((await request('/v1/verify', authHeaders(sites[0]), { ...verifiedInput, version: 5 })).status, 400);
 	const fullOnly = { ...verifiedInput, coreFingerprint: null };
 	assert.equal((await request('/v1/verify', authHeaders(sites[0]), fullOnly)).status, 200);
 	for (const insufficient of [
@@ -151,6 +159,7 @@ try {
 		{ ...verifiedInput, fingerprint: digest('tampered') },
 		{ ...verifiedInput, coreFingerprint: digest('tampered') },
 		{ ...verifiedInput, version: 2 },
+		{ ...verifiedInput, version: 6 },
 		{ ...verifiedInput, storageId: 'unsolicited' },
 		{ ...verifiedInput, excluded: ['canvas', 'canvas'] },
 		{ ...verifiedInput, components: { fonts: 'raw' } },

@@ -114,7 +114,7 @@ await mkdir(dirname(output), { recursive: true });
 const checkpoint = () => writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
 
 function valid(r) {
-	assert.equal(r.version, 4);
+	assert.equal(r.version, 5);
 	assert(Array.isArray(r.excluded));
 	assert(r.fingerprint === null || /^[0-9a-f]{64}$/.test(r.fingerprint));
 	assert(r.coreFingerprint === null || /^[0-9a-f]{64}$/.test(r.coreFingerprint));
@@ -185,7 +185,25 @@ try {
 			valid(b);
 			assert.equal(a.storageId, b.storageId);
 			await page.evaluate(() => {
-				Object.defineProperty(navigator, 'languages', { value: ['zz-ZZ'], configurable: true });
+				Object.defineProperty(navigator, 'languages', {
+					value: [navigator.language],
+					configurable: true
+				});
+				const offset = new Date().getTimezoneOffset();
+				Date.prototype.getTimezoneOffset = () => offset - 60;
+			});
+			const reducedLanguages = await page.evaluate(() =>
+				OpenFingerprint.collect({ timeoutMs: 1000 })
+			);
+			valid(reducedLanguages);
+			assert.equal(reducedLanguages.fingerprint, a.fingerprint);
+			report.checks.push({
+				browser: name,
+				check: 'incognito-style language-list reduction and DST offset shift keep the full ID',
+				passed: true
+			});
+			await page.evaluate(() => {
+				Object.defineProperty(navigator, 'language', { value: 'zz-ZZ', configurable: true });
 				Object.defineProperty(screen, 'width', { value: 999, configurable: true });
 				Object.defineProperty(navigator, 'hardwareConcurrency', { value: 1, configurable: true });
 			});
@@ -217,12 +235,12 @@ try {
 			const hints = Object.entries(a.hints)
 				.filter(([name]) => !a.excluded.includes(name))
 				.sort(order);
-			const canonical = 'stealth-agent:4\0' + JSON.stringify({ components, hints });
+			const canonical = 'stealth-agent:5\0' + JSON.stringify({ components, hints });
 			assert.equal(a.fingerprint, createHash('sha256').update(canonical).digest('hex'));
 			assert.equal(
 				a.coreFingerprint,
 				createHash('sha256')
-					.update('stealth-core:4\0' + JSON.stringify(components))
+					.update('stealth-core:5\0' + JSON.stringify(components))
 					.digest('hex')
 			);
 			report.checks.push({
@@ -977,7 +995,7 @@ try {
 				const original = crypto.subtle.digest.bind(crypto.subtle);
 				window.aggregateSeen = false;
 				crypto.subtle.digest = (algorithm, data) => {
-					if (new TextDecoder().decode(data).startsWith('stealth-agent:4')) {
+					if (new TextDecoder().decode(data).startsWith('stealth-agent:5')) {
 						window.aggregateSeen = true;
 						return new Promise(() => {});
 					}

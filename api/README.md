@@ -136,7 +136,7 @@ advertise a public image until that verification succeeds.
 1. After applicable disclosure/consent, collect browser evidence ahead of signup.
    The unchanged SDK has a two-second cooperative default budget; it can return
    null IDs and native calls can exceed the budget.
-2. Send the schema-4 result directly to `POST /v1/collect` with `X-Site-Key` and an
+2. Send the schema-4 or schema-5 result directly to `POST /v1/collect` with `X-Site-Key` and an
    allowed browser Origin. Do not set the SDK's `storageKey`: unsolicited storage
    markers are rejected. The response has `visitor_token` and Unix `expires_at`.
 3. Pass the token to your own signup backend. From that trusted backend, call
@@ -150,21 +150,23 @@ Collection applies the same exact/pattern origin checks to preflight and POST; p
 are not authentication against a client that can forge requests.
 
 The server validates bounded signal maps, statuses, exclusions and timings, and
-recomputes non-null full/core IDs from the canonical schema-4 inputs. These checks
+recomputes non-null full/core IDs from the canonical inputs and hash domain of the
+reported schema (4 or 5). These checks
 catch accidental corruption, not dishonest clients. A signed token binds a random
 observation to one customer and expiry; it does not prove a real browser, person
 or physical device. Excluded diagnostic evidence alone cannot create an identity.
 
 ## Server-side profile verification
 
-Backends that already receive SDK reports can send the schema-4 result directly
+Backends that already receive SDK reports can send the schema-4 or schema-5 result directly
 to `POST /v1/verify` with their server-only bearer secret and no Origin header.
 The same bounded signal validation and canonical full/core hash checks apply as
 for collection. This endpoint does not collect browser evidence itself or create
 an identity when the SDK returned no full fingerprint.
 
 A valid full profile returns
-`{ "status": "ok", "schema_version": 4, "fingerprint": "<full fingerprint>" }`.
+`{ "status": "ok", "schema_version": <4 or 5>, "fingerprint": "<full fingerprint>" }`.
+IDs from different schemas never match.
 Valid evidence without a full fingerprint returns
 `{ "status": "insufficient_signals", "schema_version": null, "fingerprint": null }`.
 A core-only result is not a full identity. Invalid or inconsistent inputs return

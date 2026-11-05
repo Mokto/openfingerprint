@@ -341,7 +341,7 @@ struct Profile<'a> {
 impl Signals {
     fn valid(&self) -> bool {
         let hashes = [&self.components, &self.hints];
-        if self.version != 4
+        if !(4..=5).contains(&self.version)
             || self.storage_id.is_some()
             || !ms(self.duration_ms)
             || hashes
@@ -383,12 +383,14 @@ impl Signals {
         let core = serde_json::to_string(&profile.components).expect("string entries");
         let full = serde_json::to_string(&profile).expect("string entries");
         [
-            (self.fingerprint.as_ref(), "stealth-agent:4\0", full),
-            (self.core_fingerprint.as_ref(), "stealth-core:4\0", core),
+            (self.fingerprint.as_ref(), "stealth-agent", full),
+            (self.core_fingerprint.as_ref(), "stealth-core", core),
         ]
         .iter()
         .all(|(value, domain, payload)| {
-            value.is_none_or(|v| has_core && *v == sha256(&format!("{domain}{payload}")))
+            value.is_none_or(|v| {
+                has_core && *v == sha256(&format!("{domain}:{}\0{payload}", self.version))
+            })
         })
     }
 }
@@ -924,6 +926,22 @@ mod tests {
         let mut s = signals();
         s.version = 2;
         assert!(!s.valid());
+        let mut s = signals();
+        s.version = 6;
+        assert!(!s.valid());
+        let mut s = signals();
+        s.version = 5;
+        assert!(!s.valid(), "schema-4 hashes must not verify as schema 5");
+        let entries: Vec<_> = s.components.iter().collect();
+        s.core_fingerprint = Some(sha256(&format!(
+            "stealth-core:5\0{}",
+            serde_json::to_string(&entries).unwrap()
+        )));
+        s.fingerprint = Some(sha256(&format!(
+            "stealth-agent:5\0{}",
+            serde_json::json!({"components":entries,"hints":[]})
+        )));
+        assert!(s.valid());
         let mut s = signals();
         s.fingerprint = Some("b".repeat(64));
         assert!(!s.valid());

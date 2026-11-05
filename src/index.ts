@@ -462,7 +462,7 @@ export interface Options {
 	onIdentity?: (snapshot: Result) => unknown;
 }
 export interface Result {
-	version: 4;
+	version: 5;
 	excluded: Name[];
 	fingerprint: string | null;
 	coreFingerprint: string | null;
@@ -510,7 +510,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		return controller.signal.aborted;
 	};
 	const result: Result = {
-		version: 4,
+		version: 5,
 		excluded: identityExclusions(navigator.userAgent, navigator.vendor),
 		fingerprint: null,
 		coreFingerprint: null,
@@ -577,10 +577,10 @@ export async function collect(options: Options = {}): Promise<Result> {
 				.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 			[result.fingerprint, result.coreFingerprint] = await Promise.race([
 				Promise.all([
-					hash(`stealth-agent:4\0${JSON.stringify({ components: entries, hints })}`).catch(
+					hash(`stealth-agent:5\0${JSON.stringify({ components: entries, hints })}`).catch(
 						() => null
 					),
-					hash(`stealth-core:4\0${JSON.stringify(entries)}`).catch(() => null)
+					hash(`stealth-core:5\0${JSON.stringify(entries)}`).catch(() => null)
 				]),
 				timeout
 			]);

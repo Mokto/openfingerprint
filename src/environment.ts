@@ -28,12 +28,9 @@ export const environment = {
 		]),
 	locale: () => {
 		const options = Intl.DateTimeFormat().resolvedOptions();
-		return JSON.stringify([
-			navigator.languages,
-			options.timeZone,
-			options.locale,
-			new Date().getTimezoneOffset()
-		]);
+		// Not navigator.languages (incognito/Safari reduce it to one entry) or the current
+		// UTC offset (changes at DST; the zone name already covers it).
+		return JSON.stringify([navigator.language, options.timeZone, options.locale]);
 	},
 	display: () => JSON.stringify(screen.colorDepth),
 	screen: () =>
