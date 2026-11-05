@@ -9,6 +9,14 @@
       "include-component-in-tag": true,
       "initial-version": "0.1.0",
       "bump-minor-pre-major": true
+    },
+    ".": {
+      "release-type": "node",
+      "package-name": "@openfingerprint/sdk",
+      "component": "sdk",
+      "include-component-in-tag": true,
+      "bump-minor-pre-major": true,
+      "exclude-paths": ["api", "scripts/test-api.mjs", ".github/workflows/api-image.yml"]
     }
   }
 }

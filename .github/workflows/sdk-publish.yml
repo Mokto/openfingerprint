@@ -1,0 +1,67 @@
+name: Publish SDK
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sdk-publish-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'Mokto/openfingerprint' && github.ref_type == 'tag' && startsWith(github.ref_name, 'sdk-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - id: package
+        env:
+          SDK_TAG: ${{ github.ref_name }}
+        run: |
+          node - <<'JS'
+          const { name, version, private: isPrivate } = require('./package.json');
+          if (name !== '@openfingerprint/sdk' || isPrivate || !/^\d+\.\d+\.\d+$/.test(version) || process.env.SDK_TAG !== `sdk-v${version}`)
+            throw new Error('Tag must be sdk-v<version>, matching a public @openfingerprint/sdk package.json');
+          require('fs').appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          JS
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm install --global pnpm@12.11.2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm build
+      - run: pnpm exec playwright-core install --with-deps chromium firefox webkit
+      - run: pnpm test
+      - id: published
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          if npm view "@openfingerprint/sdk@$VERSION" version >/dev/null 2>&1; then
+            echo "@openfingerprint/sdk@$VERSION is already on npm; nothing to publish."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.published.outputs.exists != 'true'
+        run: |
+          npm pack --dry-run --json > pack.json
+          node - <<'JS'
+          const [pack] = require('./pack.json');
+          const files = pack.files.map((f) => f.path).sort();
+          const allowed = /^(LICENSE|README\.md|THIRD-PARTY-NOTICES|package\.json|dist\/index(\.iife)?\.js(\.map)?|dist\/types\/[a-z]+\.d\.ts)$/;
+          const unexpected = files.filter((f) => !allowed.test(f));
+          const required = ['LICENSE', 'THIRD-PARTY-NOTICES', 'dist/index.js', 'dist/index.iife.js', 'dist/types/index.d.ts'];
+          const missing = required.filter((f) => !files.includes(f));
+          if (unexpected.length || missing.length) throw new Error(`Unexpected package contents: ${JSON.stringify({ unexpected, missing })}`);
+          JS
+      # Trusted publishing: npm exchanges this job's OIDC token; no npm token is stored.
+      - if: steps.published.outputs.exists != 'true'
+        env:
+          NODE_AUTH_TOKEN: ''
+        run: npm publish --access public
