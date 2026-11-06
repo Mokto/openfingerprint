@@ -249,6 +249,7 @@ struct Verified {
 struct CheckRequest {
     signals: Option<serde_json::Value>,
     domain: Option<serde_json::Value>,
+    mx: Option<serde_json::Value>,
     ip: Option<serde_json::Value>,
 }
 
@@ -394,12 +395,16 @@ pub async fn check(
     let Json(input) = Json::<CheckRequest>::from_request(request, &())
         .await
         .map_err(json_error)?;
-    if input.signals.is_none() && input.domain.is_none() && input.ip.is_none() {
+    if (input.signals.is_none() && input.domain.is_none() && input.ip.is_none())
+        || (input.mx.is_some() && input.domain.is_none())
+    {
         return Err(ApiError::invalid());
     }
     Ok(Json(CheckResponse {
         signals: input.signals.map(check_signals),
-        domain: input.domain.map(|value| state.domains.check(value)),
+        domain: input
+            .domain
+            .map(|value| state.domains.check(value, input.mx)),
         ip: input.ip.map(check_ip),
     })
     .into_response())
@@ -684,7 +689,8 @@ mod tests {
         ] {
             assert!(domain(valid));
             let result =
-                serde_json::to_value(state().domains.check(serde_json::json!(valid))).unwrap();
+                serde_json::to_value(state().domains.check(serde_json::json!(valid), None))
+                    .unwrap();
             assert_eq!(result["status"], "unknown");
             assert_eq!(result["reason"], "not_configured");
         }
@@ -719,12 +725,14 @@ mod tests {
         ] {
             assert!(!domain(invalid));
             let result =
-                serde_json::to_value(state().domains.check(serde_json::json!(invalid))).unwrap();
+                serde_json::to_value(state().domains.check(serde_json::json!(invalid), None))
+                    .unwrap();
             assert_eq!(result["status"], "invalid_input");
             assert_eq!(result["reason"], "invalid_domain");
         }
         assert!(!domain(&format!("{}.example", "a".repeat(64))));
-        let result = serde_json::to_value(state().domains.check(serde_json::json!([]))).unwrap();
+        let result =
+            serde_json::to_value(state().domains.check(serde_json::json!([]), None)).unwrap();
         assert_eq!(result["status"], "invalid_input");
     }
 

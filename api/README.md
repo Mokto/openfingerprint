@@ -15,8 +15,9 @@ Domain intelligence runs locally against openly licensed, versioned snapshots:
 
 The domain snapshot is bundled and can be overridden with a refreshed local file.
 A valid input does not mean a domain is legitimate or an IP is clean. Unlisted or
-uncovered domains remain null, not false. IP intelligence, live MX/RDAP and domain
-authority are not implemented. The spam scope is specifically **referrer spam**,
+uncovered domains remain null, not false. Callers may supply MX hosts so mail
+routed to a listed disposable provider is detected; the API itself does no DNS.
+IP intelligence, RDAP and domain authority are not implemented. The spam scope is specifically **referrer spam**,
 not email-sending reputation. See [sources, licenses and refresh](data/README.md). Older API releases, including 0.4.0, have a different
 `/v1/check` contract; this guide describes the next release, not a live upgrade.
 
@@ -101,6 +102,7 @@ The JSON object accepts only these fields:
 | --- | --- |
 | `signals` | Optional SDK result object, as described below. |
 | `domain` | Optional ASCII hostname, not a URL or complete email address. |
+| `mx` | Optional array of 1–10 MX hostnames for `domain`, resolved by your backend. Requires `domain`. Omit null MX (`.`) and lookup failures. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
 
 At least one non-null field is required. Null is equivalent to omission. Results
@@ -120,6 +122,17 @@ provider domains from an openly licensed feed; no vendor API results are importe
 license, revision, source-commit/retrieval/expiry times. For example, a confirmed
 list match yields `value: true, status: listed`; an ordinary non-match yields
 `value: null, status: not_listed`, not a clean verdict.
+
+With `mx`, an otherwise `not_listed` domain whose external MX host is on a fresh
+disposable source yields `value: true, status: mx_listed`, with that host's source
+statuses. Mail routed to a known disposable provider is strong evidence, but
+it is inferred, so you can treat it separately from a direct listing. MX hosts
+inside the queried domain are ignored. A disputed, allowlisted or conflicting
+MX host or parent domain blocks the inference; direct listings, allowlists and
+disputes always take precedence. The API performs no DNS lookups and does not
+echo MX hosts. Invalid `mx` values return `invalid_input/invalid_mx` for the
+domain section; `mx` without `domain` is HTTP 400. MX data is what the caller
+observed at check time, not mailbox validation.
 
 Free-subdomain operator apexes yield false with `provider_domain`; strict children
 can match. Reviewed allowlist overrides yield false with `allowlisted`. Conflicting

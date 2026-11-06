@@ -96,8 +96,10 @@ has the same expiry policy and must also be refreshed when stale.
 
 A missing/malformed override produces unknown domain results, never a silent
 fallback to the bundled data. Browser verification remains available. `/health`
-is still process liveness, not a guarantee of dataset freshness. No live DNS,
-MX, RDAP, domain-authority score or email-specific throwaway detection is added.
+is still process liveness, not a guarantee of dataset freshness. The API does no
+live DNS or RDAP and has no domain-authority score. Caller-supplied MX hosts are
+matched against the same fresh disposable sources (`mx_listed`); this covers new
+domains routed to listed providers, not providers absent from every source.
 
 ## Checks
 
