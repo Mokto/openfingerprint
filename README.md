@@ -1,13 +1,15 @@
 # OpenFingerprint
 
-A small browser-signal collector and an experimental Rust signup-check API for
-fraud-prevention experiments. **Both are MIT licensed.** The standalone TypeScript
-browser SDK has **zero runtime dependencies**.
+A small browser-signal collector and an experimental, stateless Rust signup-check
+API. **Both are MIT licensed.** The
+standalone TypeScript browser SDK has **zero runtime dependencies**.
 
 The browser SDK makes no network requests and has no telemetry, remote code, WASM
 or import-time collection. Signals are hashed locally with Web Crypto. You choose
-whether and where to send results. The optional API receives those results and
-checks emails; it is not a production hosted service.
+whether and where to send results. The optional API verifies hashed results and
+provides independent browser/domain/IP result sections without visitor storage or
+history. Domain/IP intelligence sources are not implemented yet: valid inputs
+explicitly return unknown. It is self-hosted, not a managed identification service.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Different
 devices can collide; settings, updates and missing signals can split repeat visits.
@@ -56,19 +58,32 @@ the package contents and publishes to npm. A version already on npm is skipped.
 
 ## Rust API (experimental)
 
-The independent Cargo package in [`api/`](api/README.md) receives schema-4 and
-schema-5 SDK results, issues short-lived signed visitor tokens, and performs authenticated
-email checks with customer-specific exact-profile history.
+The independent Cargo package in [`api/`](api/README.md) exposes `GET /health` and
+authenticated, server-only `POST /v1/check`. Supply any combination of optional
+`signals`, `domain` and `ip` (at least one required). Only requested sections are
+returned, and failures in one field do not discard another field's result.
+
+Browser evidence is checked against canonical schema-4/5 hashes, with evidence
+counts rather than invented confidence scores. Domain/IP syntax is validated,
+but valid inputs currently return `unknown/not_configured`: feeds and lookups
+are a separate next step. No DNS/provider request, visitor store, observation
+token, full email processing or account history is added.
+
+The existing `POST /v1/verify` payload/response remains compatible during caller
+migration. Older releases, including API 0.4.0, have a different `/v1/check`
+contract. These source changes do not release/deploy an API or migrate callers.
 
 ```sh
 pnpm api:check
 ```
 
 This runs Rust formatting, linting, unit tests and a loopback HTTP self-check.
-It needs Rust stable and Node 24+, but no database or cloud account. The API is
-single-process RAM only: restart loses state, and it must not be deployed as a
-production matcher. It reports other emails checked, not confirmed accounts.
-Read the [API guide](api/README.md) for configuration, security and limitations.
+It needs Rust stable and Node 24+, but no database or cloud account. Only
+configured server credential tags and per-customer quota counters are retained;
+request evidence is not persisted or logged. Your application owns any session or
+account association and its privacy/retention policy. This is not a Fingerprint
+Pro replacement or physical-device attestation. Read the [API guide](api/README.md)
+for configuration, rollout compatibility, security and limitations.
 The SDK's public API, identity schema and transport-free behavior are unchanged.
 
 ## Use
