@@ -7,6 +7,6 @@ sources:
   - https://github.com/Mokto/openfingerprint
 # Published charts set both from the API release tag and pin both image digests.
 # x-release-please-start-version
-version: 0.5.0
-appVersion: "0.5.0"
+version: 0.5.1
+appVersion: "0.5.1"
 # x-release-please-end
