@@ -10,7 +10,6 @@ imagePullSecrets: []
 # Required: a Secret providing OPENFINGERPRINT_SITES (server credentials), loaded with envFrom.
 existingSecret: ""
 
-# The API keeps only per-process quota state; each replica has its own quota window.
 replicaCount: 1
 podAnnotations: {}
 resources:
