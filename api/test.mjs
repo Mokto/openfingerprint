@@ -451,34 +451,6 @@ try {
     }))).status, 413);
     console.log('Strict hashes, schema separation, unsolicited visitor-data rejection and body limits passed.');
 
-    phase = 'independent per-site quotas, including malformed authenticated requests';
-    for (const [site, body, status] of [
-        [sites[2], signals(), 200],
-        [sites[3], 'not-json', 400]
-    ]) {
-        await Promise.all(Array.from({ length: 60 }, async (_, i) => {
-            const path = site === sites[3] && i % 2 ? '/v1/check' : '/v1/verify';
-            const response = await request(path, authHeaders(site), body);
-            assert.equal(response.status, status);
-            await response.arrayBuffer();
-        }));
-        const denied = await request('/v1/verify', authHeaders(site), signals());
-        assert.equal(denied.status, 429);
-        assert.deepEqual(await denied.json(), { error: 'rate_limit' });
-    }
-    assert.equal((await request('/v1/verify', authHeaders(sites[1]), signals())).status, 200);
-    for (let i = 0; i < 60; i++) {
-        const path = i % 2 ? '/v1/verify' : '/v1/check';
-        const response = await request(path, authHeaders(sites[6]), i % 2 ? signals() : { domain: 'example.test' });
-        assert.equal(response.status, 200);
-        await response.arrayBuffer();
-    }
-    for (const path of ['/v1/check', '/v1/verify']) {
-        const response = await request(path, authHeaders(sites[6]), 'not-json');
-        assert.equal(response.status, 429);
-        assert.deepEqual(await response.json(), { error: 'rate_limit' });
-    }
-    console.log('Independent site quotas and one shared check/verify quota passed; no sensitive values printed.');
     phase = 'snapshot reload and metrics';
     assert(metricsOrigin, 'Metrics listener missing');
     const metric = async (name) => {

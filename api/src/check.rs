@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    sync::Mutex,
-    time::{Duration, Instant},
-};
+use std::collections::{BTreeMap, HashSet};
 
 use axum::{
     Json,
@@ -28,33 +24,7 @@ struct SiteConfig {
 }
 struct Site {
     secret: hmac::Tag,
-    rate: Mutex<Rate>,
 }
-struct Rate {
-    // ponytail: per-process fixed windows; use a shared limiter for a multi-replica quota.
-    start: Instant,
-    count: u16,
-}
-impl Rate {
-    fn new() -> Self {
-        Self {
-            start: Instant::now(),
-            count: 0,
-        }
-    }
-    fn take(&mut self, now: Instant) -> Result<(), ApiError> {
-        if now.duration_since(self.start) >= Duration::from_secs(60) {
-            self.start = now;
-            self.count = 0;
-        }
-        if self.count >= 60 {
-            return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "rate_limit"));
-        }
-        self.count += 1;
-        Ok(())
-    }
-}
-
 pub struct AppState {
     sites: Vec<Site>,
     pub domains: crate::domains::DomainStore,
@@ -99,7 +69,6 @@ impl AppState {
                     &hmac::Key::new(hmac::HMAC_SHA256, c.secret_key.as_bytes()),
                     AUTH_DOMAIN,
                 ),
-                rate: Mutex::new(Rate::new()),
             })
             .collect();
         Ok(Self {
@@ -133,14 +102,11 @@ impl AppState {
         data.check_with(&domain, &hosts, lookup)
     }
     fn authorize(&self, headers: &HeaderMap) -> Result<(), ApiError> {
-        let site = self.authenticate(headers)?;
+        self.authenticate(headers)?;
         if headers.contains_key(header::ORIGIN) {
             return Err(ApiError::forbidden());
         }
-        site.rate
-            .lock()
-            .map_err(|_| ApiError::unavailable())?
-            .take(Instant::now())
+        Ok(())
     }
     fn authenticate(&self, headers: &HeaderMap) -> Result<&Site, ApiError> {
         let secret = header_text(headers, header::AUTHORIZATION.as_str())
@@ -389,9 +355,6 @@ impl ApiError {
     }
     fn forbidden() -> Self {
         Self(StatusCode::FORBIDDEN, "origin_not_allowed")
-    }
-    fn unavailable() -> Self {
-        Self(StatusCode::SERVICE_UNAVAILABLE, "unavailable")
     }
     fn invalid() -> Self {
         Self(StatusCode::BAD_REQUEST, "invalid_request")
@@ -643,7 +606,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verification_retains_only_per_site_quota_state() {
+    async fn verification_returns_only_status_and_hashes() {
         let state = std::sync::Arc::new(state());
         for _ in 0..2 {
             let payload = payload();
@@ -664,8 +627,6 @@ mod tests {
             assert_eq!(body["status"], "ok");
             assert!(body.get("components").is_none());
         }
-        assert_eq!(state.sites[0].rate.lock().unwrap().count, 2);
-        assert_eq!(state.sites[1].rate.lock().unwrap().count, 0);
     }
 
     #[test]
@@ -802,16 +763,5 @@ mod tests {
             assert_eq!(result.reason, "invalid_ip");
         }
         assert_eq!(check_ip(serde_json::json!(42)).status, "invalid_input");
-    }
-
-    #[test]
-    fn quota_window_uses_monotonic_time() {
-        let mut rate = Rate::new();
-        let now = rate.start;
-        for _ in 0..60 {
-            assert!(rate.take(now).is_ok());
-        }
-        assert!(rate.take(now).is_err());
-        assert!(rate.take(now + Duration::from_secs(60)).is_ok());
     }
 }

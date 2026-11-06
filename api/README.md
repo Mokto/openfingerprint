@@ -36,12 +36,9 @@ Responses have `Cache-Control: no-store` and set no cookies. Domain/IP inputs ar
 not echoed in responses. No browser/server IP is inferred from the connection or
 forwarded headers. Signals-only calls do not run domain/IP checks.
 
-Retained runtime state consists of configured server credential tags, one quota
-counter/window per site and a read-only public domain snapshot. No visitor/domain
-request cache is created; quota state is not keyed by visitor, IP, domain or
-profile. Restart resets the quota windows. Multiple replicas have independent
-quotas; use an edge/shared limiter for a deployment-wide quota. Both business
-routes share the same per-site quota, so the compatibility route cannot double it.
+Retained runtime state consists of configured server credential tags and a
+read-only public domain snapshot. No visitor/domain request cache is created. The
+API does no rate limiting; apply quotas at your edge or gateway.
 
 The service works with outgoing traffic denied. A separate operator updater
 refreshes public snapshots without rebuilding the image; the API re-reads an
@@ -269,10 +266,9 @@ This source change does not migrate or deploy any existing caller.
 
 ### HTTP errors and application use
 
-Both routes share 60 authenticated attempts per site per minute, including malformed
-requests. Browser-origin rejections happen before quota consumption. Errors return
+Errors return
 `{"error":"<reason>"}`: 400 invalid envelope/evidence, 401 unauthorized, 403 browser
-Origin, 413 oversized body, 429 quota or 503 unavailable. Unsupported methods return
+Origin, or 413 oversized body. Unsupported methods return
 405. The retired `/v1/collect` endpoint and collection preflight return 404.
 
 Use a background flow where missing/failed verification leaves the ID unknown,
@@ -317,7 +313,7 @@ This runs formatting, Clippy, unit tests and a real loopback HTTP self-check. It
 generates credentials in RAM, boots without a signing key, checks both schemas,
 all seven input combinations, partial failures, scoped domain matches, public-suffix
 boundaries, fresh/stale/invalid/missing snapshots, strict metadata/body boundaries,
-compatibility, shared/independent quotas and no request logging, then stops the
+compatibility and no request logging, then stops the
 server. Updater checks use local fixtures and verify license-change rejection and
 atomic failure preservation; CI does not download feeds. It prints no credentials or visitor payloads.
 
