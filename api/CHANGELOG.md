@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/Mokto/openfingerprint/compare/api-v0.4.0...api-v0.5.0) (2026-11-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** Remove collect/check endpoints, visitor observations and tokens, email checks and linking history. Preserve the verify contract and existing server credentials; no signing key is required.
+
+### Features
+
+* **api:** add open-data domain snapshots to /v1/check ([#17](https://github.com/Mokto/openfingerprint/issues/17)) ([86a237f](https://github.com/Mokto/openfingerprint/commit/86a237f5943c9b3ae174007b7456ce2a4b39d123))
+* **api:** add stateless /v1/check for signals, domain and IP ([#15](https://github.com/Mokto/openfingerprint/issues/15)) ([2c82ae6](https://github.com/Mokto/openfingerprint/commit/2c82ae604365b91d6048a3294f1d157ea43696aa))
+* **api:** reload domain data without restart, add metrics and a Helm chart ([#19](https://github.com/Mokto/openfingerprint/issues/19)) ([85d0e01](https://github.com/Mokto/openfingerprint/commit/85d0e019e4a2a28a7167a27db932fcdba4a9a286))
+
 ## [0.4.0](https://github.com/Mokto/openfingerprint/compare/api-v0.3.0...api-v0.4.0) (2026-11-05)
 
 
