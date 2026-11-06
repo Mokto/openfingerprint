@@ -1,7 +1,6 @@
-mod email;
-mod poc;
+mod verify;
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use axum::{
     Router,
@@ -13,13 +12,11 @@ use axum::{
     routing::{get, post},
 };
 
-fn app(state: Arc<poc::AppState>) -> Router {
+fn app(state: Arc<verify::AppState>) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
-        .route("/v1/collect", post(poc::collect).options(poc::preflight))
-        .route("/v1/check", post(poc::check))
-        .route("/v1/verify", post(poc::verify))
-        .layer(DefaultBodyLimit::max(poc::BODY_LIMIT))
+        .route("/v1/verify", post(verify::verify))
+        .layer(DefaultBodyLimit::max(verify::BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
 }
@@ -49,15 +46,7 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let state = Arc::new(poc::AppState::from_env()?);
-    let cleanup = Arc::clone(&state);
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            cleanup.cleanup();
-        }
-    });
+    let state = Arc::new(verify::AppState::from_env()?);
     let addr =
         std::env::var("OPENFINGERPRINT_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8180".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
