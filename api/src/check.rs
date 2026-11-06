@@ -99,6 +99,16 @@ impl AppState {
             .collect();
         Ok(Self { sites })
     }
+    fn authorize(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        let site = self.authenticate(headers)?;
+        if headers.contains_key(header::ORIGIN) {
+            return Err(ApiError::forbidden());
+        }
+        site.rate
+            .lock()
+            .map_err(|_| ApiError::unavailable())?
+            .take(Instant::now())
+    }
     fn authenticate(&self, headers: &HeaderMap) -> Result<&Site, ApiError> {
         let secret = header_text(headers, header::AUTHORIZATION.as_str())
             .and_then(|s| s.strip_prefix("Bearer "))
@@ -149,6 +159,22 @@ struct Profile<'a> {
     hints: Vec<(&'a String, &'a String)>,
 }
 impl Signals {
+    fn verified(&self) -> Result<Verified, ApiError> {
+        if !self.valid() {
+            return Err(ApiError::invalid());
+        }
+        let available = self.fingerprint.is_some();
+        Ok(Verified {
+            status: if available {
+                "ok"
+            } else {
+                "insufficient_signals"
+            },
+            schema_version: available.then_some(self.version),
+            fingerprint: self.fingerprint.clone(),
+        })
+    }
+
     fn valid(&self) -> bool {
         let hashes = [&self.components, &self.hints];
         if !(4..=5).contains(&self.version)
@@ -212,6 +238,127 @@ struct Verified {
     fingerprint: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckRequest {
+    signals: Option<serde_json::Value>,
+    domain: Option<serde_json::Value>,
+    ip: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct CheckResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signals: Option<SignalCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    domain: Option<IntelligenceCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ip: Option<IntelligenceCheck>,
+}
+
+#[derive(Serialize)]
+struct SignalCheck {
+    #[serde(flatten)]
+    profile: Verified,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+    evidence: Option<Evidence>,
+}
+
+#[derive(Serialize)]
+struct Evidence {
+    included_components: usize,
+    included_hints: usize,
+    unavailable_probes: usize,
+    excluded_probes: usize,
+}
+
+#[derive(Serialize)]
+struct IntelligenceCheck {
+    status: &'static str,
+    reason: &'static str,
+}
+
+fn check_signals(value: serde_json::Value) -> SignalCheck {
+    if let Ok(signals) = serde_json::from_value::<Signals>(value)
+        && let Ok(profile) = signals.verified()
+    {
+        return SignalCheck {
+            profile,
+            reason: None,
+            evidence: Some(Evidence {
+                included_components: signals
+                    .components
+                    .keys()
+                    .filter(|k| !signals.excluded.contains(k))
+                    .count(),
+                included_hints: signals
+                    .hints
+                    .keys()
+                    .filter(|k| !signals.excluded.contains(k))
+                    .count(),
+                unavailable_probes: signals.unavailable.len(),
+                excluded_probes: signals.excluded.len(),
+            }),
+        };
+    }
+    SignalCheck {
+        profile: Verified {
+            status: "invalid_input",
+            schema_version: None,
+            fingerprint: None,
+        },
+        reason: Some("invalid_signals"),
+        evidence: None,
+    }
+}
+
+fn check_domain(value: serde_json::Value) -> IntelligenceCheck {
+    let valid = value.as_str().is_some_and(domain);
+    IntelligenceCheck {
+        status: if valid { "unknown" } else { "invalid_input" },
+        reason: if valid {
+            "not_configured"
+        } else {
+            "invalid_domain"
+        },
+    }
+}
+
+fn check_ip(value: serde_json::Value) -> IntelligenceCheck {
+    let valid = value
+        .as_str()
+        .is_some_and(|s| s.parse::<std::net::IpAddr>().is_ok());
+    IntelligenceCheck {
+        status: if valid { "unknown" } else { "invalid_input" },
+        reason: if valid {
+            "not_configured"
+        } else {
+            "invalid_ip"
+        },
+    }
+}
+
+fn domain(value: &str) -> bool {
+    let value = value.strip_suffix('.').unwrap_or(value);
+    value.len() <= 253
+        && value.is_ascii()
+        && value.contains('.')
+        && value
+            .rsplit('.')
+            .next()
+            .is_some_and(|label| label.bytes().any(|b| b.is_ascii_alphabetic()))
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.as_bytes()[0].is_ascii_alphanumeric()
+                && label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
 #[derive(Debug)]
 pub struct ApiError(StatusCode, &'static str);
 impl ApiError {
@@ -238,29 +385,28 @@ pub async fn verify(
     State(state): State<std::sync::Arc<AppState>>,
     request: Request,
 ) -> Result<Response, ApiError> {
-    let site = state.authenticate(request.headers())?;
-    if request.headers().contains_key(header::ORIGIN) {
-        return Err(ApiError::forbidden());
-    }
-    site.rate
-        .lock()
-        .map_err(|_| ApiError::unavailable())?
-        .take(Instant::now())?;
+    state.authorize(request.headers())?;
     let Json(signals) = Json::<Signals>::from_request(request, &())
         .await
         .map_err(json_error)?;
-    if !signals.valid() {
+    Ok(Json(signals.verified()?).into_response())
+}
+
+pub async fn check(
+    State(state): State<std::sync::Arc<AppState>>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    state.authorize(request.headers())?;
+    let Json(input) = Json::<CheckRequest>::from_request(request, &())
+        .await
+        .map_err(json_error)?;
+    if input.signals.is_none() && input.domain.is_none() && input.ip.is_none() {
         return Err(ApiError::invalid());
     }
-    let available = signals.fingerprint.is_some();
-    Ok(Json(Verified {
-        status: if available {
-            "ok"
-        } else {
-            "insufficient_signals"
-        },
-        schema_version: available.then_some(signals.version),
-        fingerprint: signals.fingerprint,
+    Ok(Json(CheckResponse {
+        signals: input.signals.map(check_signals),
+        domain: input.domain.map(check_domain),
+        ip: input.ip.map(check_ip),
     })
     .into_response())
 }
@@ -329,6 +475,16 @@ mod tests {
             serde_json::json!({"components":entries,"hints":[]})
         )));
         s
+    }
+
+    fn payload() -> serde_json::Value {
+        let s = signals();
+        serde_json::json!({
+            "version": s.version, "fingerprint": s.fingerprint,
+            "coreFingerprint": s.core_fingerprint, "components": s.components,
+            "hints": s.hints, "unavailable": {}, "excluded": s.excluded,
+            "durationMs": s.duration_ms
+        })
     }
 
     #[test]
@@ -462,13 +618,7 @@ mod tests {
     async fn verification_retains_only_per_site_quota_state() {
         let state = std::sync::Arc::new(state());
         for _ in 0..2 {
-            let signals = signals();
-            let payload = serde_json::json!({
-                "version": signals.version, "fingerprint": signals.fingerprint,
-                "coreFingerprint": signals.core_fingerprint, "components": signals.components,
-                "hints": signals.hints, "unavailable": {}, "excluded": signals.excluded,
-                "durationMs": signals.duration_ms
-            });
+            let payload = payload();
             let request = Request::builder()
                 .header(header::AUTHORIZATION, format!("Bearer {}", "s".repeat(32)))
                 .header(header::CONTENT_TYPE, "application/json")
@@ -488,6 +638,127 @@ mod tests {
         }
         assert_eq!(state.sites[0].rate.lock().unwrap().count, 2);
         assert_eq!(state.sites[1].rate.lock().unwrap().count, 0);
+    }
+
+    #[test]
+    fn signal_results_report_counts_not_confidence_or_core_fallbacks() {
+        let result = check_signals(payload());
+        assert_eq!(result.profile.status, "ok");
+        let evidence = result.evidence.unwrap();
+        assert_eq!(evidence.included_components, 1);
+        assert_eq!(evidence.included_hints, 0);
+        assert_eq!(evidence.excluded_probes, 0);
+        assert_eq!(evidence.unavailable_probes, 0);
+
+        let mut input = payload();
+        input["components"]["canvas"] = serde_json::json!(sha256("diagnostic"));
+        input["excluded"] = serde_json::json!(["canvas"]);
+        let result = check_signals(input);
+        assert_eq!(result.profile.status, "ok");
+        let evidence = result.evidence.unwrap();
+        assert_eq!(evidence.included_components, 1);
+        assert_eq!(evidence.excluded_probes, 1);
+
+        let mut input = payload();
+        input["fingerprint"] = serde_json::Value::Null;
+        let result = check_signals(input);
+        assert_eq!(result.profile.status, "insufficient_signals");
+        assert!(result.profile.fingerprint.is_none());
+        assert!(result.profile.schema_version.is_none());
+        assert!(result.evidence.is_some());
+
+        for input in [serde_json::json!("not evidence"), serde_json::json!({}), {
+            let mut p = payload();
+            p["fingerprint"] = serde_json::json!("b".repeat(64));
+            p
+        }] {
+            let result = check_signals(input);
+            assert_eq!(result.profile.status, "invalid_input");
+            assert_eq!(result.reason, Some("invalid_signals"));
+            assert!(result.evidence.is_none());
+            assert!(result.profile.fingerprint.is_none());
+        }
+    }
+
+    #[test]
+    fn domain_inputs_are_bounded_ascii_hostnames_not_urls_or_addresses() {
+        for valid in [
+            "example.com",
+            "ExAmPlE.COM.",
+            "a-b.example",
+            "xn--bcher-kva.example",
+        ] {
+            assert!(domain(valid));
+            let result = check_domain(serde_json::json!(valid));
+            assert_eq!(result.status, "unknown");
+            assert_eq!(result.reason, "not_configured");
+        }
+        let maximum = format!(
+            "{}.{}.{}.{}",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61)
+        );
+        assert!(domain(&maximum));
+        assert!(!domain(&(maximum + "e")));
+        for invalid in [
+            "",
+            "localhost",
+            "example.com..",
+            ".example.com",
+            "example..com",
+            "-a.example",
+            "a-.example",
+            "a_b.example",
+            "*.example.com",
+            "https://example.com",
+            "example.com/path",
+            "example.com:443",
+            "person@example.com",
+            " example.com",
+            "example.com\n",
+            "bücher.example",
+            "192.0.2.1",
+            "2001:db8::1",
+        ] {
+            assert!(!domain(invalid));
+            let result = check_domain(serde_json::json!(invalid));
+            assert_eq!(result.status, "invalid_input");
+            assert_eq!(result.reason, "invalid_domain");
+        }
+        assert!(!domain(&format!("{}.example", "a".repeat(64))));
+        assert_eq!(check_domain(serde_json::json!([])).status, "invalid_input");
+    }
+
+    #[test]
+    fn network_inputs_are_ip_literals_and_never_clean_verdicts() {
+        for valid in [
+            "192.0.2.1",
+            "2001:db8::1",
+            "::ffff:192.0.2.1",
+            "127.0.0.1",
+            "::1",
+        ] {
+            let result = check_ip(serde_json::json!(valid));
+            assert_eq!(result.status, "unknown");
+            assert_eq!(result.reason, "not_configured");
+        }
+        for invalid in [
+            "",
+            "example.com",
+            "https://192.0.2.1",
+            "192.0.2.1:80",
+            "192.0.2.0/24",
+            "[2001:db8::1]",
+            "fe80::1%eth0",
+            " 192.0.2.1",
+        ] {
+            let result = check_ip(serde_json::json!(invalid));
+            assert_eq!(result.status, "invalid_input");
+            assert_eq!(result.reason, "invalid_ip");
+        }
+        assert_eq!(check_ip(serde_json::json!(42)).status, "invalid_input");
     }
 
     #[test]

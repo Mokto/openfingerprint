@@ -1,4 +1,4 @@
-mod verify;
+mod check;
 
 use std::sync::Arc;
 
@@ -12,11 +12,12 @@ use axum::{
     routing::{get, post},
 };
 
-fn app(state: Arc<verify::AppState>) -> Router {
+fn app(state: Arc<check::AppState>) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
-        .route("/v1/verify", post(verify::verify))
-        .layer(DefaultBodyLimit::max(verify::BODY_LIMIT))
+        .route("/v1/check", post(check::check))
+        .route("/v1/verify", post(check::verify))
+        .layer(DefaultBodyLimit::max(check::BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
 }
@@ -46,7 +47,7 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let state = Arc::new(verify::AppState::from_env()?);
+    let state = Arc::new(check::AppState::from_env()?);
     let addr =
         std::env::var("OPENFINGERPRINT_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8180".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;

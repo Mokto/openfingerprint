@@ -16,7 +16,7 @@ const { values } = parseArgs({
 	}
 });
 const key = () => randomBytes(32).toString('hex');
-const sites = ['alpha', 'beta', 'quota', 'malformed'].map((id) => ({
+const sites = ['alpha', 'beta', 'quota', 'malformed', 'check', 'check_invalid', 'shared', 'invalid_signals'].map((id) => ({
     id,
     secret_key: key(),
     ...(id === 'alpha' ? { site_key: key(), origins: ['https://alpha.test'] } : {})
@@ -112,36 +112,41 @@ try {
     assert.equal(await health.text(), 'ok');
     assert.equal(health.headers.get('cache-control'), 'no-store');
     assert.equal(health.headers.get('set-cookie'), null);
-    for (const path of ['/v1/collect', '/v1/check']) {
-        for (const method of ['GET', 'POST', 'OPTIONS']) {
-            const response = await request(path, { Origin: 'https://alpha.test' }, undefined, method);
-            assert.equal(response.status, 404);
-            assert.equal(response.headers.get('access-control-allow-origin'), null);
-        }
+    for (const method of ['GET', 'POST', 'OPTIONS']) {
+        const response = await request('/v1/collect', { Origin: 'https://alpha.test' }, undefined, method);
+        assert.equal(response.status, 404);
+        assert.equal(response.headers.get('access-control-allow-origin'), null);
     }
-    assert.equal((await request('/v1/verify', {}, undefined, 'GET')).status, 405);
-    assert.equal((await request('/v1/verify', {}, undefined, 'OPTIONS')).status, 405);
-    console.log('Only health and server-only verification routes are available.');
+    for (const path of ['/v1/check', '/v1/verify']) {
+        assert.equal((await request(path, {}, undefined, 'GET')).status, 405);
+        assert.equal((await request(path, {}, undefined, 'OPTIONS')).status, 405);
+    }
+    console.log('Health, unified check and legacy verification routes are available; collection is retired.');
 
     phase = 'authentication before parsing and no browser CORS';
-    for (const headers of [
-        {},
-        authHeaders({ secret_key: key() }),
-        authHeaders({ secret_key: sites[0].site_key }),
-        { 'X-Site-Key': sites[0].site_key },
-        { Authorization: 'Bearer short' }
-    ]) {
-        const response = await request('/v1/verify', headers, 'not-json');
-        assert.equal(response.status, 401);
-        assert.deepEqual(await response.json(), { error: 'unauthorized' });
+    for (const path of ['/v1/check', '/v1/verify']) {
+        for (const [index, headers] of [
+            {},
+            authHeaders({ secret_key: key() }),
+            authHeaders({ secret_key: sites[0].site_key }),
+            { 'X-Site-Key': sites[0].site_key },
+            { Authorization: 'Bearer short' }
+        ].entries()) {
+            phase = `authentication before parsing: ${path} case ${index}`;
+            const response = await request(path, headers, 'not-json');
+            assert.equal(response.status, 401);
+            assert.deepEqual(await response.json(), { error: 'unauthorized' });
+        }
+        phase = `unauthorized oversized body: ${path}`;
+        assert.equal((await request(path, {}, 'x'.repeat(65537))).status, 401);
+        phase = `browser Origin rejection: ${path}`;
+        const forbidden = await request(path, {
+            ...authHeaders(sites[0]), Origin: 'https://alpha.test'
+        }, 'not-json');
+        assert.equal(forbidden.status, 403);
+        assert.equal(forbidden.headers.get('access-control-allow-origin'), null);
+        assert.equal(forbidden.headers.get('cache-control'), 'no-store');
     }
-    assert.equal((await request('/v1/verify', {}, 'x'.repeat(65537))).status, 401);
-    const forbidden = await request('/v1/verify', {
-        ...authHeaders(sites[0]), Origin: 'https://alpha.test'
-    }, 'not-json');
-    assert.equal(forbidden.status, 403);
-    assert.equal(forbidden.headers.get('access-control-allow-origin'), null);
-    assert.equal(forbidden.headers.get('cache-control'), 'no-store');
     console.log('Server-key compatibility, public-key rejection and browser-origin boundaries passed.');
 
     phase = 'canonical profiles for both supported schemas';
@@ -182,6 +187,69 @@ try {
     }
     console.log('Canonical schema-4/5 profiles, repeat verification and unknown/core-only identities passed.');
 
+    phase = 'independent requested checks and explicit unconfigured intelligence';
+    const unknown = { status: 'unknown', reason: 'not_configured' };
+    const checkedProfile = input => ({
+        status: 'ok', schema_version: input.version, fingerprint: input.fingerprint,
+        evidence: { included_components: 2, included_hints: 1, unavailable_probes: 3, excluded_probes: 3 }
+    });
+    for (const version of [4, 5]) {
+        const input = signals('same', 'same', version);
+        const response = await request('/v1/check', authHeaders(sites[4]), { signals: input });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { signals: checkedProfile(input) });
+    }
+    const fields = { signals: signals(), domain: 'ExAmPlE.test.', ip: '2001:db8::1' };
+    for (let mask = 1; mask < 8; mask++) {
+        const selected = Object.fromEntries(Object.entries(fields).filter((_, i) => mask & (1 << i)));
+        const response = await request('/v1/check', authHeaders(sites[4]), selected);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        assert.equal(response.headers.get('set-cookie'), null);
+        assert.equal(response.headers.get('access-control-allow-origin'), null);
+        const expected = {};
+        if ('signals' in selected) expected.signals = checkedProfile(selected.signals);
+        if ('domain' in selected) expected.domain = unknown;
+        if ('ip' in selected) expected.ip = unknown;
+        assert.deepEqual(await response.json(), expected);
+    }
+    const coreOnly = await request('/v1/check', authHeaders(sites[4]), {
+        signals: { ...signals(), fingerprint: null }, domain: 'example.test'
+    });
+    assert.deepEqual(await coreOnly.json(), {
+        signals: { ...checkedProfile(signals()), status: 'insufficient_signals', schema_version: null, fingerprint: null },
+        domain: unknown
+    });
+    const nulls = await request('/v1/check', authHeaders(sites[4]), {
+        signals: null, domain: null, ip: '192.0.2.1'
+    });
+    assert.deepEqual(await nulls.json(), { ip: unknown });
+    console.log('All seven input combinations, requested-only results, evidence counts and unknown intelligence passed.');
+
+    phase = 'independent field validation and bounded envelopes';
+    for (const domain of ['', 'localhost', 'https://example.test', 'person@example.test', 'example.test:80', 'a..test', 'bücher.test', 'a'.repeat(64) + '.test', {}, 42]) {
+        const response = await request('/v1/check', authHeaders(sites[5]), {
+            signals: signals(), domain, ip: '192.0.2.1'
+        });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            signals: checkedProfile(signals()), domain: { status: 'invalid_input', reason: 'invalid_domain' }, ip: unknown
+        });
+    }
+    for (const ip of ['', 'example.test', '192.0.2.1:80', '[2001:db8::1]', '192.0.2.0/24', 'fe80::1%eth0', [], true]) {
+        const response = await request('/v1/check', authHeaders(sites[5]), { domain: 'example.test', ip });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { domain: unknown, ip: { status: 'invalid_input', reason: 'invalid_ip' } });
+    }
+    for (const body of [{}, { signals: null, domain: null, ip: null }, [], null, 'not-json',
+        ...['email', 'visitor_token', 'account_id', 'userAgent', 'storageId'].map(k => ({ domain: 'example.test', [k]: 'unsolicited' }))]) {
+        const response = await request('/v1/check', authHeaders(sites[5]), body);
+        assert.equal(response.status, 400);
+        assert.deepEqual(await response.json(), { error: 'invalid_request' });
+    }
+    assert.equal((await request('/v1/check', authHeaders(sites[5]), { domain: 'x'.repeat(65536) })).status, 413);
+    console.log('Invalid fields preserve other results; malformed, empty, unsolicited and oversized envelopes are rejected.');
+
     phase = 'strict evidence and metadata validation';
     const input = signals();
     const invalid = [
@@ -210,6 +278,20 @@ try {
         const response = await request('/v1/verify', authHeaders(sites[0]), body);
         assert.equal(response.status, 400);
         assert.deepEqual(await response.json(), { error: 'invalid_request' });
+        const check = await request('/v1/check', authHeaders(sites[7]), { signals: body, domain: 'example.test' });
+        assert.equal(check.status, 200);
+        assert.deepEqual(await check.json(), {
+            signals: { status: 'invalid_input', reason: 'invalid_signals', schema_version: null, fingerprint: null, evidence: null },
+            domain: unknown
+        });
+    }
+    for (const signals of [false, [], 'not evidence']) {
+        const response = await request('/v1/check', authHeaders(sites[7]), { signals, ip: '192.0.2.1' });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            signals: { status: 'invalid_input', reason: 'invalid_signals', schema_version: null, fingerprint: null, evidence: null },
+            ip: unknown
+        });
     }
     assert.equal((await request('/v1/verify', authHeaders(sites[0]), 'not-json')).status, 400);
     assert.equal((await request('/v1/verify', authHeaders(sites[0]), JSON.stringify({
@@ -222,8 +304,9 @@ try {
         [sites[2], signals(), 200],
         [sites[3], 'not-json', 400]
     ]) {
-        await Promise.all(Array.from({ length: 60 }, async () => {
-            const response = await request('/v1/verify', authHeaders(site), body);
+        await Promise.all(Array.from({ length: 60 }, async (_, i) => {
+            const path = site === sites[3] && i % 2 ? '/v1/check' : '/v1/verify';
+            const response = await request(path, authHeaders(site), body);
             assert.equal(response.status, status);
             await response.arrayBuffer();
         }));
@@ -232,12 +315,23 @@ try {
         assert.deepEqual(await denied.json(), { error: 'rate_limit' });
     }
     assert.equal((await request('/v1/verify', authHeaders(sites[1]), signals())).status, 200);
-    console.log('Independent per-site quotas passed; no visitor data or credentials printed.');
+    for (let i = 0; i < 60; i++) {
+        const path = i % 2 ? '/v1/verify' : '/v1/check';
+        const response = await request(path, authHeaders(sites[6]), i % 2 ? signals() : { domain: 'example.test' });
+        assert.equal(response.status, 200);
+        await response.arrayBuffer();
+    }
+    for (const path of ['/v1/check', '/v1/verify']) {
+        const response = await request(path, authHeaders(sites[6]), 'not-json');
+        assert.equal(response.status, 429);
+        assert.deepEqual(await response.json(), { error: 'rate_limit' });
+    }
+    console.log('Independent site quotas and one shared check/verify quota passed; no sensitive values printed.');
     phase = 'no request or credential logging';
     for (const sensitive of [
         ...sites.flatMap(site => [site.secret_key, site.site_key].filter(Boolean)),
         signals().fingerprint, signals('same', 'same', 5).fingerprint,
-        signals().components.fontPreferences, 'unsolicited'
+        signals().components.fontPreferences, 'unsolicited', 'ExAmPlE.test.', '2001:db8::1', '192.0.2.1'
     ]) assert(!serverOutput.includes(sensitive));
     console.log('No request evidence, raw metadata or credentials appeared in server output.');
 	if (container) {
