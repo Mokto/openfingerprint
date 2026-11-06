@@ -254,6 +254,10 @@ node scripts/test-api.mjs --image openfingerprint-api:check
 For another architecture, add `--platform linux/amd64` or `--platform linux/arm64`
 to both commands. The image runs as UID/GID 65532, supports read-only operation,
 retains application/dependency/Rust licenses, and handles SIGTERM/SIGINT gracefully.
-CI checks both architectures natively. No data volume or visitor-store migration
-is needed. The API remains experimental: add deployment-wide abuse protection,
+Pull-request CI runs SDK/browser and Rust/HTTP checks, without building Docker
+images or duplicating runs on branch pushes. Release Please explicitly dispatches
+the same checks for its bot-created release PRs. After an API release, the image
+workflow builds and smoke-tests AMD64/ARM64 natively before publishing and creating
+the multi-architecture manifest. No data volume or visitor-store migration is
+needed. The API remains experimental: add deployment-wide abuse protection,
 credential lifecycle controls and operational/privacy review before relying on it.
