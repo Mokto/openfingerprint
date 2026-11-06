@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/Mokto/openfingerprint/compare/api-v0.5.1...api-v0.6.0) (2026-11-06)
+
+
+### Features
+
+* **api:** infer disposable domains from MX hosts, looked up by the API or supplied by the caller ([#18](https://github.com/Mokto/openfingerprint/issues/18)) ([9f173c3](https://github.com/Mokto/openfingerprint/commit/9f173c356a3a8b26c9b7bc6aacbd3fe7f1d99140))
+
 ## [0.5.1](https://github.com/Mokto/openfingerprint/compare/api-v0.5.0...api-v0.5.1) (2026-11-06)
 
 
