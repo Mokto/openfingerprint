@@ -1,0 +1,12 @@
+apiVersion: v2
+name: openfingerprint
+description: Stateless OpenFingerprint check API with automatically refreshed open domain data
+type: application
+home: https://github.com/Mokto/openfingerprint
+sources:
+  - https://github.com/Mokto/openfingerprint
+# Published charts set both from the API release tag and pin both image digests.
+# x-release-please-start-version
+version: 0.4.0
+appVersion: "0.4.0"
+# x-release-please-end

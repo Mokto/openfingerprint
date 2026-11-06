@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, chmodSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,7 +20,7 @@ const { values } = parseArgs({
 	}
 });
 const key = () => randomBytes(32).toString('hex');
-const sites = ['alpha', 'beta', 'quota', 'malformed', 'check', 'check_invalid', 'shared', 'invalid_signals'].map((id) => ({
+const sites = ['alpha', 'beta', 'quota', 'malformed', 'check', 'check_invalid', 'shared', 'invalid_signals', 'reload'].map((id) => ({
     id,
     secret_key: key(),
     ...(id === 'alpha' ? { site_key: key(), origins: ['https://alpha.test'] } : {})
@@ -52,9 +52,11 @@ if (mode !== 'missing') writeFileSync(dataPath, mode === 'invalid' ? '{}' : JSON
 const args = container
 	? [
 			'run', '--rm', '--name', container, '--read-only', '--cap-drop=ALL',
-			'--security-opt=no-new-privileges', '-p', '127.0.0.1::8180',
+			'--security-opt=no-new-privileges', '-p', '127.0.0.1::8180', '-p', '127.0.0.1::9180',
 			'--env', 'OPENFINGERPRINT_LISTEN_ADDR',
 			'--env', 'OPENFINGERPRINT_SITES',
+            '--env', 'OPENFINGERPRINT_METRICS_ADDR',
+            '--env', 'OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS',
             '--env', 'OPENFINGERPRINT_DOMAIN_DATA',
             '--mount', `type=bind,src=${directory},dst=/domain-data,readonly`,
 			...(values.platform ? ['--platform', values.platform] : []),
@@ -67,18 +69,25 @@ const child = spawn(container ? 'docker' : values.binary, args, {
 		...process.env,
 		OPENFINGERPRINT_LISTEN_ADDR: container ? '0.0.0.0:8180' : '127.0.0.1:0',
 		OPENFINGERPRINT_SITES: JSON.stringify(sites),
-        OPENFINGERPRINT_DOMAIN_DATA: container ? '/domain-data/domains.json' : dataPath
+        OPENFINGERPRINT_DOMAIN_DATA: container ? '/domain-data/domains.json' : dataPath,
+        OPENFINGERPRINT_METRICS_ADDR: container ? '0.0.0.0:9180' : '127.0.0.1:0',
+        OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS: '1'
 	},
 	stdio: ['ignore', 'pipe', 'pipe']
 });
 let phase = 'startup';
 let timer;
 let serverOutput = '';
+let metricsOrigin;
 const base = new Promise((resolve, reject) => {
 	let output = '';
 	child.stdout.on('data', (data) => {
 		serverOutput += data.toString();
 		output += data.toString();
+		const metrics = /metrics on (127\.0\.0\.1:\d+|0\.0\.0\.0:9180)/.exec(output);
+		if (metrics && !metricsOrigin) {
+			metricsOrigin = `http://${container ? execFileSync('docker', ['port', container, '9180/tcp'], { encoding: 'utf8', timeout: 10000 }).trim() : metrics[1]}`;
+		}
 		const match = /listening on (127\.0\.0\.1:\d+|0\.0\.0\.0:8180)/.exec(output);
 		if (match) {
 			clearTimeout(timer);
@@ -394,6 +403,29 @@ try {
         assert.deepEqual(await response.json(), { error: 'rate_limit' });
     }
     console.log('Independent site quotas and one shared check/verify quota passed; no sensitive values printed.');
+    phase = 'snapshot reload and metrics';
+    assert(metricsOrigin, 'Metrics listener missing');
+    const metric = async (name) => {
+        const text = await (await fetch(metricsOrigin + '/metrics', { signal: AbortSignal.timeout(5000) })).text();
+        return Number(text.split('\n').find(line => line.startsWith(name + ' '))?.split(' ')[1]);
+    };
+    assert.equal(await metric('openfingerprint_domain_data_loaded'), ['fresh', 'stale'].includes(mode) ? 1 : 0);
+    const replace = (body) => { writeFileSync(dataPath + '.tmp', body, { mode: 0o644 }); renameSync(dataPath + '.tmp', dataPath); };
+    const reloadedValue = async () => (await (await request('/v1/check', authHeaders(sites[8]), { domain: 'reloaded.example' })).json()).domain.disposable?.value ?? null;
+    const waitFor = async (expected) => {
+        for (let i = 0; i < 40 && await reloadedValue() !== expected; i++) await new Promise(r => setTimeout(r, 250));
+        assert.equal(await reloadedValue(), expected);
+    };
+    assert.equal(await reloadedValue(), null);
+    replace(JSON.stringify({ version: 1, sources: sources.map(s => ({ ...s, expires_at_unix: now + 3600, domains: s.id === 'disposable' ? [...s.domains, 'reloaded.example'] : s.domains })) }));
+    await waitFor(true);
+    assert.equal(await metric('openfingerprint_domain_data_loaded'), 1);
+    replace('{}');
+    for (let i = 0; i < 40 && await metric('openfingerprint_domain_data_reload_failures_total') !== 1; i++) await new Promise(r => setTimeout(r, 250));
+    assert.equal(await metric('openfingerprint_domain_data_reload_failures_total'), 1);
+    assert.equal(await reloadedValue(), true);
+    assert.equal(await metric('openfingerprint_domain_data_loaded'), 1);
+    console.log(`Snapshot reload, last-good retention and metrics passed (${mode}).`);
     phase = 'no request or credential logging';
     for (const sensitive of [
         ...sites.flatMap(site => [site.secret_key, site.site_key].filter(Boolean)),

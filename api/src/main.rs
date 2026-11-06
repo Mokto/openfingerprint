@@ -1,12 +1,12 @@
 mod check;
 mod domains;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    extract::Request,
+    extract::{Request, State},
     http::{HeaderValue, header},
     middleware::{self, Next},
     response::Response,
@@ -21,6 +21,13 @@ fn app(state: Arc<check::AppState>) -> Router {
         .layer(DefaultBodyLimit::max(check::BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)
+}
+
+async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::response::IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        state.domains.metrics(),
+    )
 }
 
 async fn no_store(request: Request, next: Next) -> Response {
@@ -49,6 +56,34 @@ async fn shutdown_signal() {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(check::AppState::from_env()?);
+    if state.domains.reloads() {
+        let seconds = match std::env::var("OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS") {
+            Err(_) => 60,
+            Ok(s) => s
+                .parse()
+                .ok()
+                .filter(|s| (1..=86400).contains(s))
+                .ok_or("OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS must be 1-86400")?,
+        };
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(seconds));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let state = state.clone();
+                let _ = tokio::task::spawn_blocking(move || state.domains.reload()).await;
+            }
+        });
+    }
+    if let Ok(addr) = std::env::var("OPENFINGERPRINT_METRICS_ADDR") {
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        println!("metrics on {}", listener.local_addr()?);
+        let router = Router::new()
+            .route("/metrics", get(metrics))
+            .with_state(state.clone());
+        tokio::spawn(async move { axum::serve(listener, router).await });
+    }
     let addr =
         std::env::var("OPENFINGERPRINT_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8180".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;

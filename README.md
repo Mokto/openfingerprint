@@ -60,7 +60,7 @@ pnpm api:check
 
 The root package is private and provides convenience commands. SDK source,
 build configuration, browser tests and generated `dist/` live in `sdk/`.
-The API owns its Cargo package, Dockerfile, HTTP self-check and data updater in `api/`.
+The API owns its Cargo package, Dockerfile, HTTP self-check and data updater in `api/`, plus a Helm chart in `api/chart/`.
 API checks require Rust and Node but no JavaScript dependencies, database or cloud
 account. See the [API guide](api/README.md) for configuration and containers.
 
@@ -69,13 +69,16 @@ account. See the [API guide](api/README.md) for configuration and containers.
 Release Please tracks each component separately:
 
 - SDK: `sdk/package.json`, `sdk/CHANGELOG.md`, `sdk-v*` tags, npm.
-- API: `api/Cargo.toml`, `api/CHANGELOG.md`, `api-v*` tags, GHCR images.
+- API: `api/Cargo.toml`, `api/CHANGELOG.md`, `api-v*` tags, GHCR images and the
+  `oci://ghcr.io/mokto/charts/openfingerprint` Helm chart.
 
 Merging a release PR dispatches the corresponding publishing workflow. SDK
 publishing checks the tag against `sdk/package.json`, builds and tests the SDK,
 verifies package contents and uses npm trusted publishing with provenance.
-API publishing builds and smoke-tests Linux AMD64/ARM64 images; publishing does
-not deploy a service or migrate callers. An SDK release does not release the API,
+API publishing builds and smoke-tests Linux AMD64/ARM64 API and domain-updater
+images, then publishes the Helm chart pinned to their digests. When the
+`DISPATCH_TARGET` and `DISPATCH_TOKEN` secrets are set, it then dispatches a
+deployment workflow; it never migrates callers. An SDK release does not release the API,
 and an API release does not release the SDK.
 
 `pnpm check` includes a release-wiring regression check. The shared workflow and

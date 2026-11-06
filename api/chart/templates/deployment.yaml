@@ -1,0 +1,108 @@
+{{- if not .Values.existingSecret }}{{ fail "existingSecret must name the Secret holding OPENFINGERPRINT_SITES" }}{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "of.name" . }}
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+    {{- include "of.apiSelector" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "of.apiSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "of.apiSelector" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        {{- include "of.podSecurity" . | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: api
+          image: {{ include "of.image" (dict "image" .Values.image "appVersion" .Chart.AppVersion) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8180
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          env:
+            - name: OPENFINGERPRINT_LISTEN_ADDR
+              value: 0.0.0.0:8180
+            {{- if .Values.metrics.enabled }}
+            - name: OPENFINGERPRINT_METRICS_ADDR
+              value: "0.0.0.0:{{ .Values.metrics.port }}"
+            {{- end }}
+            {{- if .Values.domainData.refresh.enabled }}
+            - name: OPENFINGERPRINT_DOMAIN_DATA
+              value: /domain-data/domains.json
+            - name: OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS
+              value: {{ .Values.domainData.reloadSeconds | quote }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret | quote }}
+          securityContext:
+            {{- include "of.containerSecurity" . | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.domainData.refresh.enabled }}
+          volumeMounts:
+            - name: domain-data
+              mountPath: /domain-data
+              readOnly: true
+          {{- end }}
+      {{- if .Values.domainData.refresh.enabled }}
+      volumes:
+        # Optional: until the first refresh creates it, domain facts are unknown, not bundled.
+        - name: domain-data
+          configMap:
+            name: {{ include "of.dataName" . }}
+            optional: true
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

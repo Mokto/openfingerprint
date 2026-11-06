@@ -1,0 +1,71 @@
+name: Domain data refresh
+# Proposes the refreshed bundled snapshot weekly. Deployments refresh their own data with the
+# chart's CronJob; this keeps the copy built into release images and used by self-hosters current.
+on:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: domain-data
+  cancel-in-progress: false
+jobs:
+  refresh:
+    if: github.repository == 'Mokto/openfingerprint'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Refresh and propose the snapshot
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git show HEAD:api/data/domains.json > /tmp/previous.json
+          node api/update-domain-data.mjs 2>&1 | tee /tmp/update.log
+          today="$(date -u +%F)"
+          branch="chore/domain-data-$today"
+          if [ -n "$(gh pr list --head "$branch" --state all --json number --jq '.[]')" ]; then
+            echo "Already proposed today"
+            exit 0
+          fi
+          # shellcheck disable=SC2016 # JavaScript template literals, not shell expansions
+          summary="$(node -e '
+            const [before, after] = process.argv.slice(1).map(p => JSON.parse(require("fs").readFileSync(p, "utf8")));
+            const old = Object.fromEntries(before.sources.map(s => [s.id, new Set(s.domains)]));
+            for (const s of after.sources) {
+              const was = old[s.id] ?? new Set();
+              const added = s.domains.filter(d => !was.has(d)).length;
+              const removed = [...was].filter(d => !s.domains.includes(d)).length;
+              console.log(`| \`${s.id}\` | ${s.domains.length} | +${added} | -${removed} | ${new Date(s.expires_at_unix * 1000).toISOString().slice(0, 10)} |`);
+            }' /tmp/previous.json api/data/domains.json)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "chore(data): refresh open domain snapshot ($today)"
+          git push origin "$branch"
+          {
+            echo "Refreshes the bundled open domain snapshot from the pinned public sources."
+            echo
+            echo "| Source | Entries | Added | Removed | Expires |"
+            echo "| --- | --- | --- | --- | --- |"
+            echo "$summary"
+            echo
+            echo "Updater notes (protected mail domains ignored, if any):"
+            echo
+            echo '```'
+            cat /tmp/update.log
+            echo '```'
+            echo
+            echo "Licenses are unchanged: the updater refuses changed source licenses. Reviewed sources keep their own review dates; renewing them needs a person to re-check the evidence."
+          } > /tmp/body.md
+          gh pr create --head "$branch" --base main --title "chore(data): refresh open domain snapshot ($today)" --body-file /tmp/body.md
+          # PRs opened with GITHUB_TOKEN do not trigger CI; dispatch it explicitly.
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"

@@ -1,0 +1,59 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- if or (not (kindIs "slice" .Values.networkPolicy.apiFrom)) (empty .Values.networkPolicy.apiFrom) }}
+{{- fail "networkPolicy.apiFrom must list the peers allowed to call the API" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "of.name" . }}-api
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "of.apiSelector" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- toYaml .Values.networkPolicy.apiFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8180
+    {{- if and .Values.metrics.enabled .Values.networkPolicy.metricsFrom }}
+    - from:
+        {{- toYaml .Values.networkPolicy.metricsFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+    {{- end }}
+  # The API never initiates connections, including DNS.
+  egress: []
+{{- if .Values.domainData.refresh.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "of.dataName" . }}
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "of.updaterSelector" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 443
+        {{- range .Values.networkPolicy.kubeApiServerPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+{{- end }}
+{{- end }}

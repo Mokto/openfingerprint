@@ -16,6 +16,22 @@ const sources = [
     { id: 'matomo_referrer_spam', repo: 'matomo-org/referrer-spam-list', branch: 'master', path: 'spammers.txt', category: 'referrer_spam', license: 'LicenseRef-Public-Domain', licensePath: 'README.md', licenseHash: '6b509c9d22e2c323586c8b07c23f33c2edda65faf23e4db6c94a226a5a6cff2e' }
 ];
 
+// Upstream mistakes here would accuse ordinary mailboxes directly or, through
+// MX hosts, every domain whose mail they route, so listings are never accepted.
+export const protectedDomains = [
+    '126.com', '163.com', 'aol.com', 'apple.com', 'att.net', 'comcast.net', 'daum.net',
+    'fastmail.com', 'free.fr', 'gmail.com', 'gmx.com', 'gmx.net', 'google.com', 'googlemail.com',
+    'hotmail.com', 'icloud.com', 'ionos.com', 'live.com', 'mac.com', 'mail.com', 'mail.ru', 'me.com',
+    'messagingengine.com', 'microsoft.com', 'mimecast.com', 'msn.com', 'naver.com', 'orange.fr',
+    'outlook.com', 'ovh.net', 'pphosted.com', 'proton.me', 'protonmail.ch', 'protonmail.com', 'qq.com',
+    'secureserver.net', 't-online.de', 'tuta.com', 'tutanota.com', 'verizon.net', 'web.de', 'yahoo.com',
+    'yahoodns.net', 'yandex.com', 'yandex.net', 'yandex.ru', 'zoho.com', 'zohomail.com'
+];
+export function unprotected(entries) {
+    const hit = d => protectedDomains.some(p => d === p || d.endsWith('.' + p) || p.endsWith('.' + d));
+    return { kept: entries.filter(d => !hit(d)), dropped: entries.filter(hit) };
+}
+
 export function domains(text) {
     const lines = text.split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith('#'));
     assert(lines.every(s => !/[\\/:@?#%\s\u0000-\u001F\u007F]/u.test(s)), 'Expected bare source hostnames');
@@ -78,13 +94,16 @@ export async function snapshot(fetchText = download, now = Math.floor(Date.now()
         assert(hash(license) === source.licenseHash, 'Source license changed: review required');
         const body = await fetchText(base + source.path);
         if (source.domain) assert(body.includes(source.domain), 'Provider namespace evidence changed');
+        const listed = source.domain ? [source.domain] : source.id === 'fakefilter_recent' ? monitoredDomains(body, now) : domains(body);
+        const { kept, dropped } = source.domain ? { kept: listed, dropped: [] } : unprotected(listed);
+        if (dropped.length) console.warn(`${source.id}: ignored ${dropped.length} listing(s) of protected mail domains: ${dropped.slice(0, 20).join(', ')}`);
         datasets.push({
             id: source.id, category: source.category, license: source.license,
             license_text: license, license_sha256: hash(license),
             url: `https://github.com/${source.repo}/blob/${commit.sha}/${source.path}`,
             revision: commit.sha, updated_at_unix: updated,
             fetched_at_unix: now, expires_at_unix: now + 7 * 86400,
-            domains: source.domain ? [source.domain] : source.id === 'fakefilter_recent' ? monitoredDomains(body, now) : domains(body),
+            domains: kept,
             allowlist: []
         });
     }
@@ -124,11 +143,46 @@ export async function update(output, fetchText = download) {
     } finally { await unlink(temporary).catch(() => {}); }
 }
 
+const serviceAccount = '/var/run/secrets/kubernetes.io/serviceaccount';
+export async function kubernetes(name, data, { dir = serviceAccount, env = process.env } = {}) {
+    phase = 'configmap';
+    const [token, namespace] = await Promise.all(['token', 'namespace'].map(f => readFile(`${dir}/${f}`, 'utf8').then(s => s.trim())));
+    const host = env.KUBERNETES_SERVICE_HOST;
+    assert(host && /^\d+$/.test(env.KUBERNETES_SERVICE_PORT ?? ''), 'Not running in a Kubernetes pod');
+    const base = `https://${host.includes(':') ? `[${host}]` : host}:${env.KUBERNETES_SERVICE_PORT}/api/v1/namespaces/${encodeURIComponent(namespace)}/configmaps`;
+    const call = async (url, method, body, type) => {
+        const response = await fetch(url, {
+            method, body: JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(20000),
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': type, Accept: 'application/json' }
+        });
+        await response.body?.cancel();
+        return response.status;
+    };
+    const content = { data: { 'domains.json': data } };
+    let status = await call(`${base}/${name}`, 'PATCH', content, 'application/merge-patch+json');
+    if (status === 404) status = await call(base, 'POST', { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name }, ...content }, 'application/json');
+    assert(status === 200 || status === 201, `ConfigMap update failed (HTTP ${status})`);
+}
+
+export async function publish(name, fetchText = download, write = kubernetes) {
+    assert(/^[a-z0-9](?:[a-z0-9-]{0,251}[a-z0-9])?$/.test(name), 'Invalid ConfigMap name');
+    const data = await snapshot(fetchText);
+    // ponytail: ConfigMaps cap at 1 MiB; move to a volume or object store if sources outgrow it.
+    assert(Buffer.byteLength(data) <= 1000000, 'Snapshot exceeds the ConfigMap size limit');
+    await write(name, data);
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     try {
-        const { values } = parseArgs({ options: { output: { type: 'string', default: resolve(root, 'data/domains.json') } } });
-        await update(resolve(values.output));
-        console.log('Open domain snapshot updated atomically; refresh the API to load it.');
+        const { values } = parseArgs({ options: { output: { type: 'string' }, configmap: { type: 'string' } } });
+        assert(!(values.output && values.configmap), 'Use --output or --configmap, not both');
+        if (values.configmap) {
+            await publish(values.configmap);
+            console.log(`Open domain snapshot published to ConfigMap ${values.configmap}; the API reloads it automatically.`);
+        } else {
+            await update(resolve(values.output ?? resolve(root, 'data/domains.json')));
+            console.log('Open domain snapshot updated atomically; the API reloads an override file automatically.');
+        }
     } catch (error) {
         const reason = error instanceof assert.AssertionError ? error.message : 'Source transport or filesystem error';
         console.error(`Domain update failed at ${phase}: ${reason}. The previous snapshot was preserved.`);

@@ -10,6 +10,7 @@ concurrency:
   cancel-in-progress: false
 env:
   IMAGE: ghcr.io/mokto/openfingerprint-api
+  UPDATER: ghcr.io/mokto/openfingerprint-domain-updater
 jobs:
   release:
     runs-on: ubuntu-24.04
@@ -64,10 +65,23 @@ jobs:
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -f api/Dockerfile -t "$IMAGE:sha-$GITHUB_SHA-$ARCH" .
           node api/test.mjs --image "$IMAGE:sha-$GITHUB_SHA-$ARCH"
+      - name: Build and smoke-test the domain updater against the live public sources
+        run: |
+          docker buildx build --load --provenance=false --platform "linux/$ARCH" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -f api/updater.Dockerfile -t "$UPDATER:sha-$GITHUB_SHA-$ARCH" .
+          out="$(mktemp -d)"
+          chmod 777 "$out"
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            -v "$out:/out" "$UPDATER:sha-$GITHUB_SHA-$ARCH" --output /out/domains.json
+          node -e 'const d = require(process.argv[1]); if (d.version !== 1 || d.sources.length < 7) process.exit(1)' "$out/domains.json"
       - env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-      - run: docker push "$IMAGE:sha-$GITHUB_SHA-$ARCH"
+      - run: |
+          docker push "$IMAGE:sha-$GITHUB_SHA-$ARCH"
+          docker push "$UPDATER:sha-$GITHUB_SHA-$ARCH"
   manifest:
     needs: [release, build]
     runs-on: ubuntu-24.04
@@ -75,29 +89,107 @@ jobs:
       packages: write
     env:
       VERSION: ${{ needs.release.outputs.version }}
+    outputs:
+      api-digest: ${{ steps.digests.outputs.api }}
+      updater-digest: ${{ steps.digests.outputs.updater }}
     steps:
       - env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - run: |
-          docker buildx imagetools create \
-            -t "$IMAGE:$VERSION" -t "$IMAGE:sha-$GITHUB_SHA" \
-            "$IMAGE:sha-$GITHUB_SHA-amd64" "$IMAGE:sha-$GITHUB_SHA-arm64"
-          printf 'Published `%s:%s` for linux/amd64 and linux/arm64.\n\nFirst release: set the GHCR package visibility to Public, then rerun if anonymous verification fails.\n' "$IMAGE" "$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          for image in "$IMAGE" "$UPDATER"; do
+            docker buildx imagetools create \
+              -t "$image:$VERSION" -t "$image:sha-$GITHUB_SHA" \
+              "$image:sha-$GITHUB_SHA-amd64" "$image:sha-$GITHUB_SHA-arm64"
+            printf 'Published `%s:%s` for linux/amd64 and linux/arm64.\n' "$image" "$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          done
+          printf '\nFirst release of a package: set its GHCR visibility to Public, then rerun if anonymous verification fails.\n' >> "$GITHUB_STEP_SUMMARY"
+      - id: digests
+        run: |
+          for pair in "api=$IMAGE" "updater=$UPDATER"; do
+            digest="$(docker buildx imagetools inspect "${pair#*=}:$VERSION" --format '{{json .Manifest}}' | jq -er .digest)"
+            [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]
+            echo "${pair%%=*}=$digest" >> "$GITHUB_OUTPUT"
+          done
       - name: Verify public multi-architecture pulls
         run: |
           export DOCKER_CONFIG="$(mktemp -d)"
-          if ! docker manifest inspect "$IMAGE:$VERSION" > /tmp/api-manifest.json; then
-            echo '::error::Anonymous access failed. Set openfingerprint-api package visibility to Public in GitHub Package settings, then rerun this job.'
-            exit 1
-          fi
-          python3 - <<'PY'
+          for image in "$IMAGE" "$UPDATER"; do
+            if ! docker manifest inspect "$image:$VERSION" > /tmp/manifest.json; then
+              echo "::error::Anonymous access failed. Set the ${image#ghcr.io/mokto/} package visibility to Public in GitHub Package settings, then rerun this job."
+              exit 1
+            fi
+            python3 - <<'PY'
           import json
-          with open('/tmp/api-manifest.json') as source:
+          with open('/tmp/manifest.json') as source:
               manifest = json.load(source)
           platforms = {(item['platform']['os'], item['platform']['architecture']) for item in manifest['manifests']}
           if platforms != {('linux', 'amd64'), ('linux', 'arm64')}:
               raise SystemExit('Expected exactly linux/amd64 and linux/arm64')
           PY
-          docker pull --platform linux/amd64 "$IMAGE:$VERSION"
-          docker pull --platform linux/arm64 "$IMAGE:$VERSION"
+            docker pull --platform linux/amd64 "$image:$VERSION"
+            docker pull --platform linux/arm64 "$image:$VERSION"
+          done
+  chart:
+    needs: [release, manifest]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      API_DIGEST: ${{ needs.manifest.outputs.api-digest }}
+      UPDATER_DIGEST: ${{ needs.manifest.outputs.updater-digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install Helm
+        run: |
+          curl -fsSLo helm.tgz https://get.helm.sh/helm-v3.22.0-linux-amd64.tar.gz
+          echo "1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb  helm.tgz" | sha256sum -c -
+          tar -xzf helm.tgz linux-amd64/helm
+          sudo install linux-amd64/helm /usr/local/bin/helm
+      - name: Publish the chart, pinned to this release's images
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          bash api/chart/test.sh
+          yq -i '.image.digest = strenv(API_DIGEST) | .domainData.refresh.image.digest = strenv(UPDATER_DIGEST)' api/chart/values.yaml
+          helm package api/chart --version "$VERSION" --app-version "$VERSION"
+          rendered="$(helm template openfingerprint "openfingerprint-$VERSION.tgz" --set existingSecret=x --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]')"
+          grep -q "image: \"$IMAGE:$VERSION@$API_DIGEST\"" <<< "$rendered"
+          grep -q "image: \"$UPDATER:$VERSION@$UPDATER_DIGEST\"" <<< "$rendered"
+          echo "$TOKEN" | helm registry login ghcr.io --username "$ACTOR" --password-stdin
+          helm push "openfingerprint-$VERSION.tgz" oci://ghcr.io/mokto/charts
+          echo "Published chart oci://ghcr.io/mokto/charts/openfingerprint $VERSION." >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify anonymous chart access
+        run: |
+          HELM_REGISTRY_CONFIG="$(mktemp -d)/config.json"
+          export HELM_REGISTRY_CONFIG
+          helm show chart oci://ghcr.io/mokto/charts/openfingerprint --version "$VERSION" > /dev/null || {
+            echo '::error::Anonymous access failed. Set the charts/openfingerprint package visibility to Public in GitHub Package settings, then rerun this job.'
+            exit 1
+          }
+  deploy:
+    needs: [release, chart]
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      # DISPATCH_TARGET is the full workflow_dispatch URL of the deploying workflow, DISPATCH_TOKEN a token for it.
+      - name: Dispatch the deployment of this release's chart
+        env:
+          TARGET: ${{ secrets.DISPATCH_TARGET }}
+          TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          if [ -z "$TARGET" ] || [ -z "$TOKEN" ]; then
+            echo "::notice::DISPATCH_TARGET or DISPATCH_TOKEN is not set; skipping the deployment dispatch"
+            exit 0
+          fi
+          curl -fsS --retry 3 -X POST "$TARGET" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d "{\"ref\":\"main\",\"inputs\":{\"version\":\"$VERSION\"}}"
