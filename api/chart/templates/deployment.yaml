@@ -5,7 +5,7 @@ metadata:
   name: {{ include "of.name" . }}
   labels:
     {{- include "of.labels" . | nindent 4 }}
-    {{- include "of.apiSelector" . | nindent 4 }}
+    app.kubernetes.io/name: openfingerprint
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:

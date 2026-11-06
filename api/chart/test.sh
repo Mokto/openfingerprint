@@ -14,6 +14,8 @@ rendered=$(mktemp)
 trap 'rm -f "$rendered"' EXIT
 render > "$rendered"
 ruby -ryaml -e '
+dup = ->(node) { node.is_a?(Psych::Nodes::Mapping) && (keys = node.children.each_slice(2).map { |k, _| k.value }).uniq.size != keys.size || node.children.to_a.any? { |c| dup.call(c) } }
+abort("Rendered YAML repeats a mapping key; strict parsers such as kubeconform reject it") if dup.call(Psych.parse_stream(File.read(ARGV[0])))
 docs = YAML.load_stream(File.read(ARGV[0])).compact
 get = ->(kind, name = nil) { docs.find { |d| d["kind"] == kind && (name.nil? || d["metadata"]["name"] == name) } || abort("Missing #{kind} #{name}") }
 check = ->(ok, message) { abort(message) unless ok }
