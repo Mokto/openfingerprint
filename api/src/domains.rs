@@ -205,24 +205,42 @@ impl DomainData {
         })
     }
 
-    pub fn check(&self, value: serde_json::Value) -> DomainCheck {
-        let Some(value) = value.as_str().filter(|s| crate::check::domain(s)) else {
-            return DomainCheck {
-                status: "invalid_input",
-                reason: Some("invalid_domain"),
-                facts: None,
-            };
+    pub fn check(&self, value: serde_json::Value, mx: Option<serde_json::Value>) -> DomainCheck {
+        let invalid = |reason| DomainCheck {
+            status: "invalid_input",
+            reason: Some(reason),
+            facts: None,
         };
-        let normalized = value
-            .strip_suffix('.')
-            .unwrap_or(value)
-            .to_ascii_lowercase();
-        self.check_at(&normalized, now())
+        let normalize = |s: &str| s.strip_suffix('.').unwrap_or(s).to_ascii_lowercase();
+        let Some(value) = value.as_str().filter(|s| crate::check::domain(s)) else {
+            return invalid("invalid_domain");
+        };
+        let mx = match mx {
+            None | Some(serde_json::Value::Null) => Vec::new(),
+            Some(serde_json::Value::Array(hosts))
+                if (1..=10).contains(&hosts.len())
+                    && hosts
+                        .iter()
+                        .all(|h| h.as_str().is_some_and(crate::check::domain)) =>
+            {
+                hosts
+                    .iter()
+                    .filter_map(|h| h.as_str().map(normalize))
+                    .collect()
+            }
+            Some(_) => return invalid("invalid_mx"),
+        };
+        self.check_at(&normalize(value), &mx, now())
     }
 
-    fn check_at(&self, domain: &str, now: u64) -> DomainCheck {
+    fn check_at(&self, domain: &str, mx: &[String], now: u64) -> DomainCheck {
         let facts = Facts {
-            disposable: self.fact(domain, now, Category::Disposable, "disposable_domain"),
+            disposable: self.mx_fact(
+                self.fact(domain, now, Category::Disposable, "disposable_domain"),
+                domain,
+                mx,
+                now,
+            ),
             free_subdomain: self.fact(
                 domain,
                 now,
@@ -248,6 +266,37 @@ impl DomainData {
             status,
             reason: self.reason,
             facts: Some(facts),
+        }
+    }
+
+    fn mx_fact(&self, fact: Fact, domain: &str, mx: &[String], now: u64) -> Fact {
+        if fact.status != "not_listed" {
+            return fact;
+        }
+        let suffix = format!(".{domain}");
+        let hosts: Vec<_> = mx
+            .iter()
+            .filter(|h| *h != domain && !h.ends_with(&suffix))
+            .map(|h| self.fact(h, now, Category::Disposable, "disposable_domain"))
+            .collect();
+        let blocked = mx
+            .iter()
+            .flat_map(|h| {
+                std::iter::successors(Some(h.as_str()), |s| s.split_once('.').map(|(_, r)| r))
+            })
+            .any(|c| {
+                let f = self.fact(c, now, Category::Disposable, "disposable_domain");
+                f.value == Some(false) || f.status == "conflict"
+            });
+        if blocked {
+            return fact;
+        }
+        match hosts.into_iter().find(|h| h.value == Some(true)) {
+            Some(host) => Fact {
+                status: "mx_listed",
+                ..host
+            },
+            None => fact,
         }
     }
 
@@ -489,18 +538,18 @@ mod tests {
             source("free_subdomain", &["is-a.dev"]),
             source("referrer_spam", &["spam.example"]),
         ]);
-        let r = d.check_at("mail.example", 1500).facts.unwrap();
+        let r = d.check_at("mail.example", &[], 1500).facts.unwrap();
         assert_eq!(r.disposable.value, Some(true));
         assert_eq!(r.free_subdomain.value, None);
         assert_eq!(r.spam.value, None);
         assert_eq!(r.spam.scope, "referrer_spam");
         assert_eq!(r.spam.status, "not_listed");
-        let r = d.check_at("spam.example", 1500).facts.unwrap();
+        let r = d.check_at("spam.example", &[], 1500).facts.unwrap();
         assert_eq!(r.spam.value, Some(true));
         assert_eq!(r.disposable.value, None);
-        let r = d.check_at("tenant.is-a.dev", 1500).facts.unwrap();
+        let r = d.check_at("tenant.is-a.dev", &[], 1500).facts.unwrap();
         assert_eq!(r.free_subdomain.value, Some(true));
-        let r = d.check_at("is-a.dev", 1500).facts.unwrap();
+        let r = d.check_at("is-a.dev", &[], 1500).facts.unwrap();
         assert_eq!(r.free_subdomain.value, Some(false));
         assert_eq!(r.free_subdomain.status, "provider_domain");
     }
@@ -520,7 +569,7 @@ mod tests {
             source("referrer_spam", &["github.io", "bad.example"]),
         ]);
         assert_eq!(
-            d.check_at("child.mail.example", 1500)
+            d.check_at("child.mail.example", &[], 1500)
                 .facts
                 .unwrap()
                 .disposable
@@ -536,25 +585,28 @@ mod tests {
             "innocent.co.uk",
             "foo.bar.ck",
         ] {
-            let r = d.check_at(input, 1500).facts.unwrap();
+            let r = d.check_at(input, &[], 1500).facts.unwrap();
             assert_eq!(r.disposable.value, None);
             assert_eq!(r.spam.value, None);
         }
         assert_eq!(
-            d.check_at("bad.github.io", 1500)
+            d.check_at("bad.github.io", &[], 1500)
                 .facts
                 .unwrap()
                 .disposable
                 .value,
             Some(true)
         );
-        assert_eq!(d.check_at("example", 1500).facts.unwrap().spam.value, None);
+        assert_eq!(
+            d.check_at("example", &[], 1500).facts.unwrap().spam.value,
+            None
+        );
     }
     #[test]
     fn suffix_exceptions_keep_the_original_query_boundary() {
         let d = data(vec![source("disposable", &["kawasaki.jp"])]);
         assert_eq!(
-            d.check_at("city.kawasaki.jp", 1500)
+            d.check_at("city.kawasaki.jp", &[], 1500)
                 .facts
                 .unwrap()
                 .disposable
@@ -563,7 +615,7 @@ mod tests {
         );
         let d = data(vec![source("disposable", &["city.kawasaki.jp"])]);
         assert_eq!(
-            d.check_at("child.city.kawasaki.jp", 1500)
+            d.check_at("child.city.kawasaki.jp", &[], 1500)
                 .facts
                 .unwrap()
                 .disposable
@@ -578,7 +630,7 @@ mod tests {
         s["allowlist"] = serde_json::json!(["good.mail.example"]);
         let d = data(vec![s.clone()]);
         assert_eq!(
-            d.check_at("good.mail.example", 1500)
+            d.check_at("good.mail.example", &[], 1500)
                 .facts
                 .unwrap()
                 .disposable
@@ -586,7 +638,7 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            d.check_at("child.good.mail.example", 1500)
+            d.check_at("child.good.mail.example", &[], 1500)
                 .facts
                 .unwrap()
                 .disposable
@@ -594,7 +646,7 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            d.check_at("bad.good.mail.example", 1500)
+            d.check_at("bad.good.mail.example", &[], 1500)
                 .facts
                 .unwrap()
                 .disposable
@@ -605,7 +657,7 @@ mod tests {
         other["id"] = serde_json::json!("other");
         let d = data(vec![s, other]);
         let r = d
-            .check_at("good.mail.example", 1500)
+            .check_at("good.mail.example", &[], 1500)
             .facts
             .unwrap()
             .disposable;
@@ -619,7 +671,7 @@ mod tests {
             source("disposable_review", &["mail.example", "vip.mail.example"]),
         ]);
         for input in ["mail.example", "vip.mail.example"] {
-            let result = d.check_at(input, 1500);
+            let result = d.check_at(input, &[], 1500);
             assert_eq!(result.status, "partial");
             let fact = result.facts.unwrap().disposable;
             assert_eq!(fact.value, None);
@@ -628,7 +680,7 @@ mod tests {
             assert_eq!(fact.sources[1].status, "disputed");
         }
         assert_eq!(
-            d.check_at("child.mail.example", 1500)
+            d.check_at("child.mail.example", &[], 1500)
                 .facts
                 .unwrap()
                 .disposable
@@ -638,10 +690,60 @@ mod tests {
         let mut review = source("disposable_review", &["mail.example"]);
         review["expires_at_unix"] = serde_json::json!(1400);
         let d = data(vec![source("disposable", &["mail.example"]), review]);
-        let fact = d.check_at("mail.example", 1500).facts.unwrap().disposable;
+        let fact = d
+            .check_at("mail.example", &[], 1500)
+            .facts
+            .unwrap()
+            .disposable;
         assert_eq!(fact.value, None);
         assert_eq!(fact.status, "conflict");
         assert_eq!(fact.sources[1].status, "stale");
+    }
+
+    #[test]
+    fn mx_hosts_on_listed_providers_infer_disposable_conservatively() {
+        let mut s = source("disposable", &["temp.example", "mail.example", "co.uk"]);
+        s["allowlist"] = serde_json::json!(["good.temp.example"]);
+        let d = data(vec![s, source("disposable_review", &["mail.example"])]);
+        let mx = |hosts: &[&str]| hosts.iter().map(|h| h.to_string()).collect::<Vec<_>>();
+        let fact = |domain, hosts: &[&str], now| {
+            d.check_at(domain, &mx(hosts), now)
+                .facts
+                .unwrap()
+                .disposable
+        };
+        let r = fact("new.test", &["mx1.temp.example"], 1500);
+        assert_eq!((r.value, r.status), (Some(true), "mx_listed"));
+        assert_eq!(r.sources[0].status, "listed");
+        for hosts in [
+            &[][..],
+            &["aspmx.l.google.com"],
+            &["mx.new.test"],
+            &["new.test"],
+            &["mx1.temp.example", "good.temp.example"],
+            &["mx1.temp.example", "mx.mail.example"],
+            &["mx.mail.example"],
+            &["mx.innocent.co.uk"],
+        ] {
+            let r = fact("new.test", hosts, 1500);
+            assert_eq!((r.value, r.status), (None, "not_listed"), "{hosts:?}");
+        }
+        assert_eq!(fact("new.test", &["mx1.temp.example"], 2500).value, None);
+        let r = fact("temp.example", &["aspmx.l.google.com"], 1500);
+        assert_eq!((r.value, r.status), (Some(true), "listed"));
+        let r = fact("good.temp.example", &["mx1.temp.example"], 1500);
+        assert_eq!((r.value, r.status), (Some(false), "allowlisted"));
+        let r = fact("mail.example", &["mx1.temp.example"], 1500);
+        assert_eq!((r.value, r.status), (None, "conflict"));
+        for invalid in [
+            serde_json::json!([]),
+            serde_json::json!("mx.temp.example"),
+            serde_json::json!(["bad host"]),
+            serde_json::json!(vec!["mx.temp.example"; 11]),
+        ] {
+            let r = d.check(serde_json::json!("new.test"), Some(invalid));
+            assert_eq!((r.status, r.reason), ("invalid_input", Some("invalid_mx")));
+        }
     }
 
     #[test]
@@ -650,7 +752,11 @@ mod tests {
         review["fetched_at_unix"] = serde_json::json!(2500);
         review["expires_at_unix"] = serde_json::json!(3500);
         let d = data(vec![source("disposable", &["mail.example"]), review]);
-        let fact = d.check_at("mail.example", 1500).facts.unwrap().disposable;
+        let fact = d
+            .check_at("mail.example", &[], 1500)
+            .facts
+            .unwrap()
+            .disposable;
         assert_eq!(fact.value, None);
         assert_eq!(fact.reason, Some("review_required"));
         assert_eq!(fact.sources[1].status, "future_data");
@@ -660,11 +766,15 @@ mod tests {
     fn expiry_future_clock_and_missing_sources_stay_unknown() {
         let d = data(vec![source("disposable", &["mail.example"])]);
         for now in [0, 2000, 3000] {
-            let r = d.check_at("mail.example", now).facts.unwrap().disposable;
+            let r = d
+                .check_at("mail.example", &[], now)
+                .facts
+                .unwrap()
+                .disposable;
             assert_eq!(r.value, None);
             assert_eq!(r.status, "unknown");
         }
-        let r = DomainData::unavailable("invalid_data").check_at("mail.example", 1500);
+        let r = DomainData::unavailable("invalid_data").check_at("mail.example", &[], 1500);
         assert_eq!(r.status, "unknown");
         assert_eq!(r.facts.unwrap().disposable.reason, Some("invalid_data"));
     }
@@ -674,7 +784,7 @@ mod tests {
         stale["id"] = serde_json::json!("stale");
         stale["expires_at_unix"] = serde_json::json!(1400);
         let d = data(vec![source("disposable", &["other.example"]), stale]);
-        let r = d.check_at("mail.example", 1500);
+        let r = d.check_at("mail.example", &[], 1500);
         assert_eq!(r.status, "partial");
         let f = r.facts.unwrap().disposable;
         assert_eq!(f.value, None);
@@ -748,7 +858,7 @@ mod tests {
         let d = DomainData::parse(include_bytes!("../data/domains.json")).unwrap();
         assert_eq!(d.sources.len(), 7);
         let at = d.sources[0].fetched_at_unix;
-        let r = d.check_at("sharklasers.com", at).facts.unwrap();
+        let r = d.check_at("sharklasers.com", &[], at).facts.unwrap();
         assert_eq!(r.disposable.value, Some(true));
         assert_eq!(r.spam.scope, "referrer_spam");
         assert_eq!(
@@ -760,12 +870,12 @@ mod tests {
             "BSD-3-Clause"
         );
         for name in ["21cn.com", "vip.21cn.com"] {
-            let result = d.check_at(name, at).facts.unwrap().disposable;
+            let result = d.check_at(name, &[], at).facts.unwrap().disposable;
             assert_eq!(result.value, None);
             assert_eq!(result.reason, Some("review_required"));
         }
         assert_eq!(
-            d.check_at("tenant.duckdns.org", at)
+            d.check_at("tenant.duckdns.org", &[], at)
                 .facts
                 .unwrap()
                 .free_subdomain
@@ -790,7 +900,7 @@ mod tests {
         let listed = |store: &DomainStore, domain| {
             store
                 .current()
-                .check_at(domain, 1500)
+                .check_at(domain, &[], 1500)
                 .facts
                 .map(|f| f.disposable.value)
         };

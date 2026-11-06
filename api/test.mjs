@@ -300,7 +300,17 @@ try {
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { signals: checkedProfile(signals()), domain: domainExpected(expected) });
     }
-    console.log(`Domain facts, label boundaries, provenance, unknowns and browser isolation passed (${mode}).`);
+    for (const [mx, expected] of [
+        [['MX1.Mail.Example.'], { disposable: true }], [['aspmx.l.google.example', 'mx1.mail.example'], { disposable: true }],
+        [['mx.notmail.example'], {}], [['mx.mxtest.example'], {}], [['mx.disputed.mail.example'], {}],
+        [['mx1.mail.example', 'mx.good.mail.example'], {}], [null, {}]
+    ]) {
+        const response = await request('/v1/check', authHeaders(sites[4]), { domain: 'mxtest.example', mx });
+        const want = domainExpected(expected);
+        if (mode === 'fresh' && expected.disposable) want.disposable.status = 'mx_listed';
+        assert.deepEqual(await response.json(), { domain: want });
+    }
+    console.log(`Domain facts, MX-provider inference, label boundaries, provenance, unknowns and browser isolation passed (${mode}).`);
 
     phase = 'independent field validation and bounded envelopes';
     for (const domain of ['', 'localhost', 'https://example.test', 'person@example.test', 'example.test:80', 'a..test', 'bücher.test', 'a'.repeat(64) + '.test', {}, 42]) {
@@ -312,12 +322,18 @@ try {
             signals: checkedProfile(signals()), domain: { status: 'invalid_input', reason: 'invalid_domain' }, ip: unknown
         });
     }
+    for (const mx of [[], 'mx.mail.example', ['bad host'], ['https://mx.mail.example'], Array(11).fill('mx.mail.example'), [42], {}]) {
+        const response = await request('/v1/check', authHeaders(sites[5]), { domain: 'example.test', mx, ip: '192.0.2.1' });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { domain: { status: 'invalid_input', reason: 'invalid_mx' }, ip: unknown });
+    }
     for (const ip of ['', 'example.test', '192.0.2.1:80', '[2001:db8::1]', '192.0.2.0/24', 'fe80::1%eth0', [], true]) {
         const response = await request('/v1/check', authHeaders(sites[5]), { domain: 'example.test', ip });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { domain: domainExpected(), ip: { status: 'invalid_input', reason: 'invalid_ip' } });
     }
     for (const body of [{}, { signals: null, domain: null, ip: null }, [], null, 'not-json',
+        { mx: ['mx.mail.example'] }, { ip: '192.0.2.1', mx: ['mx.mail.example'] }, { domain: null, mx: ['mx.mail.example'] },
         ...['email', 'visitor_token', 'account_id', 'userAgent', 'storageId'].map(k => ({ domain: 'example.test', [k]: 'unsolicited' }))]) {
         const response = await request('/v1/check', authHeaders(sites[5]), body);
         assert.equal(response.status, 400);
