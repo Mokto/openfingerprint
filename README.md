@@ -16,8 +16,9 @@ choose whether and where to send results.
 The API verifies submitted evidence without visitor storage or history. Open
 domain snapshots provide independent disposable, free-subdomain and scoped
 referrer-spam evidence, including recently monitored provider domains, provenance,
-expiry and exact reviewed disputes. Optional caller-resolved MX hosts detect new
-domains whose mail is routed to a listed disposable provider. Unlisted data stays
+expiry and exact reviewed disputes. MX hosts, looked up by the API when DNS is enabled or
+supplied by the caller, detect new domains whose mail is routed to a listed
+disposable provider. Unlisted data stays
 unknown, not clean. IP
 intelligence is not implemented yet. The API does not collect browser signals,
 and the SDK does not depend on it. See the [data guide](api/data/README.md) for

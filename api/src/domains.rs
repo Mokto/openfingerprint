@@ -59,6 +59,8 @@ pub struct DomainCheck {
     reason: Option<&'static str>,
     #[serde(flatten)]
     facts: Option<Facts>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mx_lookup: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -205,32 +207,65 @@ impl DomainData {
         })
     }
 
+    #[cfg(test)]
     pub fn check(&self, value: serde_json::Value, mx: Option<serde_json::Value>) -> DomainCheck {
-        let invalid = |reason| DomainCheck {
-            status: "invalid_input",
-            reason: Some(reason),
-            facts: None,
+        match self.input(value, mx) {
+            Err(invalid) => *invalid,
+            Ok((domain, Some(mx))) => self.check_with(&domain, &mx, "supplied"),
+            Ok((domain, None)) => self.check_with(&domain, &[], "not_checked"),
+        }
+    }
+
+    /// Validates and normalizes the domain and any caller-supplied MX hosts.
+    pub fn input(
+        &self,
+        value: serde_json::Value,
+        mx: Option<serde_json::Value>,
+    ) -> Result<(String, Option<Vec<String>>), Box<DomainCheck>> {
+        let invalid = |reason| {
+            Box::new(DomainCheck {
+                status: "invalid_input",
+                reason: Some(reason),
+                facts: None,
+                mx_lookup: None,
+            })
         };
         let normalize = |s: &str| s.strip_suffix('.').unwrap_or(s).to_ascii_lowercase();
         let Some(value) = value.as_str().filter(|s| crate::check::domain(s)) else {
-            return invalid("invalid_domain");
+            return Err(invalid("invalid_domain"));
         };
         let mx = match mx {
-            None | Some(serde_json::Value::Null) => Vec::new(),
+            None | Some(serde_json::Value::Null) => None,
             Some(serde_json::Value::Array(hosts))
                 if (1..=10).contains(&hosts.len())
                     && hosts
                         .iter()
                         .all(|h| h.as_str().is_some_and(crate::check::domain)) =>
             {
-                hosts
-                    .iter()
-                    .filter_map(|h| h.as_str().map(normalize))
-                    .collect()
+                Some(
+                    hosts
+                        .iter()
+                        .filter_map(|h| h.as_str().map(normalize))
+                        .collect(),
+                )
             }
-            Some(_) => return invalid("invalid_mx"),
+            Some(_) => return Err(invalid("invalid_mx")),
         };
-        self.check_at(&normalize(value), &mx, now())
+        Ok((normalize(value), mx))
+    }
+
+    /// Whether MX hosts could change the result: only a fresh `not_listed` domain is inferred.
+    pub fn needs_mx(&self, domain: &str) -> bool {
+        self.fact(domain, now(), Category::Disposable, "disposable_domain")
+            .status
+            == "not_listed"
+    }
+
+    pub fn check_with(&self, domain: &str, mx: &[String], mx_lookup: &'static str) -> DomainCheck {
+        DomainCheck {
+            mx_lookup: Some(mx_lookup),
+            ..self.check_at(domain, mx, now())
+        }
     }
 
     fn check_at(&self, domain: &str, mx: &[String], now: u64) -> DomainCheck {
@@ -266,6 +301,7 @@ impl DomainData {
             status,
             reason: self.reason,
             facts: Some(facts),
+            mx_lookup: None,
         }
     }
 
