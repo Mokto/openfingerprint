@@ -1,0 +1,641 @@
+use std::{
+    collections::HashSet,
+    io::Read,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use serde::{Deserialize, Serialize};
+
+const MAX_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum Category {
+    Disposable,
+    DisposableReview,
+    FreeSubdomain,
+    ReferrerSpam,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Snapshot {
+    version: u8,
+    sources: Vec<Source>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Source {
+    id: String,
+    category: Category,
+    license: String,
+    license_text: String,
+    license_sha256: String,
+    url: String,
+    revision: String,
+    updated_at_unix: u64,
+    fetched_at_unix: u64,
+    expires_at_unix: u64,
+    domains: HashSet<String>,
+    allowlist: HashSet<String>,
+}
+
+pub struct DomainData {
+    sources: Vec<Source>,
+    reason: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+pub struct DomainCheck {
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+    #[serde(flatten)]
+    facts: Option<Facts>,
+}
+
+#[derive(Serialize)]
+struct Facts {
+    disposable: Fact,
+    free_subdomain: Fact,
+    spam: Fact,
+}
+
+#[derive(Serialize)]
+struct Fact {
+    value: Option<bool>,
+    status: &'static str,
+    scope: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+    sources: Vec<SourceStatus>,
+}
+
+#[derive(Serialize)]
+struct SourceStatus {
+    id: String,
+    status: &'static str,
+    license: String,
+    license_sha256: String,
+    url: String,
+    revision: String,
+    updated_at_unix: u64,
+    fetched_at_unix: u64,
+    expires_at_unix: u64,
+}
+
+impl DomainData {
+    pub fn unavailable(reason: &'static str) -> Self {
+        Self {
+            sources: Vec::new(),
+            reason: Some(reason),
+        }
+    }
+
+    pub fn from_env() -> Self {
+        // ponytail: load one bounded snapshot at startup; restart after refresh, add atomic reload if needed.
+        let bytes = match std::env::var_os("OPENFINGERPRINT_DOMAIN_DATA") {
+            Some(path) => {
+                let mut data = Vec::new();
+                match std::fs::File::open(path)
+                    .and_then(|f| f.take((MAX_BYTES + 1) as u64).read_to_end(&mut data))
+                {
+                    Ok(_) => data,
+                    Err(_) => return Self::unavailable("data_unavailable"),
+                }
+            }
+            None => include_bytes!("../data/domains.json").to_vec(),
+        };
+        Self::parse(&bytes).unwrap_or_else(|_| Self::unavailable("invalid_data"))
+    }
+
+    fn parse(bytes: &[u8]) -> Result<Self, ()> {
+        if bytes.len() > MAX_BYTES {
+            return Err(());
+        }
+        let snapshot: Snapshot = serde_json::from_slice(bytes).map_err(|_| ())?;
+        if snapshot.version != 1 || snapshot.sources.len() > 16 {
+            return Err(());
+        }
+        let mut ids = HashSet::new();
+        for s in &snapshot.sources {
+            if s.id.is_empty()
+                || s.id.len() > 64
+                || !s
+                    .id
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                || !ids.insert(&s.id)
+                || !["CC0-1.0", "MIT", "BSD-3-Clause", "LicenseRef-Public-Domain"]
+                    .contains(&s.license.as_str())
+                || s.license_text.is_empty()
+                || s.license_text.len() > 16384
+                || crate::check::sha256(&s.license_text) != s.license_sha256
+                || s.url.len() > 512
+                || !s.url.starts_with("https://")
+                || s.url
+                    .chars()
+                    .any(|c| c.is_whitespace() || matches!(c, '?' | '#' | '@'))
+                || s.revision.is_empty()
+                || s.revision.len() > 128
+                || !s
+                    .revision
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+                || s.updated_at_unix > s.fetched_at_unix.saturating_add(300)
+                || !s
+                    .expires_at_unix
+                    .checked_sub(s.fetched_at_unix)
+                    .is_some_and(|n| n > 0 && n <= 30 * 86400)
+                || s.domains.is_empty()
+                || (s.category == Category::DisposableReview && !s.allowlist.is_empty())
+                || s.domains.len() + s.allowlist.len() > 100000
+                || s.domains.iter().chain(&s.allowlist).any(|d| {
+                    !crate::check::domain(d)
+                        || d.ends_with('.')
+                        || *d != d.to_ascii_lowercase()
+                        || (s.category == Category::FreeSubdomain
+                            && psl::suffix(d.as_bytes()).is_some_and(|suffix| {
+                                suffix.as_bytes() == d.as_bytes()
+                                    && suffix.typ() == Some(psl::Type::Icann)
+                            }))
+                })
+            {
+                return Err(());
+            }
+        }
+        Ok(Self {
+            sources: snapshot.sources,
+            reason: None,
+        })
+    }
+
+    pub fn check(&self, value: serde_json::Value) -> DomainCheck {
+        let Some(value) = value.as_str().filter(|s| crate::check::domain(s)) else {
+            return DomainCheck {
+                status: "invalid_input",
+                reason: Some("invalid_domain"),
+                facts: None,
+            };
+        };
+        let normalized = value
+            .strip_suffix('.')
+            .unwrap_or(value)
+            .to_ascii_lowercase();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        self.check_at(&normalized, now)
+    }
+
+    fn check_at(&self, domain: &str, now: u64) -> DomainCheck {
+        let facts = Facts {
+            disposable: self.fact(domain, now, Category::Disposable, "disposable_domain"),
+            free_subdomain: self.fact(
+                domain,
+                now,
+                Category::FreeSubdomain,
+                "free_subdomain_namespace",
+            ),
+            spam: self.fact(domain, now, Category::ReferrerSpam, "referrer_spam"),
+        };
+        let items = [&facts.disposable, &facts.free_subdomain, &facts.spam];
+        let status = if items.iter().all(|f| f.status == "unknown") {
+            "unknown"
+        } else if items.iter().any(|f| {
+            matches!(f.status, "unknown" | "partial" | "conflict")
+                || f.sources
+                    .iter()
+                    .any(|s| matches!(s.status, "stale" | "future_data"))
+        }) {
+            "partial"
+        } else {
+            "ok"
+        };
+        DomainCheck {
+            status,
+            reason: self.reason,
+            facts: Some(facts),
+        }
+    }
+
+    fn fact(&self, domain: &str, now: u64, category: Category, scope: &'static str) -> Fact {
+        let mut yes = false;
+        let mut no = None;
+        let mut disputed = false;
+        let mut unavailable = false;
+        let sources: Vec<_> = self
+            .sources
+            .iter()
+            .filter(|s| {
+                s.category == category
+                    || (category == Category::Disposable
+                        && s.category == Category::DisposableReview)
+            })
+            .map(|s| {
+                // An overdue review must not restore a disputed positive classification.
+                if s.category == Category::DisposableReview && s.domains.contains(domain) {
+                    disputed = true;
+                }
+                let status = if s.fetched_at_unix > now.saturating_add(300) {
+                    unavailable = true;
+                    "future_data"
+                } else if s.expires_at_unix <= now {
+                    unavailable = true;
+                    "stale"
+                } else {
+                    s.lookup(domain)
+                };
+                if status == "listed" {
+                    yes = true;
+                }
+                if matches!(status, "allowlisted" | "provider_domain") {
+                    no = Some(status);
+                }
+                SourceStatus {
+                    id: s.id.clone(),
+                    status,
+                    license: s.license.clone(),
+                    license_sha256: s.license_sha256.clone(),
+                    url: s.url.clone(),
+                    revision: s.revision.clone(),
+                    updated_at_unix: s.updated_at_unix,
+                    fetched_at_unix: s.fetched_at_unix,
+                    expires_at_unix: s.expires_at_unix,
+                }
+            })
+            .collect();
+        let (value, status, reason) = if disputed {
+            (None, "conflict", Some("review_required"))
+        } else if yes && no.is_some() {
+            (None, "conflict", Some("conflicting_sources"))
+        } else if yes {
+            (Some(true), "listed", None)
+        } else if let Some(status) = no {
+            (Some(false), status, None)
+        } else if sources.is_empty() {
+            (
+                None,
+                "unknown",
+                Some(self.reason.unwrap_or("not_configured")),
+            )
+        } else if sources
+            .iter()
+            .all(|s| matches!(s.status, "stale" | "future_data"))
+        {
+            (None, "unknown", Some("no_fresh_data"))
+        } else if unavailable {
+            (None, "partial", Some("incomplete_data"))
+        } else {
+            (None, "not_listed", None)
+        };
+        Fact {
+            value,
+            status,
+            scope,
+            reason,
+            sources,
+        }
+    }
+}
+
+impl Source {
+    fn lookup(&self, domain: &str) -> &'static str {
+        if self.category == Category::DisposableReview {
+            return if self.domains.contains(domain) {
+                "disputed"
+            } else {
+                "not_listed"
+            };
+        }
+        let boundary = psl::suffix_str(domain).unwrap_or(domain).len();
+        for candidate in
+            std::iter::successors(Some(domain), |s| s.split_once('.').map(|(_, rest)| rest))
+        {
+            if self.category != Category::FreeSubdomain && candidate.len() <= boundary {
+                return if self.domains.contains(candidate) {
+                    "public_suffix_excluded"
+                } else {
+                    "not_listed"
+                };
+            }
+            if self.allowlist.contains(candidate) {
+                return "allowlisted";
+            }
+            if self.domains.contains(candidate) {
+                return if self.category == Category::FreeSubdomain && candidate == domain {
+                    "provider_domain"
+                } else {
+                    "listed"
+                };
+            }
+        }
+        "not_listed"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn source(category: &str, domains: &[&str]) -> serde_json::Value {
+        serde_json::json!({"id":category,"category":category,"license":"CC0-1.0","license_text":"fixture","license_sha256":crate::check::sha256("fixture"),"url":"https://example.test/source","revision":"fixture1","updated_at_unix":1000,"fetched_at_unix":1000,"expires_at_unix":2000,"domains":domains,"allowlist":[]})
+    }
+    fn data(sources: Vec<serde_json::Value>) -> DomainData {
+        DomainData::parse(
+            &serde_json::to_vec(&serde_json::json!({"version":1,"sources":sources})).unwrap(),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn classifications_are_independent_and_missing_is_not_false() {
+        let d = data(vec![
+            source("disposable", &["mail.example"]),
+            source("free_subdomain", &["is-a.dev"]),
+            source("referrer_spam", &["spam.example"]),
+        ]);
+        let r = d.check_at("mail.example", 1500).facts.unwrap();
+        assert_eq!(r.disposable.value, Some(true));
+        assert_eq!(r.free_subdomain.value, None);
+        assert_eq!(r.spam.value, None);
+        assert_eq!(r.spam.scope, "referrer_spam");
+        assert_eq!(r.spam.status, "not_listed");
+        let r = d.check_at("spam.example", 1500).facts.unwrap();
+        assert_eq!(r.spam.value, Some(true));
+        assert_eq!(r.disposable.value, None);
+        let r = d.check_at("tenant.is-a.dev", 1500).facts.unwrap();
+        assert_eq!(r.free_subdomain.value, Some(true));
+        let r = d.check_at("is-a.dev", 1500).facts.unwrap();
+        assert_eq!(r.free_subdomain.value, Some(false));
+        assert_eq!(r.free_subdomain.status, "provider_domain");
+    }
+    #[test]
+    fn matches_labels_without_promoting_tenants_or_public_suffixes() {
+        let d = data(vec![
+            source(
+                "disposable",
+                &[
+                    "mail.example",
+                    "bad.github.io",
+                    "co.uk",
+                    "bar.ck",
+                    "city.kawasaki.jp",
+                ],
+            ),
+            source("referrer_spam", &["github.io", "bad.example"]),
+        ]);
+        assert_eq!(
+            d.check_at("child.mail.example", 1500)
+                .facts
+                .unwrap()
+                .disposable
+                .value,
+            Some(true)
+        );
+        for input in [
+            "notmail.example",
+            "example",
+            "good.github.io",
+            "github.io",
+            "co.uk",
+            "innocent.co.uk",
+            "foo.bar.ck",
+        ] {
+            let r = d.check_at(input, 1500).facts.unwrap();
+            assert_eq!(r.disposable.value, None);
+            assert_eq!(r.spam.value, None);
+        }
+        assert_eq!(
+            d.check_at("bad.github.io", 1500)
+                .facts
+                .unwrap()
+                .disposable
+                .value,
+            Some(true)
+        );
+        assert_eq!(d.check_at("example", 1500).facts.unwrap().spam.value, None);
+    }
+    #[test]
+    fn suffix_exceptions_keep_the_original_query_boundary() {
+        let d = data(vec![source("disposable", &["kawasaki.jp"])]);
+        assert_eq!(
+            d.check_at("city.kawasaki.jp", 1500)
+                .facts
+                .unwrap()
+                .disposable
+                .value,
+            None
+        );
+        let d = data(vec![source("disposable", &["city.kawasaki.jp"])]);
+        assert_eq!(
+            d.check_at("child.city.kawasaki.jp", 1500)
+                .facts
+                .unwrap()
+                .disposable
+                .value,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn specific_allowlists_and_conflicting_sources_are_explicit() {
+        let mut s = source("disposable", &["mail.example", "bad.good.mail.example"]);
+        s["allowlist"] = serde_json::json!(["good.mail.example"]);
+        let d = data(vec![s.clone()]);
+        assert_eq!(
+            d.check_at("good.mail.example", 1500)
+                .facts
+                .unwrap()
+                .disposable
+                .value,
+            Some(false)
+        );
+        assert_eq!(
+            d.check_at("child.good.mail.example", 1500)
+                .facts
+                .unwrap()
+                .disposable
+                .value,
+            Some(false)
+        );
+        assert_eq!(
+            d.check_at("bad.good.mail.example", 1500)
+                .facts
+                .unwrap()
+                .disposable
+                .value,
+            Some(true)
+        );
+        let mut other = source("disposable", &["good.mail.example"]);
+        other["id"] = serde_json::json!("other");
+        let d = data(vec![s, other]);
+        let r = d
+            .check_at("good.mail.example", 1500)
+            .facts
+            .unwrap()
+            .disposable;
+        assert_eq!(r.value, None);
+        assert_eq!(r.status, "conflict");
+    }
+    #[test]
+    fn reviewed_disputes_are_exact_unknowns_and_do_not_expire_into_accusations() {
+        let d = data(vec![
+            source("disposable", &["mail.example"]),
+            source("disposable_review", &["mail.example", "vip.mail.example"]),
+        ]);
+        for input in ["mail.example", "vip.mail.example"] {
+            let result = d.check_at(input, 1500);
+            assert_eq!(result.status, "partial");
+            let fact = result.facts.unwrap().disposable;
+            assert_eq!(fact.value, None);
+            assert_eq!(fact.status, "conflict");
+            assert_eq!(fact.reason, Some("review_required"));
+            assert_eq!(fact.sources[1].status, "disputed");
+        }
+        assert_eq!(
+            d.check_at("child.mail.example", 1500)
+                .facts
+                .unwrap()
+                .disposable
+                .value,
+            Some(true)
+        );
+        let mut review = source("disposable_review", &["mail.example"]);
+        review["expires_at_unix"] = serde_json::json!(1400);
+        let d = data(vec![source("disposable", &["mail.example"]), review]);
+        let fact = d.check_at("mail.example", 1500).facts.unwrap().disposable;
+        assert_eq!(fact.value, None);
+        assert_eq!(fact.status, "conflict");
+        assert_eq!(fact.sources[1].status, "stale");
+    }
+
+    #[test]
+    fn future_dated_disputes_remain_pending_not_clean_or_positive() {
+        let mut review = source("disposable_review", &["mail.example"]);
+        review["fetched_at_unix"] = serde_json::json!(2500);
+        review["expires_at_unix"] = serde_json::json!(3500);
+        let d = data(vec![source("disposable", &["mail.example"]), review]);
+        let fact = d.check_at("mail.example", 1500).facts.unwrap().disposable;
+        assert_eq!(fact.value, None);
+        assert_eq!(fact.reason, Some("review_required"));
+        assert_eq!(fact.sources[1].status, "future_data");
+    }
+
+    #[test]
+    fn expiry_future_clock_and_missing_sources_stay_unknown() {
+        let d = data(vec![source("disposable", &["mail.example"])]);
+        for now in [0, 2000, 3000] {
+            let r = d.check_at("mail.example", now).facts.unwrap().disposable;
+            assert_eq!(r.value, None);
+            assert_eq!(r.status, "unknown");
+        }
+        let r = DomainData::unavailable("invalid_data").check_at("mail.example", 1500);
+        assert_eq!(r.status, "unknown");
+        assert_eq!(r.facts.unwrap().disposable.reason, Some("invalid_data"));
+    }
+    #[test]
+    fn partial_freshness_never_reuses_expired_matches() {
+        let mut stale = source("disposable", &["mail.example"]);
+        stale["id"] = serde_json::json!("stale");
+        stale["expires_at_unix"] = serde_json::json!(1400);
+        let d = data(vec![source("disposable", &["other.example"]), stale]);
+        let r = d.check_at("mail.example", 1500);
+        assert_eq!(r.status, "partial");
+        let f = r.facts.unwrap().disposable;
+        assert_eq!(f.value, None);
+        assert_eq!(f.status, "partial");
+        assert_eq!(f.reason, Some("incomplete_data"));
+    }
+
+    #[test]
+    fn invalid_snapshots_fail_closed_without_disabling_the_verifier() {
+        for field in ["license", "license_sha256", "url", "revision"] {
+            let mut s = source("disposable", &["mail.example"]);
+            s[field] = serde_json::json!("invalid value");
+            assert!(
+                DomainData::parse(
+                    &serde_json::to_vec(&serde_json::json!({"version":1,"sources":[s]})).unwrap()
+                )
+                .is_err()
+            );
+        }
+        for domain in [
+            "com",
+            "https://example.test",
+            "bad..example",
+            "UPPER.example",
+        ] {
+            let s = source("disposable", &[domain]);
+            assert!(
+                DomainData::parse(
+                    &serde_json::to_vec(&serde_json::json!({"version":1,"sources":[s]})).unwrap()
+                )
+                .is_err()
+            );
+        }
+        let s = source("free_subdomain", &["co.uk"]);
+        assert!(
+            DomainData::parse(
+                &serde_json::to_vec(&serde_json::json!({"version":1,"sources":[s]})).unwrap()
+            )
+            .is_err()
+        );
+        let mut review = source("disposable_review", &["mail.example"]);
+        review["allowlist"] = serde_json::json!(["mail.example"]);
+        assert!(
+            DomainData::parse(
+                &serde_json::to_vec(&serde_json::json!({"version":1,"sources":[review]})).unwrap()
+            )
+            .is_err()
+        );
+        assert!(DomainData::parse(&vec![b' '; MAX_BYTES + 1]).is_err());
+        assert!(DomainData::parse(b"{}").is_err());
+        let s = source("disposable", &["mail.example"]);
+        assert!(
+            DomainData::parse(
+                &serde_json::to_vec(&serde_json::json!({"version":1,"sources":[s,s]})).unwrap()
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn bundled_snapshot_is_valid_and_contains_only_open_sources() {
+        let raw: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../data/domains.json")).unwrap();
+        for source in raw["sources"].as_array().unwrap() {
+            let one = serde_json::json!({"version":1,"sources":[source]});
+            assert!(
+                DomainData::parse(&serde_json::to_vec(&one).unwrap()).is_ok(),
+                "invalid bundled source category: {}",
+                source["category"]
+            );
+        }
+        let d = DomainData::parse(include_bytes!("../data/domains.json")).unwrap();
+        assert_eq!(d.sources.len(), 7);
+        let at = d.sources[0].fetched_at_unix;
+        let r = d.check_at("sharklasers.com", at).facts.unwrap();
+        assert_eq!(r.disposable.value, Some(true));
+        assert_eq!(r.spam.scope, "referrer_spam");
+        assert_eq!(
+            d.sources
+                .iter()
+                .find(|s| s.id == "fakefilter_recent")
+                .unwrap()
+                .license,
+            "BSD-3-Clause"
+        );
+        for name in ["21cn.com", "vip.21cn.com"] {
+            let result = d.check_at(name, at).facts.unwrap().disposable;
+            assert_eq!(result.value, None);
+            assert_eq!(result.reason, Some("review_required"));
+        }
+        assert_eq!(
+            d.check_at("tenant.duckdns.org", at)
+                .facts
+                .unwrap()
+                .free_subdomain
+                .value,
+            Some(true)
+        );
+    }
+}

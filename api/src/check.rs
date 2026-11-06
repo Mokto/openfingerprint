@@ -57,12 +57,15 @@ impl Rate {
 
 pub struct AppState {
     sites: Vec<Site>,
+    domains: crate::domains::DomainData,
 }
 impl AppState {
     pub fn from_env() -> Result<Self, &'static str> {
         let config = std::env::var("OPENFINGERPRINT_SITES")
             .map_err(|_| "OPENFINGERPRINT_SITES is required")?;
-        Self::configure(&config)
+        let mut state = Self::configure(&config)?;
+        state.domains = crate::domains::DomainData::from_env();
+        Ok(state)
     }
     fn configure(config: &str) -> Result<Self, &'static str> {
         if config.len() > BODY_LIMIT {
@@ -97,7 +100,10 @@ impl AppState {
                 rate: Mutex::new(Rate::new()),
             })
             .collect();
-        Ok(Self { sites })
+        Ok(Self {
+            sites,
+            domains: crate::domains::DomainData::unavailable("not_configured"),
+        })
     }
     fn authorize(&self, headers: &HeaderMap) -> Result<(), ApiError> {
         let site = self.authenticate(headers)?;
@@ -251,7 +257,7 @@ struct CheckResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     signals: Option<SignalCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    domain: Option<IntelligenceCheck>,
+    domain: Option<crate::domains::DomainCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ip: Option<IntelligenceCheck>,
 }
@@ -313,18 +319,6 @@ fn check_signals(value: serde_json::Value) -> SignalCheck {
     }
 }
 
-fn check_domain(value: serde_json::Value) -> IntelligenceCheck {
-    let valid = value.as_str().is_some_and(domain);
-    IntelligenceCheck {
-        status: if valid { "unknown" } else { "invalid_input" },
-        reason: if valid {
-            "not_configured"
-        } else {
-            "invalid_domain"
-        },
-    }
-}
-
 fn check_ip(value: serde_json::Value) -> IntelligenceCheck {
     let valid = value
         .as_str()
@@ -339,7 +333,7 @@ fn check_ip(value: serde_json::Value) -> IntelligenceCheck {
     }
 }
 
-fn domain(value: &str) -> bool {
+pub(crate) fn domain(value: &str) -> bool {
     let value = value.strip_suffix('.').unwrap_or(value);
     value.len() <= 253
         && value.is_ascii()
@@ -405,7 +399,7 @@ pub async fn check(
     }
     Ok(Json(CheckResponse {
         signals: input.signals.map(check_signals),
-        domain: input.domain.map(check_domain),
+        domain: input.domain.map(|value| state.domains.check(value)),
         ip: input.ip.map(check_ip),
     })
     .into_response())
@@ -445,7 +439,7 @@ fn is_hex(s: &str, len: usize) -> bool {
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
-fn sha256(s: &str) -> String {
+pub(crate) fn sha256(s: &str) -> String {
     hex(digest::digest(&digest::SHA256, s.as_bytes()).as_ref())
 }
 
@@ -689,9 +683,10 @@ mod tests {
             "xn--bcher-kva.example",
         ] {
             assert!(domain(valid));
-            let result = check_domain(serde_json::json!(valid));
-            assert_eq!(result.status, "unknown");
-            assert_eq!(result.reason, "not_configured");
+            let result =
+                serde_json::to_value(state().domains.check(serde_json::json!(valid))).unwrap();
+            assert_eq!(result["status"], "unknown");
+            assert_eq!(result["reason"], "not_configured");
         }
         let maximum = format!(
             "{}.{}.{}.{}",
@@ -723,12 +718,14 @@ mod tests {
             "2001:db8::1",
         ] {
             assert!(!domain(invalid));
-            let result = check_domain(serde_json::json!(invalid));
-            assert_eq!(result.status, "invalid_input");
-            assert_eq!(result.reason, "invalid_domain");
+            let result =
+                serde_json::to_value(state().domains.check(serde_json::json!(invalid))).unwrap();
+            assert_eq!(result["status"], "invalid_input");
+            assert_eq!(result["reason"], "invalid_domain");
         }
         assert!(!domain(&format!("{}.example", "a".repeat(64))));
-        assert_eq!(check_domain(serde_json::json!([])).status, "invalid_input");
+        let result = serde_json::to_value(state().domains.check(serde_json::json!([]))).unwrap();
+        assert_eq!(result["status"], "invalid_input");
     }
 
     #[test]

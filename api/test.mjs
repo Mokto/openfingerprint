@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, chmodSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const { values } = parseArgs({
 	options: {
 		image: { type: 'string' },
 		platform: { type: 'string' },
+        'domain-data-mode': { type: 'string' },
 		binary: {
 			type: 'string',
 			default: fileURLToPath(new URL('./target/debug/openfingerprint-api', import.meta.url))
@@ -23,12 +27,36 @@ const sites = ['alpha', 'beta', 'quota', 'malformed', 'check', 'check_invalid', 
 }));
 assert(!values.platform || values.image, '--platform requires --image');
 const container = values.image ? `openfingerprint-test-${randomBytes(8).toString('hex')}` : null;
+const mode = values['domain-data-mode'] ?? 'fresh';
+assert(['fresh', 'stale', 'invalid', 'missing'].includes(mode));
+const directory = mkdtempSync(join(tmpdir(), 'openfingerprint-domain-test-'));
+chmodSync(directory, 0o755);
+const dataPath = join(directory, 'domains.json');
+const now = Math.floor(Date.now() / 1000);
+const license = readFileSync(new URL('./data/domains.json', import.meta.url), 'utf8');
+const cc0 = JSON.parse(license).sources.find(s => s.license === 'CC0-1.0').license_text;
+const sources = ['disposable', 'free_subdomain', 'referrer_spam'].map(category => ({
+    id: category, category, license: 'CC0-1.0', license_text: cc0,
+    license_sha256: createHash('sha256').update(cc0).digest('hex'),
+    url: 'https://example.test/source', revision: 'fixture1', updated_at_unix: now - 3600,
+    fetched_at_unix: now - 3600, expires_at_unix: mode === 'stale' ? now - 1 : now + 3600,
+    domains: category === 'disposable' ? ['mail.example', 'sharklasers.com'] : category === 'free_subdomain' ? ['free.example', 'duckdns.org'] : ['spam.example', 'bad.customer.example', 'github.io'],
+    allowlist: category === 'disposable' ? ['good.mail.example'] : []
+}));
+const bsd = JSON.parse(license).sources.find(s => s.id === 'fakefilter_recent').license_text;
+sources.push(
+    { ...sources[0], id: 'monitored', license: 'BSD-3-Clause', license_text: bsd, license_sha256: createHash('sha256').update(bsd).digest('hex') },
+    { ...sources[0], id: 'reviewed', category: 'disposable_review', domains: ['disputed.mail.example'], allowlist: [] }
+);
+if (mode !== 'missing') writeFileSync(dataPath, mode === 'invalid' ? '{}' : JSON.stringify({ version: 1, sources }), { mode: 0o644 });
 const args = container
 	? [
 			'run', '--rm', '--name', container, '--read-only', '--cap-drop=ALL',
 			'--security-opt=no-new-privileges', '-p', '127.0.0.1::8180',
 			'--env', 'OPENFINGERPRINT_LISTEN_ADDR',
 			'--env', 'OPENFINGERPRINT_SITES',
+            '--env', 'OPENFINGERPRINT_DOMAIN_DATA',
+            '--mount', `type=bind,src=${directory},dst=/domain-data,readonly`,
 			...(values.platform ? ['--platform', values.platform] : []),
 			values.image
 		]
@@ -38,7 +66,8 @@ const child = spawn(container ? 'docker' : values.binary, args, {
 	env: {
 		...process.env,
 		OPENFINGERPRINT_LISTEN_ADDR: container ? '0.0.0.0:8180' : '127.0.0.1:0',
-		OPENFINGERPRINT_SITES: JSON.stringify(sites)
+		OPENFINGERPRINT_SITES: JSON.stringify(sites),
+        OPENFINGERPRINT_DOMAIN_DATA: container ? '/domain-data/domains.json' : dataPath
 	},
 	stdio: ['ignore', 'pipe', 'pipe']
 });
@@ -104,6 +133,26 @@ async function request(path, headers, body, method = 'POST') {
 }
 
 const authHeaders = (site) => ({ Authorization: `Bearer ${site.secret_key}` });
+function domainExpected(overrides = {}) {
+    const hasReview = overrides.disputed && ['fresh', 'stale'].includes(mode);
+    const result = { status: hasReview ? 'partial' : mode === 'fresh' ? 'ok' : 'unknown' };
+    if (['invalid', 'missing'].includes(mode)) result.reason = mode === 'invalid' ? 'invalid_data' : 'data_unavailable';
+    for (const [field, category, scope] of [['disposable', 'disposable', 'disposable_domain'], ['free_subdomain', 'free_subdomain', 'free_subdomain_namespace'], ['spam', 'referrer_spam', 'referrer_spam']]) {
+        const matched = overrides[field];
+        const status = mode === 'fresh' ? (matched === true ? 'listed' : matched === false ? (field === 'free_subdomain' ? 'provider_domain' : 'allowlisted') : 'not_listed') : 'unknown';
+        const disputed = hasReview && field === 'disposable';
+        const fact = { value: disputed ? null : mode === 'fresh' ? matched ?? null : null, status: disputed ? 'conflict' : status, scope };
+        if (disputed) fact.reason = 'review_required';
+        else if (mode !== 'fresh') fact.reason = mode === 'stale' ? 'no_fresh_data' : result.reason;
+        fact.sources = ['invalid', 'missing'].includes(mode) ? [] : sources.filter(s => s.category === category || (category === 'disposable' && s.category === 'disposable_review')).map(s => {
+            const { category: _, license_text, domains, allowlist, ...meta } = s;
+            const sourceStatus = mode === 'stale' ? 'stale' : s.category === 'disposable_review' ? (hasReview ? 'disputed' : 'not_listed') : field === 'spam' && overrides.public_suffix_excluded ? 'public_suffix_excluded' : status;
+            return { ...meta, status: sourceStatus };
+        });
+        result[field] = fact;
+    }
+    return result;
+}
 try {
     origin = await base;
     phase = 'health and retired routes';
@@ -209,7 +258,7 @@ try {
         assert.equal(response.headers.get('access-control-allow-origin'), null);
         const expected = {};
         if ('signals' in selected) expected.signals = checkedProfile(selected.signals);
-        if ('domain' in selected) expected.domain = unknown;
+        if ('domain' in selected) expected.domain = domainExpected();
         if ('ip' in selected) expected.ip = unknown;
         assert.deepEqual(await response.json(), expected);
     }
@@ -218,13 +267,31 @@ try {
     });
     assert.deepEqual(await coreOnly.json(), {
         signals: { ...checkedProfile(signals()), status: 'insufficient_signals', schema_version: null, fingerprint: null },
-        domain: unknown
+        domain: domainExpected()
     });
     const nulls = await request('/v1/check', authHeaders(sites[4]), {
         signals: null, domain: null, ip: '192.0.2.1'
     });
     assert.deepEqual(await nulls.json(), { ip: unknown });
-    console.log('All seven input combinations, requested-only results, evidence counts and unknown intelligence passed.');
+    console.log('All seven input combinations, requested-only results, evidence counts and domain data state passed.');
+    phase = `domain classification and source scope (${mode})`;
+    for (const [domain, expected] of [
+        ['mail.example', { disposable: true }], ['Child.MAIL.example.', { disposable: true }],
+        ['notmail.example', {}], ['good.mail.example', { disposable: false }],
+        ['child.good.mail.example', { disposable: false }],
+        ['disputed.mail.example', { disposable: true, disputed: true }],
+        ['child.disputed.mail.example', { disposable: true }],
+        ['tenant.free.example', { free_subdomain: true }], ['free.example', { free_subdomain: false }],
+        ['tenant.duckdns.org', { free_subdomain: true }], ['duckdns.org', { free_subdomain: false }],
+        ['spam.example', { spam: true }], ['child.spam.example', { spam: true }],
+        ['bad.customer.example', { spam: true }], ['customer.example', {}],
+        ['notbad.customer.example', {}], ['innocent.github.io', { public_suffix_excluded: true }], ['co.uk', {}]
+    ]) {
+        const response = await request('/v1/check', authHeaders(sites[4]), { signals: signals(), domain });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { signals: checkedProfile(signals()), domain: domainExpected(expected) });
+    }
+    console.log(`Domain facts, label boundaries, provenance, unknowns and browser isolation passed (${mode}).`);
 
     phase = 'independent field validation and bounded envelopes';
     for (const domain of ['', 'localhost', 'https://example.test', 'person@example.test', 'example.test:80', 'a..test', 'bücher.test', 'a'.repeat(64) + '.test', {}, 42]) {
@@ -239,7 +306,7 @@ try {
     for (const ip of ['', 'example.test', '192.0.2.1:80', '[2001:db8::1]', '192.0.2.0/24', 'fe80::1%eth0', [], true]) {
         const response = await request('/v1/check', authHeaders(sites[5]), { domain: 'example.test', ip });
         assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), { domain: unknown, ip: { status: 'invalid_input', reason: 'invalid_ip' } });
+        assert.deepEqual(await response.json(), { domain: domainExpected(), ip: { status: 'invalid_input', reason: 'invalid_ip' } });
     }
     for (const body of [{}, { signals: null, domain: null, ip: null }, [], null, 'not-json',
         ...['email', 'visitor_token', 'account_id', 'userAgent', 'storageId'].map(k => ({ domain: 'example.test', [k]: 'unsolicited' }))]) {
@@ -282,7 +349,7 @@ try {
         assert.equal(check.status, 200);
         assert.deepEqual(await check.json(), {
             signals: { status: 'invalid_input', reason: 'invalid_signals', schema_version: null, fingerprint: null, evidence: null },
-            domain: unknown
+            domain: domainExpected()
         });
     }
     for (const signals of [false, [], 'not evidence']) {
@@ -331,7 +398,8 @@ try {
     for (const sensitive of [
         ...sites.flatMap(site => [site.secret_key, site.site_key].filter(Boolean)),
         signals().fingerprint, signals('same', 'same', 5).fingerprint,
-        signals().components.fontPreferences, 'unsolicited', 'ExAmPlE.test.', '2001:db8::1', '192.0.2.1'
+        signals().components.fontPreferences, 'unsolicited', 'ExAmPlE.test.', '2001:db8::1', '192.0.2.1',
+        'mail.example', 'disputed.mail.example', 'child.disputed.mail.example'
     ]) assert(!serverOutput.includes(sensitive));
     console.log('No request evidence, raw metadata or credentials appeared in server output.');
 	if (container) {
@@ -353,7 +421,10 @@ try {
 		execFileSync('docker', ['exec', container, 'sh', '-c', [
 			'test -s /usr/share/licenses/openfingerprint-api/Cargo.lock',
 			'test -s /usr/share/licenses/openfingerprint-api/openfingerprint-api/LICENSE',
-			'test -d /usr/share/licenses/openfingerprint-api/rust'
+			'test -d /usr/share/licenses/openfingerprint-api/rust',
+            'test -s /usr/share/licenses/openfingerprint-api/domain-data.json',
+            'grep -q BSD-3-Clause /usr/share/licenses/openfingerprint-api/domain-data.json',
+            'grep -q "Neither the name of the copyright holder" /usr/share/licenses/openfingerprint-api/domain-data.json'
 		].join(' && ')], { stdio: 'ignore' });
 		const exited = once(child, 'exit', { signal: AbortSignal.timeout(10000) });
 		execFileSync('docker', ['stop', '--time', '3', container], { stdio: 'ignore', timeout: 10000 });
@@ -387,4 +458,13 @@ try {
 			})
 		]);
 	}
+    rmSync(directory, { recursive: true, force: true });
+}
+
+if (!values['domain-data-mode'] && !process.exitCode) {
+    await import('./test-domain-updater.mjs');
+    for (const mode of ['stale', 'invalid', 'missing']) {
+        const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2), '--domain-data-mode', mode], { stdio: 'inherit', timeout: 120000 });
+        if (result.status !== 0) { process.exitCode = 1; break; }
+    }
 }

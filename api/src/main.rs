@@ -1,4 +1,5 @@
 mod check;
+mod domains;
 
 use std::sync::Arc;
 

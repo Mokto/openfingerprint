@@ -5,18 +5,19 @@ provides `GET /health` and one primary business endpoint, `POST /v1/check`, with
 independent browser, domain and IP sections. `POST /v1/verify` is retained as a
 compatibility adapter while existing callers migrate.
 
-This is the checker foundation, not an intelligence-feed release:
+Domain intelligence runs locally against openly licensed, versioned snapshots:
 
 | Requested check | Available behavior |
 | --- | --- |
 | `signals` | Canonical schema-4/5 verification and bounded evidence counts. |
-| `domain` | Hostname syntax validation; otherwise `unknown/not_configured`. |
+| `domain` | Disposable-domain, free-subdomain and source-scoped referrer-spam evidence, with provenance and expiry. |
 | `ip` | IPv4/IPv6 literal validation; otherwise `unknown/not_configured`. |
 
-No domain/network source is bundled or configurable yet. A valid input does not
-mean a domain is legitimate or an IP is clean. Dataset ingestion, provenance,
-freshness and lookups are separate work. Do not infer missing boolean verdicts
-from these responses. Older API releases, including 0.4.0, have a different
+The domain snapshot is bundled and can be overridden with a refreshed local file.
+A valid input does not mean a domain is legitimate or an IP is clean. Unlisted or
+uncovered domains remain null, not false. IP intelligence, live MX/RDAP and domain
+authority are not implemented. The spam scope is specifically **referrer spam**,
+not email-sending reputation. See [sources, licenses and refresh](data/README.md). Older API releases, including 0.4.0, have a different
 `/v1/check` contract; this guide describes the next release, not a live upgrade.
 
 The API does not collect browser signals, recognize physical devices, execute
@@ -32,15 +33,18 @@ Responses have `Cache-Control: no-store` and set no cookies. Domain/IP inputs ar
 not echoed in responses. No browser/server IP is inferred from the connection or
 forwarded headers. Signals-only calls do not run domain/IP checks.
 
-The only retained runtime state is configured server credential tags and one
-quota counter/window per site. These are not keyed by visitor, IP, domain or
+Retained runtime state consists of configured server credential tags, one quota
+counter/window per site and a read-only public domain snapshot. No visitor/domain
+request cache is created; quota state is not keyed by visitor, IP, domain or
 profile. Restart resets the quota windows. Multiple replicas have independent
 quotas; use an edge/shared limiter for a deployment-wide quota. Both business
 routes share the same per-site quota, so the compatibility route cannot double it.
 
-The service works with outgoing traffic denied. Future public datasets can be
-supplied as snapshots; live DNS/RDAP would need a separately scoped lookup worker
-and an explicit network-policy decision, not silently reopened Internet access.
+The service works with outgoing traffic denied. A separate operator updater
+refreshes public snapshots without rebuilding the image; the API loads them at
+startup and must be restarted after refresh. Live DNS/RDAP would need a separately
+scoped lookup worker and an explicit network-policy decision, not silently reopened
+Internet access.
 There are no lookup retries, remote-provider waits or visitor-history fallbacks.
 
 The SDK is unchanged: it hashes signals locally, makes no network requests and
@@ -58,6 +62,7 @@ build arguments, command-line arguments or logs.
 | --- | --- |
 | `OPENFINGERPRINT_SITES` | JSON array of 1–16 site configurations, each with `id` and `secret_key`. |
 | `OPENFINGERPRINT_LISTEN_ADDR` | Optional listener, default `127.0.0.1:8180`. |
+| `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
 
 IDs are 1–64 ASCII characters, start with a letter and otherwise contain letters,
 digits, underscores or dots. Server keys are 32–128 URL-safe ASCII characters;
@@ -108,14 +113,27 @@ For example:
 {"domain":"example.test","ip":"192.0.2.1"}
 ```
 
-Currently returns HTTP 200:
+The IP section returns `{"status":"unknown","reason":"not_configured"}`.
+With fresh domain data, `domain` contains `disposable`, `free_subdomain` and `spam`
+facts. Disposable evidence combines the community list with recently monitored
+provider domains from an openly licensed feed; no vendor API results are imported. Each has a nullable `value`, evidence `status`, `scope` and `sources` with
+license, revision, source-commit/retrieval/expiry times. For example, a confirmed
+list match yields `value: true, status: listed`; an ordinary non-match yields
+`value: null, status: not_listed`, not a clean verdict.
 
-```json
-{
-  "domain":{"status":"unknown","reason":"not_configured"},
-  "ip":{"status":"unknown","reason":"not_configured"}
-}
-```
+Free-subdomain operator apexes yield false with `provider_domain`; strict children
+can match. Reviewed allowlist overrides yield false with `allowlisted`. Conflicting
+fresh sources yield null with `conflict`. Exact domains under an independently
+reviewed dispute also yield null with `conflict/review_required`; an overdue review
+does not restore a positive accusation. This is not an allowlist or a clean verdict.
+Stale, future-dated, missing or invalid data stays unknown. The overall domain status is `ok` when all scoped checks ran
+against fresh sources, `partial` for incomplete/conflicting coverage, or `unknown`
+when no fresh data is available. `ok` never means the domain is safe.
+
+`spam.scope` is always `referrer_spam` in this release. The open Matomo feed does
+not establish mailbox spam or comprehensive abuse coverage. Neither disposable
+nor free-subdomain classifications set this fact. [Data details](data/README.md)
+include exact matching/expiry semantics and the bounded provider coverage.
 
 With valid full SDK evidence, the `signals` section is:
 
@@ -159,8 +177,9 @@ Domains have at least two labels, each 1–63 ASCII letters/digits/hyphens, with
 leading/trailing hyphens. Maximum length is 253 characters excluding an optional
 single trailing dot; the final label must contain a letter. Case is accepted.
 Internationalized names must be supplied as ASCII A-labels; no Unicode conversion,
-IDNA decoding, public-suffix validation, DNS resolution or registrability check is
-performed. Lexical acceptance is not domain existence or mailbox validation.
+IDNA decoding, DNS resolution or registrability check is performed. Dataset
+matching does use Mozilla's Public Suffix List to protect registry/private-suffix
+boundaries; this does not turn lexical input acceptance into domain validation. Lexical acceptance is not domain existence or mailbox validation.
 
 IPs must be literals, without ports, CIDR prefixes, brackets, zone IDs or surrounding
 whitespace. IPv4-mapped IPv6 and private/loopback literals are syntactically
@@ -235,9 +254,11 @@ pnpm api:check
 
 This runs formatting, Clippy, unit tests and a real loopback HTTP self-check. It
 generates credentials in RAM, boots without a signing key, checks both schemas,
-all seven input combinations, partial failures, unknown intelligence, strict
-metadata/body boundaries, compatibility, shared/independent quotas and no request
-logging, then stops the server. It prints no credentials or visitor payloads.
+all seven input combinations, partial failures, scoped domain matches, public-suffix
+boundaries, fresh/stale/invalid/missing snapshots, strict metadata/body boundaries,
+compatibility, shared/independent quotas and no request logging, then stops the
+server. Updater checks use local fixtures and verify license-change rejection and
+atomic failure preservation; CI does not download feeds. It prints no credentials or visitor payloads.
 
 After release, images are published as `ghcr.io/mokto/openfingerprint-api:<version>`
 for linux/amd64 and linux/arm64. Pin a released manifest digest; publishing does
@@ -258,6 +279,6 @@ Pull-request CI runs SDK/browser and Rust/HTTP checks, without building Docker
 images or duplicating runs on branch pushes. Release Please explicitly dispatches
 the same checks for its bot-created release PRs. After an API release, the image
 workflow builds and smoke-tests AMD64/ARM64 natively before publishing and creating
-the multi-architecture manifest. No data volume or visitor-store migration is
-needed. The API remains experimental: add deployment-wide abuse protection,
+the multi-architecture manifest. No visitor-store migration is needed; a refreshed
+public snapshot can be mounted read-only without rebuilding the image. The API remains experimental: add deployment-wide abuse protection,
 credential lifecycle controls and operational/privacy review before relying on it.

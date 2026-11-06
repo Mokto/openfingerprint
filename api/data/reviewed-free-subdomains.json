@@ -1,0 +1,12 @@
+{
+  "license": "CC0-1.0",
+  "reviewed_at_unix": 1793962229,
+  "expires_at_unix": 1796554229,
+  "entries": [
+    {
+      "domain": "duckdns.org",
+      "evidence_url": "https://www.duckdns.org/about.jsp",
+      "evidence": "The provider offers free, user-controlled subdomains under this namespace."
+    }
+  ]
+}

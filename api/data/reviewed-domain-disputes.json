@@ -1,0 +1,17 @@
+{
+  "license": "CC0-1.0",
+  "reviewed_at_unix": 1793971869,
+  "expires_at_unix": 1796563869,
+  "entries": [
+    {
+      "domain": "21cn.com",
+      "evidence_url": "https://mail.21cn.com/w2/template/user-agreement.html",
+      "evidence": "The operator documents password-protected retained mailboxes, paid membership and inactivity reclamation, not automatic temporary inboxes. This conflicts with a blanket disposable classification. Current exact-address availability is not established; return a dispute, not a clean verdict."
+    },
+    {
+      "domain": "vip.21cn.com",
+      "evidence_url": "https://mail.21cn.com/w2/21cn_vip/initOrder.jsp",
+      "evidence": "Official terms link to subscription mailbox pricing with storage and deleted-mail recovery. The material does not establish that current plans issue addresses on this exact domain. The mailbox catalogue association and operator documentation warrant review, not a permanent-mailbox assertion or a suffix-wide exception."
+    }
+  ]
+}
