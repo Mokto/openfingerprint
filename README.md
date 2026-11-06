@@ -1,7 +1,8 @@
 # OpenFingerprint
 
-A browser-signal SDK and an optional, experimental Rust check API. Both are MIT
-licensed and released independently.
+A browser-signal SDK and an optional, experimental Rust check API. The code is MIT
+licensed and released independently; [datasets](api/data/README.md) retain their
+own licenses.
 
 | Component | Purpose | Documentation |
 | --- | --- | --- |
@@ -12,10 +13,13 @@ The SDK has zero runtime dependencies. It hashes signals locally, makes no netwo
 requests and has no telemetry, remote code, WASM or import-time collection. You
 choose whether and where to send results.
 
-The API verifies submitted evidence without visitor storage or history. Domain/IP
-syntax validation is available; intelligence sources are not implemented, so valid
-inputs explicitly return unknown. The API does not collect browser signals, and
-the SDK does not depend on it.
+The API verifies submitted evidence without visitor storage or history. Open
+domain snapshots provide independent disposable, free-subdomain and scoped
+referrer-spam evidence, including recently monitored provider domains, provenance,
+expiry and exact reviewed disputes. Unlisted data stays unknown, not clean. IP
+intelligence is not implemented yet. The API does not collect browser signals,
+and the SDK does not depend on it. See the [data guide](api/data/README.md) for
+sources, licensing and refresh without image rebuilds.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Devices
 can collide; settings, updates and missing signals can split repeat visits.
@@ -56,7 +60,7 @@ pnpm api:check
 
 The root package is private and provides convenience commands. SDK source,
 build configuration, browser tests and generated `dist/` live in `sdk/`.
-The API owns its Cargo package, Dockerfile and HTTP self-check in `api/`.
+The API owns its Cargo package, Dockerfile, HTTP self-check and data updater in `api/`.
 API checks require Rust and Node but no JavaScript dependencies, database or cloud
 account. See the [API guide](api/README.md) for configuration and containers.
 

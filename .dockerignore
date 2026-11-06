@@ -6,5 +6,7 @@
 !api/src/
 !api/src/*.rs
 !api/data/
-!api/data/disposable_domains.txt
+!api/data/domains.json
+!api/data/reviewed-free-subdomains.json
+!api/data/reviewed-domain-disputes.json
 !api/data/README.md

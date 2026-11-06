@@ -2,6 +2,7 @@ FROM rust:1.99.1-slim-bookworm@sha256:ed2c95ca377d6571b124b05e75e01207973ded639d
 WORKDIR /build
 COPY api/Cargo.toml api/Cargo.lock ./
 COPY api/src ./src
+COPY api/data ./data
 ENV CARGO_BUILD_JOBS=2
 RUN set -eu; \
     cargo vendor --locked --versioned-dirs /vendor > /tmp/vendor.toml; \
@@ -17,13 +18,14 @@ RUN set -eu; \
     done < /tmp/dependencies); \
     cp -a "$(rustc --print sysroot)/share/doc/rust" /out/licenses/rust; \
     cp Cargo.lock /out/licenses/Cargo.lock; \
+    cp data/domains.json /out/licenses/domain-data.json; \
     nice -n 15 cargo build --release --frozen --config /tmp/vendor.toml; \
     cp target/release/openfingerprint-api /out/openfingerprint-api
 COPY LICENSE /out/licenses/openfingerprint-api/LICENSE
 
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 LABEL org.opencontainers.image.source="https://github.com/Mokto/openfingerprint" \
-      org.opencontainers.image.description="Experimental stateless OpenFingerprint profile verifier" \
+      org.opencontainers.image.description="Stateless browser verification and open-data domain checks" \
       org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 COPY --from=build /out/openfingerprint-api /usr/local/bin/openfingerprint-api
