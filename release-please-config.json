@@ -16,7 +16,13 @@
       "component": "sdk",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "exclude-paths": ["api", "scripts/test-api.mjs", ".github/workflows/api-image.yml"]
+      "exclude-paths": [
+        "api",
+        "scripts/test-api.mjs",
+        ".github/workflows/api-image.yml",
+        "README.md",
+        "release-please-config.json"
+      ]
     }
   }
 }
