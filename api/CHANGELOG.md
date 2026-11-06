@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/Mokto/openfingerprint/compare/api-v0.5.0...api-v0.5.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **api:** stop repeating the instance label on the chart's Deployment and Service ([#20](https://github.com/Mokto/openfingerprint/issues/20)) ([6770758](https://github.com/Mokto/openfingerprint/commit/6770758402fdc2a34bc6cb3ba17cb02df7d2c273))
+
 ## [0.5.0](https://github.com/Mokto/openfingerprint/compare/api-v0.4.0...api-v0.5.0) (2026-11-06)
 
 
