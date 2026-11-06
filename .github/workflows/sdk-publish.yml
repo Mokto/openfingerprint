@@ -25,7 +25,7 @@ jobs:
           SDK_TAG: ${{ github.ref_name }}
         run: |
           node - <<'JS'
-          const { name, version, private: isPrivate } = require('./package.json');
+          const { name, version, private: isPrivate } = require('./sdk/package.json');
           if (name !== '@openfingerprint/sdk' || isPrivate || !/^\d+\.\d+\.\d+$/.test(version) || process.env.SDK_TAG !== `sdk-v${version}`)
             throw new Error('Tag must be sdk-v<version>, matching a public @openfingerprint/sdk package.json');
           require('fs').appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
@@ -38,7 +38,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm build
-      - run: pnpm exec playwright-core install --with-deps chromium firefox webkit
+      - run: pnpm --dir sdk exec playwright-core install --with-deps chromium firefox webkit
       - run: pnpm test
       - id: published
         env:
@@ -49,6 +49,7 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.published.outputs.exists != 'true'
+        working-directory: sdk
         run: |
           npm pack --dry-run --json > pack.json
           node - <<'JS'
@@ -64,4 +65,5 @@ jobs:
       - if: steps.published.outputs.exists != 'true'
         env:
           NODE_AUTH_TOKEN: ''
+        working-directory: sdk
         run: npm publish --access public

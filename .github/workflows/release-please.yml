@@ -41,8 +41,8 @@ jobs:
           API_TAG: ${{ steps.release.outputs['api--tag_name'] }}
         run: gh workflow run api-image.yml --repo "$GITHUB_REPOSITORY" --ref "$API_TAG"
       - name: Publish released SDK to npm
-        if: steps.release.outputs.release_created == 'true'
+        if: steps.release.outputs['sdk--release_created'] == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SDK_TAG: ${{ steps.release.outputs.tag_name }}
+          SDK_TAG: ${{ steps.release.outputs['sdk--tag_name'] }}
         run: gh workflow run sdk-publish.yml --repo "$GITHUB_REPOSITORY" --ref "$SDK_TAG"

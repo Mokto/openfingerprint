@@ -11,7 +11,7 @@ const { values } = parseArgs({
 		platform: { type: 'string' },
 		binary: {
 			type: 'string',
-			default: fileURLToPath(new URL('../api/target/debug/openfingerprint-api', import.meta.url))
+			default: fileURLToPath(new URL('./target/debug/openfingerprint-api', import.meta.url))
 		}
 	}
 });

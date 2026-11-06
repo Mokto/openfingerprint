@@ -248,7 +248,7 @@ Public before anonymous checks can pass.
 
 ```sh
 docker buildx build --load --provenance=false -f api/Dockerfile -t openfingerprint-api:check .
-node scripts/test-api.mjs --image openfingerprint-api:check
+node api/test.mjs --image openfingerprint-api:check
 ```
 
 For another architecture, add `--platform linux/amd64` or `--platform linux/arm64`

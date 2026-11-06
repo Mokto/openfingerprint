@@ -1,0 +1,49 @@
+{
+	"name": "@openfingerprint/sdk",
+	"version": "0.6.1",
+	"description": "A standalone browser signal collector for fraud-prevention experiments.",
+	"license": "MIT",
+	"author": "Théo Mathieu",
+	"type": "module",
+	"sideEffects": false,
+	"engines": {
+		"node": ">=24"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Mokto/openfingerprint.git",
+		"directory": "sdk"
+	},
+	"homepage": "https://github.com/Mokto/openfingerprint/tree/main/sdk#readme",
+	"bugs": {
+		"url": "https://github.com/Mokto/openfingerprint/issues"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/types/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"dist",
+		"LICENSE",
+		"THIRD-PARTY-NOTICES"
+	],
+	"scripts": {
+		"check": "tsc -p tsconfig.json --noEmit",
+		"build": "node build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
+		"test": "node test.mjs"
+	},
+	"devDependencies": {
+		"@fingerprintjs/fingerprintjs": "5.3.0",
+		"@thumbmarkjs/thumbmarkjs": "1.12.0",
+		"esbuild": "0.28.2",
+		"playwright-core": "1.64.1",
+		"typescript": "6.0.3",
+		"vite": "8.3.5"
+	}
+}

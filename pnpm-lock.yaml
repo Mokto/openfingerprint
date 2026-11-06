@@ -164,7 +164,9 @@ settings:
 
 importers:
 
-  .:
+  .: {}
+
+  sdk:
     devDependencies:
       '@fingerprintjs/fingerprintjs':
         specifier: 5.3.0

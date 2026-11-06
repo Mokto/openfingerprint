@@ -63,7 +63,7 @@ jobs:
             --label "org.opencontainers.image.version=$VERSION" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -f api/Dockerfile -t "$IMAGE:sha-$GITHUB_SHA-$ARCH" .
-          node scripts/test-api.mjs --image "$IMAGE:sha-$GITHUB_SHA-$ARCH"
+          node api/test.mjs --image "$IMAGE:sha-$GITHUB_SHA-$ARCH"
       - env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
