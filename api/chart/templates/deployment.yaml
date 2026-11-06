@@ -47,10 +47,6 @@ spec:
           env:
             - name: OPENFINGERPRINT_LISTEN_ADDR
               value: 0.0.0.0:8180
-            {{- if .Values.dns.enabled }}
-            - name: OPENFINGERPRINT_DNS
-              value: system
-            {{- end }}
             {{- if .Values.metrics.enabled }}
             - name: OPENFINGERPRINT_METRICS_ADDR
               value: "0.0.0.0:{{ .Values.metrics.port }}"

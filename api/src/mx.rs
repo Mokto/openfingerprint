@@ -38,15 +38,13 @@ pub struct Resolver {
 }
 
 impl Resolver {
-    pub fn from_env() -> Result<Option<Self>, &'static str> {
-        let Ok(value) = std::env::var("OPENFINGERPRINT_DNS") else {
-            return Ok(None);
-        };
+    pub fn from_env() -> Result<Self, &'static str> {
+        let value = std::env::var("OPENFINGERPRINT_DNS").unwrap_or_else(|_| "system".into());
         let resolv_conf = std::fs::read_to_string("/etc/resolv.conf").ok();
-        Self::configure(&value, resolv_conf.as_deref()).map(Some)
+        Self::new(&value, resolv_conf.as_deref())
     }
 
-    fn configure(value: &str, resolv_conf: Option<&str>) -> Result<Self, &'static str> {
+    pub fn new(value: &str, resolv_conf: Option<&str>) -> Result<Self, &'static str> {
         let server = if value == "system" {
             resolv_conf
                 .and_then(|conf| {
@@ -71,7 +69,7 @@ impl Resolver {
                 server,
                 counts: Default::default(),
             })
-            .ok_or("OPENFINGERPRINT_DNS must be system, an IP, IP:port or host:port")
+            .ok_or("No DNS server: set OPENFINGERPRINT_DNS to system, an IP, IP:port or host:port")
     }
 
     /// `domain` must already be a validated, lower-case hostname without a trailing dot.
@@ -363,7 +361,7 @@ mod tests {
     #[test]
     fn configures_one_nameserver() {
         let conf = "search svc.cluster.local\nnameserverx 10.0.0.1\nnameserver fe80::1%eth0\nnameserver 10.43.0.10\nnameserver 10.43.0.11";
-        let server = |value, conf| Resolver::configure(value, conf).map(|r| r.server.to_string());
+        let server = |value, conf| Resolver::new(value, conf).map(|r| r.server.to_string());
         assert_eq!(server("system", Some(conf)), Ok("10.43.0.10:53".into()));
         assert_eq!(server("192.0.2.53", None), Ok("192.0.2.53:53".into()));
         assert_eq!(
@@ -382,8 +380,7 @@ mod tests {
     #[tokio::test]
     async fn ignores_foreign_packets_and_bounds_silent_servers() {
         let server = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let resolver =
-            Resolver::configure(&server.local_addr().unwrap().to_string(), None).unwrap();
+        let resolver = Resolver::new(&server.local_addr().unwrap().to_string(), None).unwrap();
         let answer = async {
             let mut buf = [0; 512];
             let (n, peer) = server.recv_from(&mut buf).await.unwrap();

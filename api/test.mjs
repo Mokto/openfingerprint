@@ -51,6 +51,14 @@ sources.push(
 );
 if (mode !== 'missing') writeFileSync(dataPath, mode === 'invalid' ? '{}' : JSON.stringify({ version: 1, sources }), { mode: 0o644 });
 const dnsQueries = [];
+const mxAnswers = {
+    'dnsmx.example': [[20, 'mx.other.example'], [10, 'MX1.Mail.Example.']],
+    'mxmixed.example': [[10, 'aspmx.l.google.example'], [20, 'mx1.mail.example']],
+    'mxunlisted.example': [[10, 'mx.notmail.example']],
+    'mxself.example': [[10, 'mx.mxself.example']],
+    'mxdisputed.example': [[10, 'mx.disputed.mail.example']],
+    'mxallowed.example': [[10, 'mx1.mail.example'], [20, 'mx.good.mail.example']]
+};
 const dns = createSocket('udp4');
 const dnsName = name => Buffer.concat([...name.split('.').filter(Boolean).map(l => Buffer.concat([Buffer.from([l.length]), Buffer.from(l)])), Buffer.from([0])]);
 dns.on('message', (msg, peer) => {
@@ -71,7 +79,7 @@ dns.on('message', (msg, peer) => {
         });
         dns.send(Buffer.concat([header, msg.subarray(12, pos + 5), ...answers]), peer.port, peer.address);
     };
-    if (name === 'dnsmx.example') reply(0, [[20, 'mx.other.example'], [10, 'MX1.Mail.Example.']]);
+    if (mxAnswers[name]) reply(0, mxAnswers[name]);
     else if (name === 'dnsnx.example') reply(3);
     else if (name === 'dnsnull.example') reply(0, [[0, '.']]);
     else if (name === 'dnsfail.example') reply(2);
@@ -334,21 +342,13 @@ try {
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { signals: checkedProfile(signals()), domain: domainExpected(expected) });
     }
-    for (const [mx, expected] of [
-        [['MX1.Mail.Example.'], { disposable: true }], [['aspmx.l.google.example', 'mx1.mail.example'], { disposable: true }],
-        [['mx.notmail.example'], {}], [['mx.mxtest.example'], {}], [['mx.disputed.mail.example'], {}],
-        [['mx1.mail.example', 'mx.good.mail.example'], {}], [null, {}]
-    ]) {
-        const response = await request('/v1/check', authHeaders(sites[4]), { domain: 'mxtest.example', mx });
-        const want = domainExpected({ ...expected, ...(mx ? { mx_lookup: 'supplied' } : {}) });
-        if (mode === 'fresh' && expected.disposable) want.disposable.status = 'mx_listed';
-        assert.deepEqual(await response.json(), { domain: want });
-    }
-    console.log(`Domain facts, MX-provider inference, label boundaries, provenance, unknowns and browser isolation passed (${mode}).`);
+    console.log(`Domain facts, label boundaries, provenance, unknowns and browser isolation passed (${mode}).`);
 
-    phase = `server-side MX lookups (${mode})`;
+    phase = `MX lookups and MX-provider inference (${mode})`;
     for (const [domain, lookup, disposable] of [
-        ['dnsmx.example', 'resolved', true], ['dnsnx.example', 'no_domain'], ['dnsnull.example', 'no_records'],
+        ['dnsmx.example', 'resolved', true], ['mxmixed.example', 'resolved', true], ['mxunlisted.example', 'resolved'],
+        ['mxself.example', 'resolved'], ['mxdisputed.example', 'resolved'], ['mxallowed.example', 'resolved'],
+        ['dnsnx.example', 'no_domain'], ['dnsnull.example', 'no_records'],
         ['dnsfail.example', 'unavailable'], ['dnstrunc.example', 'unavailable'], ['dnsslow.example', 'unavailable'],
         ['dnsspoof.example', 'no_records']
     ]) {
@@ -359,18 +359,15 @@ try {
         if (mode === 'fresh' && disposable) want.disposable.status = 'mx_listed';
         assert.deepEqual(await response.json(), { domain: want });
     }
-    const supplied = await request('/v1/check', authHeaders(sites[9]), { domain: 'dnssupplied.example', mx: ['mx.other.example'] });
-    assert.equal((await supplied.json()).domain.mx_lookup, 'supplied');
     if (mode === 'fresh') {
         assert(dnsQueries.includes('example.test') && dnsQueries.includes('dnsmx.example'));
-        for (const decided of ['mail.example', 'child.mail.example', 'good.mail.example', 'disputed.mail.example', 'dnssupplied.example']) {
+        for (const decided of ['mail.example', 'child.mail.example', 'good.mail.example', 'disputed.mail.example']) {
             assert(!dnsQueries.includes(decided), 'Looked up a domain whose result MX hosts cannot change');
         }
-        assert.equal(dnsQueries.filter(name => name === 'mxtest.example').length, 1);
     } else {
         assert.deepEqual(dnsQueries, [], 'Looked up MX hosts without fresh domain data');
     }
-    console.log(`Server-side MX lookups, timeouts, spoofed replies and lookup skipping passed (${mode}).`);
+    console.log(`MX lookups, provider inference and its blockers, timeouts, spoofed replies and lookup skipping passed (${mode}).`);
 
     phase = 'independent field validation and bounded envelopes';
     for (const domain of ['', 'localhost', 'https://example.test', 'person@example.test', 'example.test:80', 'a..test', 'bücher.test', 'a'.repeat(64) + '.test', {}, 42]) {
@@ -382,18 +379,13 @@ try {
             signals: checkedProfile(signals()), domain: { status: 'invalid_input', reason: 'invalid_domain' }, ip: unknown
         });
     }
-    for (const mx of [[], 'mx.mail.example', ['bad host'], ['https://mx.mail.example'], Array(11).fill('mx.mail.example'), [42], {}]) {
-        const response = await request('/v1/check', authHeaders(sites[5]), { domain: 'example.test', mx, ip: '192.0.2.1' });
-        assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), { domain: { status: 'invalid_input', reason: 'invalid_mx' }, ip: unknown });
-    }
     for (const ip of ['', 'example.test', '192.0.2.1:80', '[2001:db8::1]', '192.0.2.0/24', 'fe80::1%eth0', [], true]) {
         const response = await request('/v1/check', authHeaders(sites[5]), { domain: 'example.test', ip });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { domain: domainExpected(), ip: { status: 'invalid_input', reason: 'invalid_ip' } });
     }
     for (const body of [{}, { signals: null, domain: null, ip: null }, [], null, 'not-json',
-        { mx: ['mx.mail.example'] }, { ip: '192.0.2.1', mx: ['mx.mail.example'] }, { domain: null, mx: ['mx.mail.example'] },
+        { mx: ['mx.mail.example'] }, { domain: 'example.test', mx: ['mx.mail.example'] },
         ...['email', 'visitor_token', 'account_id', 'userAgent', 'storageId'].map(k => ({ domain: 'example.test', [k]: 'unsolicited' }))]) {
         const response = await request('/v1/check', authHeaders(sites[5]), body);
         assert.equal(response.status, 400);
@@ -473,7 +465,7 @@ try {
     assert.equal(await metric('openfingerprint_domain_data_reload_failures_total'), 1);
     assert.equal(await reloadedValue(), true);
     assert.equal(await metric('openfingerprint_domain_data_loaded'), 1);
-    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), mode === 'fresh' ? 1 : 0);
+    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), mode === 'fresh' ? 6 : 0);
     console.log(`Snapshot reload, last-good retention and metrics passed (${mode}).`);
     phase = 'no request or credential logging';
     for (const sensitive of [
