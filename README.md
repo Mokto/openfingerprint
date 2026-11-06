@@ -1,13 +1,14 @@
 # OpenFingerprint
 
-A small browser-signal collector and an experimental Rust signup-check API for
-fraud-prevention experiments. **Both are MIT licensed.** The standalone TypeScript
-browser SDK has **zero runtime dependencies**.
+A small browser-signal collector and an experimental, stateless Rust profile
+verifier for fraud-prevention experiments. **Both are MIT licensed.** The
+standalone TypeScript browser SDK has **zero runtime dependencies**.
 
 The browser SDK makes no network requests and has no telemetry, remote code, WASM
 or import-time collection. Signals are hashed locally with Web Crypto. You choose
-whether and where to send results. The optional API receives those results and
-checks emails; it is not a production hosted service.
+whether and where to send results. The optional API verifies hashed results
+without storing visitors, emails, tokens or history. It is self-hosted, not a
+managed identification service.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Different
 devices can collide; settings, updates and missing signals can split repeat visits.
@@ -57,18 +58,21 @@ the package contents and publishes to npm. A version already on npm is skipped.
 ## Rust API (experimental)
 
 The independent Cargo package in [`api/`](api/README.md) receives schema-4 and
-schema-5 SDK results, issues short-lived signed visitor tokens, and performs authenticated
-email checks with customer-specific exact-profile history.
+schema-5 SDK results and checks their canonical hashes. Its only endpoints are
+`GET /health` and authenticated, server-only `POST /v1/verify`. It has no visitor
+store, observation tokens, email checks, DNS dependency or account history.
 
 ```sh
 pnpm api:check
 ```
 
 This runs Rust formatting, linting, unit tests and a loopback HTTP self-check.
-It needs Rust stable and Node 24+, but no database or cloud account. The API is
-single-process RAM only: restart loses state, and it must not be deployed as a
-production matcher. It reports other emails checked, not confirmed accounts.
-Read the [API guide](api/README.md) for configuration, security and limitations.
+It needs Rust stable and Node 24+, but no database or cloud account. Only
+configured server credential tags and per-customer quota counters are retained;
+request evidence is not persisted or logged. Your application owns any session or
+account association and its privacy/retention policy. This is not a Fingerprint
+Pro replacement or physical-device attestation. Read the [API guide](api/README.md)
+for configuration, rollout compatibility, security and limitations.
 The SDK's public API, identity schema and transport-free behavior are unchanged.
 
 ## Use
