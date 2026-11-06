@@ -41,8 +41,9 @@ quotas; use an edge/shared limiter for a deployment-wide quota. Both business
 routes share the same per-site quota, so the compatibility route cannot double it.
 
 The service works with outgoing traffic denied. A separate operator updater
-refreshes public snapshots without rebuilding the image; the API loads them at
-startup and must be restarted after refresh. Live DNS/RDAP would need a separately
+refreshes public snapshots without rebuilding the image; the API re-reads an
+override file every minute and swaps in a changed snapshot only if it is valid.
+Live DNS/RDAP would need a separately
 scoped lookup worker and an explicit network-policy decision, not silently reopened
 Internet access.
 There are no lookup retries, remote-provider waits or visitor-history fallbacks.
@@ -63,6 +64,8 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_SITES` | JSON array of 1–16 site configurations, each with `id` and `secret_key`. |
 | `OPENFINGERPRINT_LISTEN_ADDR` | Optional listener, default `127.0.0.1:8180`. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
+| `OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS` | Seconds between checks of the override file, 1–86400, default 60. A changed file that fails to read or parse is rejected and the last valid snapshot stays until its sources expire. |
+| `OPENFINGERPRINT_METRICS_ADDR` | Optional listener for Prometheus `GET /metrics`, for example `0.0.0.0:9180`. Keep it off the API port so network policy can expose it separately. |
 
 IDs are 1–64 ASCII characters, start with a letter and otherwise contain letters,
 digits, underscores or dots. Server keys are 32–128 URL-safe ASCII characters;
@@ -243,6 +246,29 @@ Use a background flow where missing/failed verification leaves the ID unknown,
 not blocked authentication. Applications may save a full ID and schema alongside
 their own authenticated session/account after privacy review. Compare only within
 the same customer and schema; never use a core-only or network-based fallback.
+
+## Metrics
+
+`/metrics` on `OPENFINGERPRINT_METRICS_ADDR` reports dataset health only, never
+requests, domains or credentials:
+
+| Metric | Meaning |
+| --- | --- |
+| `openfingerprint_domain_data_loaded` | 1 when a valid snapshot is loaded. |
+| `openfingerprint_domain_data_source_expiry_timestamp_seconds{source}` | When each source stops being used. |
+| `openfingerprint_domain_data_source_fetched_timestamp_seconds{source}` | When each source was fetched or reviewed. |
+| `openfingerprint_domain_data_source_entries{source}` | Listed domains per source. |
+| `openfingerprint_domain_data_loaded_timestamp_seconds` | When the current snapshot was loaded. |
+| `openfingerprint_domain_data_reload_failures_total` | Changed snapshot files that were rejected. |
+
+Alert on source expiry, not on `/health`: an expired source silently degrades
+domain checks to unknown while the process stays healthy.
+
+## Kubernetes
+
+The [Helm chart](chart/README.md), published to `oci://ghcr.io/mokto/charts/openfingerprint`
+with each API release, runs the API with no egress, refreshes the open snapshot
+into a ConfigMap with a CronJob and ships optional Prometheus alerts.
 
 ## Checks and containers
 

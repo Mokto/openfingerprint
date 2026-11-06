@@ -10,3 +10,4 @@
 !api/data/reviewed-free-subdomains.json
 !api/data/reviewed-domain-disputes.json
 !api/data/README.md
+!api/update-domain-data.mjs

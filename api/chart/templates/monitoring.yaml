@@ -1,0 +1,66 @@
+{{- $selector := printf "namespace=%q,service=%q" .Release.Namespace (include "of.name" .) }}
+{{- if and .Values.metrics.enabled .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "of.name" . }}
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "of.apiSelector" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+---
+{{- end }}
+{{- if and .Values.metrics.enabled .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "of.name" . }}
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: openfingerprint-domain-data
+      rules:
+        - alert: OpenFingerprintDomainDataUnavailable
+          expr: openfingerprint_domain_data_loaded{ {{- $selector -}} } == 0 or absent(openfingerprint_domain_data_loaded{ {{- $selector -}} })
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: OpenFingerprint has no valid domain snapshot
+            description: Domain checks return unknown. Check the {{ include "of.dataName" . }} CronJob and ConfigMap in {{ .Release.Namespace }}.
+        - alert: OpenFingerprintDomainSourceExpired
+          expr: openfingerprint_domain_data_source_expiry_timestamp_seconds{ {{- $selector -}} } <= time()
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: {{ `OpenFingerprint domain source {{ $labels.source }} expired` }}
+            description: The source no longer contributes to domain checks, which report it as stale.
+        - alert: OpenFingerprintDomainSourceExpiring
+          expr: openfingerprint_domain_data_source_expiry_timestamp_seconds{ {{- $selector -}} } - time() < {{ .Values.prometheusRule.expiryWarningDays }} * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `OpenFingerprint domain source {{ $labels.source }} expires in {{ $value | humanizeDuration }}` }}
+            description: Feed sources mean the refresh CronJob has failed repeatedly. Reviewed sources need a person to re-review their evidence and dates.
+        - alert: OpenFingerprintDomainDataReloadFailing
+          expr: increase(openfingerprint_domain_data_reload_failures_total{ {{- $selector -}} }[1h]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: OpenFingerprint rejected a changed domain snapshot
+            description: The API keeps serving its last valid snapshot until those sources expire.
+{{- end }}

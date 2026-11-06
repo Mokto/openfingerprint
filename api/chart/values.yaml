@@ -1,0 +1,75 @@
+image:
+  repository: ghcr.io/mokto/openfingerprint-api
+  # Defaults to the chart's appVersion.
+  tag: ""
+  # Published charts pin the release's multi-architecture manifest digest.
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Required: a Secret providing OPENFINGERPRINT_SITES (server credentials), loaded with envFrom.
+existingSecret: ""
+
+# The API keeps only per-process quota state; each replica has its own quota window.
+replicaCount: 1
+podAnnotations: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+service:
+  port: 80
+
+metrics:
+  # Serves /metrics on a separate port that the API's NetworkPolicy opens only to metricsFrom.
+  enabled: true
+  port: 9180
+
+serviceMonitor:
+  enabled: false
+  interval: 60s
+  labels: {}
+
+prometheusRule:
+  enabled: false
+  labels: {}
+  # Warn when any loaded source expires within this many days.
+  expiryWarningDays: 5
+
+domainData:
+  # Seconds between checks of the mounted snapshot; a changed, valid snapshot is swapped in.
+  reloadSeconds: 60
+  refresh:
+    # A CronJob publishes the open snapshot to the <release>-domain-data ConfigMap that the API
+    # mounts. When disabled, the API serves the snapshot bundled in its image, which expires.
+    enabled: true
+    # Feed sources expire 7 days after a refresh; refreshing often leaves days of margin.
+    schedule: "17 */6 * * *"
+    image:
+      repository: ghcr.io/mokto/openfingerprint-domain-updater
+      tag: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+
+networkPolicy:
+  enabled: true
+  # Required peers (NetworkPolicy "from" entries) allowed to call the API on its HTTP port.
+  apiFrom: []
+  # Peers allowed to scrape the metrics port, for example Prometheus.
+  metricsFrom: []
+  # The updater needs DNS, HTTPS to GitHub and the Kubernetes API (often 6443 behind the
+  # kubernetes Service). The API itself never initiates connections.
+  kubeApiServerPorts: [6443]

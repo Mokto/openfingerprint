@@ -28,6 +28,11 @@ for (const [path, type] of [['sdk', 'node'], ['api', 'rust']]) {
 	assert(workflow.includes(`if: steps.release.outputs['${path}--release_created'] == 'true'`));
 	assert(workflow.includes(`steps.release.outputs['${path}--tag_name']`));
 }
+assert.deepEqual(config.packages.api['extra-files'], [{ type: 'generic', path: 'chart/Chart.yaml' }]);
+const chart = await read('api/chart/Chart.yaml');
+assert.equal(/^version: (.+)$/m.exec(chart)?.[1], manifest.api);
+assert.equal(/^appVersion: "(.+)"$/m.exec(chart)?.[1], manifest.api);
+assert.match(chart, /# x-release-please-start-version\nversion: .+\nappVersion: .+\n# x-release-please-end/);
 assert(!workflow.includes('steps.release.outputs.release_created'));
 assert(!workflow.includes('steps.release.outputs.tag_name'));
 assert(publish.includes("require('./sdk/package.json')"));

@@ -1,6 +1,12 @@
 use std::{
     collections::HashSet,
+    fmt::Write as _,
     io::Read,
+    path::PathBuf,
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -93,21 +99,49 @@ impl DomainData {
         }
     }
 
-    pub fn from_env() -> Self {
-        // ponytail: load one bounded snapshot at startup; restart after refresh, add atomic reload if needed.
-        let bytes = match std::env::var_os("OPENFINGERPRINT_DOMAIN_DATA") {
-            Some(path) => {
-                let mut data = Vec::new();
-                match std::fs::File::open(path)
-                    .and_then(|f| f.take((MAX_BYTES + 1) as u64).read_to_end(&mut data))
-                {
-                    Ok(_) => data,
-                    Err(_) => return Self::unavailable("data_unavailable"),
-                }
+    fn load(bytes: Option<&[u8]>) -> Self {
+        match bytes {
+            None => Self::unavailable("data_unavailable"),
+            Some(bytes) => Self::parse(bytes).unwrap_or_else(|_| Self::unavailable("invalid_data")),
+        }
+    }
+
+    fn write_metrics(&self, out: &mut String) {
+        let _ = writeln!(
+            out,
+            "# HELP openfingerprint_domain_data_loaded Whether a valid domain snapshot is loaded.\n# TYPE openfingerprint_domain_data_loaded gauge\nopenfingerprint_domain_data_loaded {}",
+            u8::from(self.reason.is_none())
+        );
+        for (name, help, value) in [
+            (
+                "source_expiry_timestamp_seconds",
+                "When each loaded source stops being used.",
+                (|s: &Source| s.expires_at_unix) as fn(&Source) -> u64,
+            ),
+            (
+                "source_fetched_timestamp_seconds",
+                "When each loaded source was fetched or reviewed.",
+                |s| s.fetched_at_unix,
+            ),
+            (
+                "source_entries",
+                "Listed domains in each loaded source.",
+                |s| s.domains.len() as u64,
+            ),
+        ] {
+            let _ = writeln!(
+                out,
+                "# HELP openfingerprint_domain_data_{name} {help}\n# TYPE openfingerprint_domain_data_{name} gauge"
+            );
+            for s in &self.sources {
+                let _ = writeln!(
+                    out,
+                    "openfingerprint_domain_data_{name}{{source=\"{}\"}} {}",
+                    s.id,
+                    value(s)
+                );
             }
-            None => include_bytes!("../data/domains.json").to_vec(),
-        };
-        Self::parse(&bytes).unwrap_or_else(|_| Self::unavailable("invalid_data"))
+        }
     }
 
     fn parse(bytes: &[u8]) -> Result<Self, ()> {
@@ -183,10 +217,7 @@ impl DomainData {
             .strip_suffix('.')
             .unwrap_or(value)
             .to_ascii_lowercase();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        self.check_at(&normalized, now)
+        self.check_at(&normalized, now())
     }
 
     fn check_at(&self, domain: &str, now: u64) -> DomainCheck {
@@ -298,6 +329,110 @@ impl DomainData {
             sources,
         }
     }
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+fn read(path: &PathBuf) -> Option<Vec<u8>> {
+    let mut data = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take((MAX_BYTES + 1) as u64).read_to_end(&mut data))
+        .ok()?;
+    Some(data)
+}
+
+/// The loaded snapshot, swapped atomically when the override file changes and parses.
+pub struct DomainStore {
+    path: Option<PathBuf>,
+    current: RwLock<Arc<DomainData>>,
+    seen: Mutex<Option<Vec<u8>>>,
+    loaded_at: AtomicU64,
+    failures: AtomicU64,
+}
+
+impl DomainStore {
+    pub fn new(data: DomainData) -> Self {
+        let loaded = data.reason.is_none();
+        Self {
+            path: None,
+            current: RwLock::new(Arc::new(data)),
+            seen: Mutex::new(None),
+            loaded_at: AtomicU64::new(if loaded { now() } else { 0 }),
+            failures: AtomicU64::new(0),
+        }
+    }
+
+    pub fn from_env() -> Self {
+        let Some(path) = std::env::var_os("OPENFINGERPRINT_DOMAIN_DATA").map(PathBuf::from) else {
+            return Self::new(DomainData::load(Some(include_bytes!(
+                "../data/domains.json"
+            ))));
+        };
+        let bytes = read(&path);
+        let digest = bytes.as_deref().map(sha256);
+        let store = Self {
+            path: Some(path),
+            ..Self::new(DomainData::load(bytes.as_deref()))
+        };
+        *store.seen.lock().unwrap() = digest;
+        store
+    }
+
+    pub fn reloads(&self) -> bool {
+        self.path.is_some()
+    }
+
+    pub fn current(&self) -> Arc<DomainData> {
+        self.current.read().unwrap().clone()
+    }
+
+    /// Re-reads the override file. A changed file replaces the snapshot only if it
+    /// parses; otherwise the last valid snapshot stays until its sources expire.
+    pub fn reload(&self) {
+        let Some(path) = &self.path else { return };
+        let bytes = read(path);
+        let digest = bytes.as_deref().map(sha256);
+        {
+            let mut seen = self.seen.lock().unwrap();
+            if *seen == digest {
+                return;
+            }
+            seen.clone_from(&digest);
+        }
+        let data = DomainData::load(bytes.as_deref());
+        let mut current = self.current.write().unwrap();
+        if data.reason.is_none() {
+            *current = Arc::new(data);
+            self.loaded_at.store(now(), Ordering::Relaxed);
+        } else {
+            self.failures.fetch_add(1, Ordering::Relaxed);
+            if current.reason.is_some() {
+                *current = Arc::new(data);
+            }
+        }
+    }
+
+    pub fn metrics(&self) -> String {
+        let mut out = String::new();
+        self.current().write_metrics(&mut out);
+        let _ = writeln!(
+            out,
+            "# HELP openfingerprint_domain_data_loaded_timestamp_seconds When the current snapshot was loaded.\n# TYPE openfingerprint_domain_data_loaded_timestamp_seconds gauge\nopenfingerprint_domain_data_loaded_timestamp_seconds {}\n# HELP openfingerprint_domain_data_reload_failures_total Changed snapshot files that could not be read or parsed.\n# TYPE openfingerprint_domain_data_reload_failures_total counter\nopenfingerprint_domain_data_reload_failures_total {}",
+            self.loaded_at.load(Ordering::Relaxed),
+            self.failures.load(Ordering::Relaxed)
+        );
+        out
+    }
+}
+
+fn sha256(bytes: &[u8]) -> Vec<u8> {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .to_vec()
 }
 
 impl Source {
@@ -636,6 +771,66 @@ mod tests {
                 .free_subdomain
                 .value,
             Some(true)
+        );
+    }
+
+    #[test]
+    fn reload_swaps_valid_snapshots_and_keeps_the_last_good_one() {
+        let path = std::env::temp_dir().join(format!(
+            "openfingerprint-reload-{}-{}.json",
+            std::process::id(),
+            now()
+        ));
+        let snapshot = |domain: &str| {
+            serde_json::to_vec(
+                &serde_json::json!({"version":1,"sources":[source("disposable", &[domain])]}),
+            )
+            .unwrap()
+        };
+        let listed = |store: &DomainStore, domain| {
+            store
+                .current()
+                .check_at(domain, 1500)
+                .facts
+                .map(|f| f.disposable.value)
+        };
+        let store = DomainStore {
+            path: Some(path.clone()),
+            ..DomainStore::new(DomainData::load(read(&path).as_deref()))
+        };
+        assert_eq!(store.current().reason, Some("data_unavailable"));
+        store.reload();
+        assert_eq!(store.failures.load(Ordering::Relaxed), 0);
+        std::fs::write(&path, snapshot("first.example")).unwrap();
+        store.reload();
+        assert_eq!(listed(&store, "first.example"), Some(Some(true)));
+        std::fs::write(&path, b"{}").unwrap();
+        store.reload();
+        store.reload();
+        assert_eq!(store.failures.load(Ordering::Relaxed), 1);
+        assert_eq!(listed(&store, "first.example"), Some(Some(true)));
+        std::fs::write(&path, snapshot("second.example")).unwrap();
+        store.reload();
+        assert_eq!(listed(&store, "first.example"), Some(None));
+        assert_eq!(listed(&store, "second.example"), Some(Some(true)));
+        std::fs::remove_file(&path).unwrap();
+        store.reload();
+        assert_eq!(store.failures.load(Ordering::Relaxed), 2);
+        assert_eq!(listed(&store, "second.example"), Some(Some(true)));
+        let metrics = store.metrics();
+        for line in [
+            "openfingerprint_domain_data_loaded 1",
+            "openfingerprint_domain_data_source_expiry_timestamp_seconds{source=\"disposable\"} 2000",
+            "openfingerprint_domain_data_source_entries{source=\"disposable\"} 1",
+            "openfingerprint_domain_data_reload_failures_total 2",
+        ] {
+            assert!(metrics.lines().any(|l| l == line), "{line}");
+        }
+        assert!(
+            DomainStore::new(DomainData::unavailable("invalid_data"))
+                .metrics()
+                .lines()
+                .any(|l| l == "openfingerprint_domain_data_loaded 0")
         );
     }
 }

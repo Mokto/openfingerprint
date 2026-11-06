@@ -88,11 +88,28 @@ evidence before advancing them. Pending disputes continue to require review when
 overdue; stale namespace curation cannot produce a positive free-subdomain verdict.
 
 Mount the output read-only into the API and set `OPENFINGERPRINT_DOMAIN_DATA` to
-its in-container path. Restart the API after refresh: the bounded snapshot is
-loaded once at startup. No image rebuild is needed. Do not replace this public
-cache with visitor storage, put secrets in it, or grant the API Kubernetes access
-to restart itself. Without an override, the API uses its bundled snapshot, which
-has the same expiry policy and must also be refreshed when stale.
+its in-container path. The API checks the file every minute and swaps in a changed
+snapshot only after it parses; a broken file is rejected and counted in metrics
+while the last valid snapshot keeps serving until it expires. No restart or image
+rebuild is needed. Do not replace this public cache with visitor storage, put
+secrets in it, or grant the API Kubernetes access. Without an override, the API
+uses its bundled snapshot, which has the same expiry policy and must also be
+refreshed when stale.
+
+In Kubernetes, `node api/update-domain-data.mjs --configmap <name>` publishes the
+snapshot to a ConfigMap through the in-cluster API instead (the
+`ghcr.io/mokto/openfingerprint-domain-updater` image runs exactly this). The
+[chart](../chart/README.md) schedules it every six hours and mounts the ConfigMap
+into the API. ConfigMaps hold at most 1 MiB; today's snapshot is about 230 KB.
+
+The updater ignores any listing of a protected major mailbox or mail-infrastructure
+domain (for example `gmail.com` or `google.com`), its subdomains and its parents,
+and logs what it ignored. With MX inference, one such upstream mistake would accuse
+every domain whose mail those providers route.
+
+A weekly GitHub workflow proposes the refreshed bundled snapshot as a
+`chore(data)` pull request with per-source changes, so release images and
+self-hosters start from current data.
 
 A missing/malformed override produces unknown domain results, never a silent
 fallback to the bundled data. Browser verification remains available. `/health`
