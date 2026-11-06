@@ -30,6 +30,10 @@ jobs:
           set -euo pipefail
           git show HEAD:api/data/domains.json > /tmp/previous.json
           node api/update-domain-data.mjs 2>&1 | tee /tmp/update.log
+          if git diff --quiet; then
+            echo "Snapshot unchanged"
+            exit 0
+          fi
           today="$(date -u +%F)"
           branch="chore/domain-data-$today"
           if [ -n "$(gh pr list --head "$branch" --state all --json number --jq '.[]')" ]; then
