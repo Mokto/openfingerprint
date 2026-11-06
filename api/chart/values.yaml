@@ -42,12 +42,6 @@ prometheusRule:
   # Warn when any loaded source expires within this many days.
   expiryWarningDays: 5
 
-dns:
-  # Lets the API look up MX records itself (OPENFINGERPRINT_DNS=system: the pod's first resolv.conf
-  # nameserver) and opens egress to networkPolicy.dnsTo on UDP 53, nothing else. When disabled,
-  # the API makes no connections and callers may send MX hosts with each check.
-  enabled: false
-
 domainData:
   # Seconds between checks of the mounted snapshot; a changed, valid snapshot is swapped in.
   reloadSeconds: 60
@@ -78,7 +72,8 @@ networkPolicy:
   # The updater needs DNS, HTTPS to GitHub and the Kubernetes API (often 6443 behind the
   # kubernetes Service). The API itself never initiates connections.
   kubeApiServerPorts: [6443]
-  # DNS servers the API may query when dns.enabled; they must include the pod's nameserver.
+  # The API's only egress: MX lookups on UDP 53 through the pod's first resolv.conf nameserver,
+  # which these peers must include.
   dnsTo:
     - namespaceSelector:
         matchLabels:

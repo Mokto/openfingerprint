@@ -26,7 +26,6 @@ spec:
         - protocol: TCP
           port: {{ .Values.metrics.port }}
     {{- end }}
-  {{- if .Values.dns.enabled }}
   {{- if or (not (kindIs "slice" .Values.networkPolicy.dnsTo)) (empty .Values.networkPolicy.dnsTo) }}
   {{- fail "networkPolicy.dnsTo must list the DNS servers the API may query" }}
   {{- end }}
@@ -37,10 +36,6 @@ spec:
       ports:
         - protocol: UDP
           port: 53
-  {{- else }}
-  # The API never initiates connections, including DNS.
-  egress: []
-  {{- end }}
 {{- if .Values.domainData.refresh.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

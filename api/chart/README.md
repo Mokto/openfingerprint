@@ -18,7 +18,7 @@ API and updater image digests.
 | Resource | Purpose |
 | --- | --- |
 | Deployment and ClusterIP Service | The API on port 80 (container 8180) and, when enabled, metrics on 9180. No Ingress. |
-| NetworkPolicy `<release>-api` | Ingress only from `networkPolicy.apiFrom` (and `metricsFrom` on the metrics port). **No egress**, including DNS; with `dns.enabled`, only UDP 53 to `networkPolicy.dnsTo` (default: `kube-dns` pods in `kube-system`). |
+| NetworkPolicy `<release>-api` | Ingress only from `networkPolicy.apiFrom` (and `metricsFrom` on the metrics port). Egress only UDP 53 to `networkPolicy.dnsTo` (default: `kube-dns` pods in `kube-system`), for MX lookups. |
 | CronJob `<release>-domain-data` | Every six hours, fetches the pinned public sources and publishes the snapshot to the `<release>-domain-data` ConfigMap. |
 | ServiceAccount, Role, RoleBinding | Only the updater gets a token: it may create ConfigMaps and get/patch its own. Kubernetes cannot scope `create` to a name. |
 | NetworkPolicy `<release>-domain-data` | The updater accepts nothing; it may reach DNS, HTTPS and `kubeApiServerPorts`. |
@@ -38,11 +38,11 @@ which expires a week after that image's snapshot.
 
 ## MX lookups
 
-`dns.enabled=true` lets the API look up each checked domain's MX records through the
-pod's nameserver (`OPENFINGERPRINT_DNS=system`), so callers send only the domain.
-The API policy then allows UDP 53 to `networkPolicy.dnsTo` and nothing else. If
-your cluster uses NodeLocal DNSCache or another resolver, set `dnsTo` to match the
-pod's `/etc/resolv.conf` nameserver, or lookups report `unavailable`.
+The API looks up checked domains' MX records through the pod's nameserver, so
+callers send only the domain. Its policy allows UDP 53 to `networkPolicy.dnsTo` and
+nothing else. If your cluster uses NodeLocal DNSCache or another resolver, set
+`dnsTo` to match the pod's `/etc/resolv.conf` nameserver, or lookups report
+`unavailable`.
 `openfingerprint_mx_lookups_total{result}` counts outcomes.
 
 ## Alerts

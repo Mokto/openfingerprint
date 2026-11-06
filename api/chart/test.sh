@@ -42,7 +42,8 @@ check.call(service["spec"]["ports"] == [{"name" => "http", "port" => 80, "target
 check.call(docs.none? { |d| %w[Ingress IngressRoute].include?(d["kind"]) }, "No public ingress")
 policy = get.call("NetworkPolicy", "openfingerprint-api")["spec"]
 check.call(policy["podSelector"]["matchLabels"] == api_labels && policy["policyTypes"].sort == %w[Egress Ingress], "API policy isolates both directions")
-check.call(policy["egress"] == [], "API initiates no connections, including DNS")
+dns_peer = [{"namespaceSelector" => {"matchLabels" => {"kubernetes.io/metadata.name" => "kube-system"}}, "podSelector" => {"matchLabels" => {"k8s-app" => "kube-dns"}}}]
+check.call(policy["egress"] == [{"to" => dns_peer, "ports" => [{"protocol" => "UDP", "port" => 53}]}], "API egress is only MX lookups to cluster DNS on UDP 53")
 check.call(policy["ingress"].map { |r| r["ports"] } == [[{"protocol" => "TCP", "port" => 8180}], [{"protocol" => "TCP", "port" => 9180}]], "API and metrics ports only")
 check.call(policy["ingress"][0]["from"][0]["podSelector"] == {"matchLabels" => {"app.kubernetes.io/name" => "users"}}, "Configured API callers")
 cron = get.call("CronJob")
@@ -70,17 +71,7 @@ check.call(rules[2]["annotations"]["summary"].include?("{{ $labels.source }}"), 
 check.call(docs.all? { |d| d["metadata"]["namespace"].nil? || d["metadata"]["namespace"] == "openfingerprint" }, "No foreign namespaces")
 puts "Chart selectors, isolation, RBAC, refresh and monitoring checks passed."
 ' "$rendered"
-dns=$(render --set dns.enabled=true)
-ruby -ryaml -e '
-docs = YAML.load_stream(ARGF.read).compact
-api = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]["containers"].first
-abort("DNS mode must set OPENFINGERPRINT_DNS=system") unless api["env"].include?({"name" => "OPENFINGERPRINT_DNS", "value" => "system"})
-policy = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]
-dns_peer = [{"namespaceSelector" => {"matchLabels" => {"kubernetes.io/metadata.name" => "kube-system"}}, "podSelector" => {"matchLabels" => {"k8s-app" => "kube-dns"}}}]
-abort("DNS mode may only reach cluster DNS on UDP 53") unless policy["egress"] == [{"to" => dns_peer, "ports" => [{"protocol" => "UDP", "port" => 53}]}]
-' <<< "$dns"
-if render --set dns.enabled=true --set-json 'networkPolicy.dnsTo=[]' >/dev/null 2>&1; then echo "DNS mode without DNS peers must fail" >&2; exit 1; fi
-grep -q OPENFINGERPRINT_DNS < "$rendered" && { echo "DNS lookups must be opt-in" >&2; exit 1; }
+if render --set-json 'networkPolicy.dnsTo=[]' >/dev/null 2>&1; then echo "An empty DNS peer list must fail" >&2; exit 1; fi
 static=$(render --set domainData.refresh.enabled=false)
 grep -q 'kind: CronJob\|OPENFINGERPRINT_DOMAIN_DATA\|kind: Role' <<< "$static" && { echo "Disabled refresh must render no updater or override" >&2; exit 1; }
 for bad in "existingSecret=" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short"; do

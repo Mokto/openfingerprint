@@ -208,50 +208,24 @@ impl DomainData {
     }
 
     #[cfg(test)]
-    pub fn check(&self, value: serde_json::Value, mx: Option<serde_json::Value>) -> DomainCheck {
-        match self.input(value, mx) {
+    pub fn check(&self, value: serde_json::Value) -> DomainCheck {
+        match Self::input(value) {
             Err(invalid) => *invalid,
-            Ok((domain, Some(mx))) => self.check_with(&domain, &mx, "supplied"),
-            Ok((domain, None)) => self.check_with(&domain, &[], "not_checked"),
+            Ok(domain) => self.check_with(&domain, &[], "not_needed"),
         }
     }
 
-    /// Validates and normalizes the domain and any caller-supplied MX hosts.
-    pub fn input(
-        &self,
-        value: serde_json::Value,
-        mx: Option<serde_json::Value>,
-    ) -> Result<(String, Option<Vec<String>>), Box<DomainCheck>> {
-        let invalid = |reason| {
-            Box::new(DomainCheck {
+    /// Validates and normalizes a domain input.
+    pub fn input(value: serde_json::Value) -> Result<String, Box<DomainCheck>> {
+        match value.as_str().filter(|s| crate::check::domain(s)) {
+            Some(s) => Ok(s.strip_suffix('.').unwrap_or(s).to_ascii_lowercase()),
+            None => Err(Box::new(DomainCheck {
                 status: "invalid_input",
-                reason: Some(reason),
+                reason: Some("invalid_domain"),
                 facts: None,
                 mx_lookup: None,
-            })
-        };
-        let normalize = |s: &str| s.strip_suffix('.').unwrap_or(s).to_ascii_lowercase();
-        let Some(value) = value.as_str().filter(|s| crate::check::domain(s)) else {
-            return Err(invalid("invalid_domain"));
-        };
-        let mx = match mx {
-            None | Some(serde_json::Value::Null) => None,
-            Some(serde_json::Value::Array(hosts))
-                if (1..=10).contains(&hosts.len())
-                    && hosts
-                        .iter()
-                        .all(|h| h.as_str().is_some_and(crate::check::domain)) =>
-            {
-                Some(
-                    hosts
-                        .iter()
-                        .filter_map(|h| h.as_str().map(normalize))
-                        .collect(),
-                )
-            }
-            Some(_) => return Err(invalid("invalid_mx")),
-        };
-        Ok((normalize(value), mx))
+            })),
+        }
     }
 
     /// Whether MX hosts could change the result: only a fresh `not_listed` domain is inferred.
@@ -771,15 +745,6 @@ mod tests {
         assert_eq!((r.value, r.status), (Some(false), "allowlisted"));
         let r = fact("mail.example", &["mx1.temp.example"], 1500);
         assert_eq!((r.value, r.status), (None, "conflict"));
-        for invalid in [
-            serde_json::json!([]),
-            serde_json::json!("mx.temp.example"),
-            serde_json::json!(["bad host"]),
-            serde_json::json!(vec!["mx.temp.example"; 11]),
-        ] {
-            let r = d.check(serde_json::json!("new.test"), Some(invalid));
-            assert_eq!((r.status, r.reason), ("invalid_input", Some("invalid_mx")));
-        }
     }
 
     #[test]
