@@ -15,8 +15,10 @@ Domain intelligence runs locally against openly licensed, versioned snapshots:
 
 The domain snapshot is bundled and can be overridden with a refreshed local file.
 A valid input does not mean a domain is legitimate or an IP is clean. Unlisted or
-uncovered domains remain null, not false. IP intelligence, live MX/RDAP and domain
-authority are not implemented. The spam scope is specifically **referrer spam**,
+uncovered domains remain null, not false. MX hosts, looked up by the API when
+`OPENFINGERPRINT_DNS` is set or supplied by the caller, detect mail routed to a
+listed disposable provider.
+IP intelligence, RDAP and domain authority are not implemented. The spam scope is specifically **referrer spam**,
 not email-sending reputation. See [sources, licenses and refresh](data/README.md). Older API releases, including 0.4.0, have a different
 `/v1/check` contract; this guide describes the next release, not a live upgrade.
 
@@ -27,7 +29,8 @@ forged, and matching hashes can collide or change with settings and updates.
 ## Data minimization and networking
 
 There is no visitor database, observation cache, email processing, visitor token,
-account history, DNS lookup or outgoing provider request. Request evidence,
+account history or outgoing provider request. The only optional outbound traffic
+is one MX query per domain check when `OPENFINGERPRINT_DNS` is set. Request evidence,
 domains and IPs are dropped after processing and are not logged or persisted.
 Responses have `Cache-Control: no-store` and set no cookies. Domain/IP inputs are
 not echoed in responses. No browser/server IP is inferred from the connection or
@@ -43,9 +46,14 @@ routes share the same per-site quota, so the compatibility route cannot double i
 The service works with outgoing traffic denied. A separate operator updater
 refreshes public snapshots without rebuilding the image; the API re-reads an
 override file every minute and swaps in a changed snapshot only if it is valid.
-Live DNS/RDAP would need a separately
-scoped lookup worker and an explicit network-policy decision, not silently reopened
-Internet access.
+
+With `OPENFINGERPRINT_DNS`, a domain check whose result MX hosts could still change
+(a fresh `not_listed` domain without caller-supplied `mx`) sends one UDP MX query
+to one configured nameserver: a random transaction ID, a one-second limit, no
+retries, no TCP fallback and no cache in the API. Already-decided domains are never
+sent to DNS. The nameserver sees the domains you check; point it at a resolver you
+trust, such as the cluster DNS. Allow only that nameserver on UDP 53. RDAP and
+other live lookups are not implemented.
 There are no lookup retries, remote-provider waits or visitor-history fallbacks.
 
 The SDK is unchanged: it hashes signals locally, makes no network requests and
@@ -65,6 +73,7 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_LISTEN_ADDR` | Optional listener, default `127.0.0.1:8180`. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
 | `OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS` | Seconds between checks of the override file, 1–86400, default 60. A changed file that fails to read or parse is rejected and the last valid snapshot stays until its sources expire. |
+| `OPENFINGERPRINT_DNS` | Optional nameserver for MX lookups: `system` (the first `nameserver` in `/etc/resolv.conf`), an IP, `IP:port` or `host:port` (resolved once at startup). Unset: no lookups. Invalid values fail startup. |
 | `OPENFINGERPRINT_METRICS_ADDR` | Optional listener for Prometheus `GET /metrics`, for example `0.0.0.0:9180`. Keep it off the API port so network policy can expose it separately. |
 
 IDs are 1–64 ASCII characters, start with a letter and otherwise contain letters,
@@ -104,6 +113,7 @@ The JSON object accepts only these fields:
 | --- | --- |
 | `signals` | Optional SDK result object, as described below. |
 | `domain` | Optional ASCII hostname, not a URL or complete email address. |
+| `mx` | Optional array of 1–10 MX hostnames for `domain`, resolved by your backend; replaces the API's own lookup. Requires `domain`. Omit null MX (`.`) and lookup failures. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
 
 At least one non-null field is required. Null is equivalent to omission. Results
@@ -123,6 +133,29 @@ provider domains from an openly licensed feed; no vendor API results are importe
 license, revision, source-commit/retrieval/expiry times. For example, a confirmed
 list match yields `value: true, status: listed`; an ordinary non-match yields
 `value: null, status: not_listed`, not a clean verdict.
+
+With `mx`, an otherwise `not_listed` domain whose external MX host is on a fresh
+disposable source yields `value: true, status: mx_listed`, with that host's source
+statuses. Mail routed to a known disposable provider is strong evidence, but
+it is inferred, so you can treat it separately from a direct listing. MX hosts
+inside the queried domain are ignored. A disputed, allowlisted or conflicting
+MX host or parent domain blocks the inference; direct listings, allowlists and
+disputes always take precedence. Invalid `mx` values return
+`invalid_input/invalid_mx` for the domain section; `mx` without `domain` is HTTP
+400. MX hosts are never echoed. They describe mail routing at check time, not
+mailbox validation.
+
+Every valid domain section has `mx_lookup`, saying where MX hosts came from:
+
+| `mx_lookup` | Meaning |
+| --- | --- |
+| `supplied` | The caller sent `mx`; the API did no lookup. |
+| `resolved` | The API found MX hosts (up to 10, by preference). |
+| `no_records` | The domain exists but publishes no usable MX, including null MX. |
+| `no_domain` | NXDOMAIN. Undeliverable now, which is not proof of abuse. |
+| `unavailable` | Timeout, SERVFAIL, truncated or malformed answer. Unknown, not clean. |
+| `not_needed` | MX hosts could not change the result (already listed, allowlisted, disputed, or no fresh data), so nothing was sent to DNS. |
+| `not_checked` | No `mx` and `OPENFINGERPRINT_DNS` is unset. |
 
 Free-subdomain operator apexes yield false with `provider_domain`; strict children
 can match. Reviewed allowlist overrides yield false with `allowlisted`. Conflicting
@@ -180,7 +213,7 @@ Domains have at least two labels, each 1–63 ASCII letters/digits/hyphens, with
 leading/trailing hyphens. Maximum length is 253 characters excluding an optional
 single trailing dot; the final label must contain a letter. Case is accepted.
 Internationalized names must be supplied as ASCII A-labels; no Unicode conversion,
-IDNA decoding, DNS resolution or registrability check is performed. Dataset
+IDNA decoding, address resolution or registrability check is performed. Dataset
 matching does use Mozilla's Public Suffix List to protect registry/private-suffix
 boundaries; this does not turn lexical input acceptance into domain validation. Lexical acceptance is not domain existence or mailbox validation.
 
@@ -260,6 +293,7 @@ requests, domains or credentials:
 | `openfingerprint_domain_data_source_entries{source}` | Listed domains per source. |
 | `openfingerprint_domain_data_loaded_timestamp_seconds` | When the current snapshot was loaded. |
 | `openfingerprint_domain_data_reload_failures_total` | Changed snapshot files that were rejected. |
+| `openfingerprint_mx_lookups_total{result}` | API MX lookups by `mx_lookup` outcome, when `OPENFINGERPRINT_DNS` is set. |
 
 Alert on source expiry, not on `/health`: an expired source silently degrades
 domain checks to unknown while the process stays healthy.
@@ -267,7 +301,8 @@ domain checks to unknown while the process stays healthy.
 ## Kubernetes
 
 The [Helm chart](chart/README.md), published to `oci://ghcr.io/mokto/charts/openfingerprint`
-with each API release, runs the API with no egress, refreshes the open snapshot
+with each API release, runs the API with no egress (or only cluster DNS when
+`dns.enabled`), refreshes the open snapshot
 into a ConfigMap with a CronJob and ships optional Prometheus alerts.
 
 ## Checks and containers

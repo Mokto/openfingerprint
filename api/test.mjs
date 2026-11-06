@@ -3,6 +3,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { once } from 'node:events';
+import { createSocket } from 'node:dgram';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, chmodSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,7 +21,7 @@ const { values } = parseArgs({
 	}
 });
 const key = () => randomBytes(32).toString('hex');
-const sites = ['alpha', 'beta', 'quota', 'malformed', 'check', 'check_invalid', 'shared', 'invalid_signals', 'reload'].map((id) => ({
+const sites = ['alpha', 'beta', 'quota', 'malformed', 'check', 'check_invalid', 'shared', 'invalid_signals', 'reload', 'dns'].map((id) => ({
     id,
     secret_key: key(),
     ...(id === 'alpha' ? { site_key: key(), origins: ['https://alpha.test'] } : {})
@@ -49,6 +50,36 @@ sources.push(
     { ...sources[0], id: 'reviewed', category: 'disposable_review', domains: ['disputed.mail.example'], allowlist: [] }
 );
 if (mode !== 'missing') writeFileSync(dataPath, mode === 'invalid' ? '{}' : JSON.stringify({ version: 1, sources }), { mode: 0o644 });
+const dnsQueries = [];
+const dns = createSocket('udp4');
+const dnsName = name => Buffer.concat([...name.split('.').filter(Boolean).map(l => Buffer.concat([Buffer.from([l.length]), Buffer.from(l)])), Buffer.from([0])]);
+dns.on('message', (msg, peer) => {
+    let pos = 12;
+    const labels = [];
+    while (msg[pos]) { labels.push(msg.subarray(pos + 1, pos + 1 + msg[pos]).toString()); pos += msg[pos] + 1; }
+    const name = labels.join('.');
+    dnsQueries.push(name);
+    const reply = (rcode, records = [], { id = msg.readUInt16BE(0), flags = 0x8180 } = {}) => {
+        const header = Buffer.alloc(12);
+        header.writeUInt16BE(id, 0);
+        header.writeUInt16BE(flags | rcode, 2);
+        header.writeUInt16BE(1, 4);
+        header.writeUInt16BE(records.length, 6);
+        const answers = records.map(([preference, host]) => {
+            const data = Buffer.concat([Buffer.from([0, preference]), dnsName(host)]);
+            return Buffer.concat([Buffer.from([0xc0, 12, 0, 15, 0, 1, 0, 0, 0, 60, 0, data.length]), data]);
+        });
+        dns.send(Buffer.concat([header, msg.subarray(12, pos + 5), ...answers]), peer.port, peer.address);
+    };
+    if (name === 'dnsmx.example') reply(0, [[20, 'mx.other.example'], [10, 'MX1.Mail.Example.']]);
+    else if (name === 'dnsnx.example') reply(3);
+    else if (name === 'dnsnull.example') reply(0, [[0, '.']]);
+    else if (name === 'dnsfail.example') reply(2);
+    else if (name === 'dnstrunc.example') reply(0, [], { flags: 0x8380 });
+    else if (name === 'dnsspoof.example') { reply(0, [[10, 'mx1.mail.example']], { id: msg.readUInt16BE(0) ^ 0xffff }); reply(0); }
+    else if (name !== 'dnsslow.example') reply(0);
+});
+await new Promise(resolve => dns.bind(0, container ? '0.0.0.0' : '127.0.0.1', resolve));
 const args = container
 	? [
 			'run', '--rm', '--name', container, '--read-only', '--cap-drop=ALL',
@@ -58,6 +89,7 @@ const args = container
             '--env', 'OPENFINGERPRINT_METRICS_ADDR',
             '--env', 'OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS',
             '--env', 'OPENFINGERPRINT_DOMAIN_DATA',
+            '--env', 'OPENFINGERPRINT_DNS', '--add-host', 'dns.test:host-gateway',
             '--mount', `type=bind,src=${directory},dst=/domain-data,readonly`,
 			...(values.platform ? ['--platform', values.platform] : []),
 			values.image
@@ -71,7 +103,8 @@ const child = spawn(container ? 'docker' : values.binary, args, {
 		OPENFINGERPRINT_SITES: JSON.stringify(sites),
         OPENFINGERPRINT_DOMAIN_DATA: container ? '/domain-data/domains.json' : dataPath,
         OPENFINGERPRINT_METRICS_ADDR: container ? '0.0.0.0:9180' : '127.0.0.1:0',
-        OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS: '1'
+        OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS: '1',
+        OPENFINGERPRINT_DNS: `${container ? 'dns.test' : '127.0.0.1'}:${dns.address().port}`
 	},
 	stdio: ['ignore', 'pipe', 'pipe']
 });
@@ -160,6 +193,7 @@ function domainExpected(overrides = {}) {
         });
         result[field] = fact;
     }
+    result.mx_lookup = overrides.mx_lookup ?? (result.disposable.status === 'not_listed' ? 'no_records' : 'not_needed');
     return result;
 }
 try {
@@ -300,7 +334,43 @@ try {
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { signals: checkedProfile(signals()), domain: domainExpected(expected) });
     }
-    console.log(`Domain facts, label boundaries, provenance, unknowns and browser isolation passed (${mode}).`);
+    for (const [mx, expected] of [
+        [['MX1.Mail.Example.'], { disposable: true }], [['aspmx.l.google.example', 'mx1.mail.example'], { disposable: true }],
+        [['mx.notmail.example'], {}], [['mx.mxtest.example'], {}], [['mx.disputed.mail.example'], {}],
+        [['mx1.mail.example', 'mx.good.mail.example'], {}], [null, {}]
+    ]) {
+        const response = await request('/v1/check', authHeaders(sites[4]), { domain: 'mxtest.example', mx });
+        const want = domainExpected({ ...expected, ...(mx ? { mx_lookup: 'supplied' } : {}) });
+        if (mode === 'fresh' && expected.disposable) want.disposable.status = 'mx_listed';
+        assert.deepEqual(await response.json(), { domain: want });
+    }
+    console.log(`Domain facts, MX-provider inference, label boundaries, provenance, unknowns and browser isolation passed (${mode}).`);
+
+    phase = `server-side MX lookups (${mode})`;
+    for (const [domain, lookup, disposable] of [
+        ['dnsmx.example', 'resolved', true], ['dnsnx.example', 'no_domain'], ['dnsnull.example', 'no_records'],
+        ['dnsfail.example', 'unavailable'], ['dnstrunc.example', 'unavailable'], ['dnsslow.example', 'unavailable'],
+        ['dnsspoof.example', 'no_records']
+    ]) {
+        const started = Date.now();
+        const response = await request('/v1/check', authHeaders(sites[9]), { domain });
+        assert(Date.now() - started < 3000);
+        const want = domainExpected(mode === 'fresh' ? { mx_lookup: lookup, ...(disposable ? { disposable } : {}) } : {});
+        if (mode === 'fresh' && disposable) want.disposable.status = 'mx_listed';
+        assert.deepEqual(await response.json(), { domain: want });
+    }
+    const supplied = await request('/v1/check', authHeaders(sites[9]), { domain: 'dnssupplied.example', mx: ['mx.other.example'] });
+    assert.equal((await supplied.json()).domain.mx_lookup, 'supplied');
+    if (mode === 'fresh') {
+        assert(dnsQueries.includes('example.test') && dnsQueries.includes('dnsmx.example'));
+        for (const decided of ['mail.example', 'child.mail.example', 'good.mail.example', 'disputed.mail.example', 'dnssupplied.example']) {
+            assert(!dnsQueries.includes(decided), 'Looked up a domain whose result MX hosts cannot change');
+        }
+        assert.equal(dnsQueries.filter(name => name === 'mxtest.example').length, 1);
+    } else {
+        assert.deepEqual(dnsQueries, [], 'Looked up MX hosts without fresh domain data');
+    }
+    console.log(`Server-side MX lookups, timeouts, spoofed replies and lookup skipping passed (${mode}).`);
 
     phase = 'independent field validation and bounded envelopes';
     for (const domain of ['', 'localhost', 'https://example.test', 'person@example.test', 'example.test:80', 'a..test', 'bücher.test', 'a'.repeat(64) + '.test', {}, 42]) {
@@ -312,12 +382,18 @@ try {
             signals: checkedProfile(signals()), domain: { status: 'invalid_input', reason: 'invalid_domain' }, ip: unknown
         });
     }
+    for (const mx of [[], 'mx.mail.example', ['bad host'], ['https://mx.mail.example'], Array(11).fill('mx.mail.example'), [42], {}]) {
+        const response = await request('/v1/check', authHeaders(sites[5]), { domain: 'example.test', mx, ip: '192.0.2.1' });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { domain: { status: 'invalid_input', reason: 'invalid_mx' }, ip: unknown });
+    }
     for (const ip of ['', 'example.test', '192.0.2.1:80', '[2001:db8::1]', '192.0.2.0/24', 'fe80::1%eth0', [], true]) {
         const response = await request('/v1/check', authHeaders(sites[5]), { domain: 'example.test', ip });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { domain: domainExpected(), ip: { status: 'invalid_input', reason: 'invalid_ip' } });
     }
     for (const body of [{}, { signals: null, domain: null, ip: null }, [], null, 'not-json',
+        { mx: ['mx.mail.example'] }, { ip: '192.0.2.1', mx: ['mx.mail.example'] }, { domain: null, mx: ['mx.mail.example'] },
         ...['email', 'visitor_token', 'account_id', 'userAgent', 'storageId'].map(k => ({ domain: 'example.test', [k]: 'unsolicited' }))]) {
         const response = await request('/v1/check', authHeaders(sites[5]), body);
         assert.equal(response.status, 400);
@@ -425,13 +501,14 @@ try {
     assert.equal(await metric('openfingerprint_domain_data_reload_failures_total'), 1);
     assert.equal(await reloadedValue(), true);
     assert.equal(await metric('openfingerprint_domain_data_loaded'), 1);
+    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), mode === 'fresh' ? 1 : 0);
     console.log(`Snapshot reload, last-good retention and metrics passed (${mode}).`);
     phase = 'no request or credential logging';
     for (const sensitive of [
         ...sites.flatMap(site => [site.secret_key, site.site_key].filter(Boolean)),
         signals().fingerprint, signals('same', 'same', 5).fingerprint,
         signals().components.fontPreferences, 'unsolicited', 'ExAmPlE.test.', '2001:db8::1', '192.0.2.1',
-        'mail.example', 'disputed.mail.example', 'child.disputed.mail.example'
+        'mail.example', 'disputed.mail.example', 'child.disputed.mail.example', 'dnsmx.example', 'mx.other.example'
     ]) assert(!serverOutput.includes(sensitive));
     console.log('No request evidence, raw metadata or credentials appeared in server output.');
 	if (container) {
@@ -490,6 +567,7 @@ try {
 			})
 		]);
 	}
+    dns.close();
     rmSync(directory, { recursive: true, force: true });
 }
 

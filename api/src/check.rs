@@ -58,6 +58,7 @@ impl Rate {
 pub struct AppState {
     sites: Vec<Site>,
     pub domains: crate::domains::DomainStore,
+    pub dns: Option<crate::mx::Resolver>,
 }
 impl AppState {
     pub fn from_env() -> Result<Self, &'static str> {
@@ -65,6 +66,7 @@ impl AppState {
             .map_err(|_| "OPENFINGERPRINT_SITES is required")?;
         let mut state = Self::configure(&config)?;
         state.domains = crate::domains::DomainStore::from_env();
+        state.dns = crate::mx::Resolver::from_env()?;
         Ok(state)
     }
     fn configure(config: &str) -> Result<Self, &'static str> {
@@ -105,7 +107,30 @@ impl AppState {
             domains: crate::domains::DomainStore::new(crate::domains::DomainData::unavailable(
                 "not_configured",
             )),
+            dns: None,
         })
+    }
+    async fn check_domain(
+        &self,
+        value: serde_json::Value,
+        mx: Option<serde_json::Value>,
+    ) -> crate::domains::DomainCheck {
+        let data = self.domains.current();
+        let (domain, supplied) = match data.input(value, mx) {
+            Ok(input) => input,
+            Err(invalid) => return *invalid,
+        };
+        let (hosts, lookup) = match (supplied, &self.dns) {
+            (Some(hosts), _) => (hosts, "supplied"),
+            (None, None) => (Vec::new(), "not_checked"),
+            // Skipping lookups that cannot change the result also avoids sending those domains to DNS.
+            (None, Some(_)) if !data.needs_mx(&domain) => (Vec::new(), "not_needed"),
+            (None, Some(dns)) => match dns.mx(&domain).await {
+                crate::mx::Lookup::Hosts(hosts) => (hosts, "resolved"),
+                other => (Vec::new(), other.status()),
+            },
+        };
+        data.check_with(&domain, &hosts, lookup)
     }
     fn authorize(&self, headers: &HeaderMap) -> Result<(), ApiError> {
         let site = self.authenticate(headers)?;
@@ -251,6 +276,7 @@ struct Verified {
 struct CheckRequest {
     signals: Option<serde_json::Value>,
     domain: Option<serde_json::Value>,
+    mx: Option<serde_json::Value>,
     ip: Option<serde_json::Value>,
 }
 
@@ -396,14 +422,18 @@ pub async fn check(
     let Json(input) = Json::<CheckRequest>::from_request(request, &())
         .await
         .map_err(json_error)?;
-    if input.signals.is_none() && input.domain.is_none() && input.ip.is_none() {
+    if (input.signals.is_none() && input.domain.is_none() && input.ip.is_none())
+        || (input.mx.is_some() && input.domain.is_none())
+    {
         return Err(ApiError::invalid());
     }
+    let domain = match input.domain {
+        Some(value) => Some(state.check_domain(value, input.mx).await),
+        None => None,
+    };
     Ok(Json(CheckResponse {
         signals: input.signals.map(check_signals),
-        domain: input
-            .domain
-            .map(|value| state.domains.current().check(value)),
+        domain,
         ip: input.ip.map(check_ip),
     })
     .into_response())
@@ -687,9 +717,13 @@ mod tests {
             "xn--bcher-kva.example",
         ] {
             assert!(domain(valid));
-            let result =
-                serde_json::to_value(state().domains.current().check(serde_json::json!(valid)))
-                    .unwrap();
+            let result = serde_json::to_value(
+                state()
+                    .domains
+                    .current()
+                    .check(serde_json::json!(valid), None),
+            )
+            .unwrap();
             assert_eq!(result["status"], "unknown");
             assert_eq!(result["reason"], "not_configured");
         }
@@ -723,15 +757,20 @@ mod tests {
             "2001:db8::1",
         ] {
             assert!(!domain(invalid));
-            let result =
-                serde_json::to_value(state().domains.current().check(serde_json::json!(invalid)))
-                    .unwrap();
+            let result = serde_json::to_value(
+                state()
+                    .domains
+                    .current()
+                    .check(serde_json::json!(invalid), None),
+            )
+            .unwrap();
             assert_eq!(result["status"], "invalid_input");
             assert_eq!(result["reason"], "invalid_domain");
         }
         assert!(!domain(&format!("{}.example", "a".repeat(64))));
         let result =
-            serde_json::to_value(state().domains.current().check(serde_json::json!([]))).unwrap();
+            serde_json::to_value(state().domains.current().check(serde_json::json!([]), None))
+                .unwrap();
         assert_eq!(result["status"], "invalid_input");
     }
 
