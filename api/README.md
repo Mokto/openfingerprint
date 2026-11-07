@@ -292,6 +292,16 @@ With valid full SDK evidence, the `signals` section is:
 }
 ```
 
+`evidence.identity_groups` (omitted when empty) holds partial identity hashes
+for repeat-visit matching: `fonts`, `hardware`, `rendering` and `software`. Each
+is a domain-separated SHA-256 (`stealth-group:<name>:<schema>`) over the
+verified hashes of that group's probes, and appears only when every probe in
+the group is present and not excluded, so a missing probe never changes a
+group's value. Compare them when `fingerprint` differs: a browser update changes
+`software` but not `hardware` or `fonts`. Matching is the caller's decision; the
+API stores nothing, and agreement on one group is not proof of the same device.
+Groups are derived from the same inputs as the fingerprint, with no new SDK data.
+
 Counts describe the submitted, validated evidence, not entropy, probability,
 confidence, a risk score or honest probe execution. Included counts omit excluded
 probes. Unavailable and excluded counts are separate and may overlap.
