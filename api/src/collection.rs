@@ -51,23 +51,7 @@ pub struct Store {
     capacity: usize,
 }
 impl Store {
-    pub fn from_env() -> Result<Option<Self>, &'static str> {
-        let value = match std::env::var("OPENFINGERPRINT_REDIS_URL") {
-            Ok(value) => value,
-            Err(std::env::VarError::NotPresent) => return Ok(None),
-            Err(_) => return Err("Invalid OPENFINGERPRINT_REDIS_URL"),
-        };
-        let client = redis::Client::open(value).map_err(|_| "Invalid OPENFINGERPRINT_REDIS_URL")?;
-        if !matches!(
-            client.get_connection_info().addr(),
-            redis::ConnectionAddr::Tcp(..)
-                | redis::ConnectionAddr::TcpTls {
-                    insecure: false,
-                    ..
-                }
-        ) {
-            return Err("Invalid OPENFINGERPRINT_REDIS_URL");
-        }
+    pub fn from_env(client: redis::Client) -> Result<Self, &'static str> {
         let number = |name: &str, default: u64, max: u64| match std::env::var(name) {
             Err(std::env::VarError::NotPresent) => Ok(default),
             Ok(value) => value
@@ -77,11 +61,11 @@ impl Store {
                 .ok_or("Invalid collection limits"),
             Err(_) => Err("Invalid collection limits"),
         };
-        Ok(Some(Self {
+        Ok(Self {
             client,
             ttl_ms: number("OPENFINGERPRINT_COLLECTION_TTL_SECONDS", 120, 300)? * 1000,
             capacity: number("OPENFINGERPRINT_COLLECTION_CAPACITY", 1024, 100_000)? as usize,
-        }))
+        })
     }
     async fn run<T: FromRedisValue>(
         &self,

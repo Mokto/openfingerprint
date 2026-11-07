@@ -10,3 +10,8 @@ sources:
 version: 0.6.0
 appVersion: "0.6.0"
 # x-release-please-end
+dependencies:
+  - name: redis-ha
+    version: 4.39.0
+    repository: https://dandydeveloper.github.io/charts/
+    condition: redis-ha.enabled

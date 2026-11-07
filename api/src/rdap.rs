@@ -1,0 +1,516 @@
+use std::{
+    collections::HashMap,
+    fmt::Write as _,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
+
+use axum::{
+    body::Bytes,
+    http::{Request, header},
+};
+use http_body_util::{BodyExt, Empty, Limited};
+use hyper_rustls::HttpsConnector;
+use hyper_util::{
+    client::legacy::{Client, connect::HttpConnector},
+    rt::TokioExecutor,
+};
+use serde::Serialize;
+
+const TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_BODY: usize = 256 * 1024;
+const RESULTS: [&str; 5] = [
+    "found",
+    "no_date",
+    "not_found",
+    "unavailable",
+    "unsupported_tld",
+];
+
+#[derive(Debug, PartialEq, Serialize)]
+pub struct Registration {
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registered_at_unix: Option<u64>,
+}
+
+impl Registration {
+    pub fn status(status: &'static str) -> Self {
+        Self {
+            status,
+            registered_at_unix: None,
+        }
+    }
+}
+
+// One GET to the registry from the bundled IANA bootstrap: no redirects or retries. Through the
+// cache, each registered domain reaches its registry at most once per TTL while Redis is up.
+pub struct Rdap {
+    client: Client<HttpsConnector<HttpConnector>, Empty<Bytes>>,
+    servers: HashMap<String, String>,
+    counts: [AtomicU64; 5],
+    cache: crate::cache::Cache,
+}
+
+impl Rdap {
+    pub fn from_env(redis: redis::Client) -> Result<Self, &'static str> {
+        let cache = crate::cache::Cache::new(redis);
+        match std::env::var("OPENFINGERPRINT_RDAP_BOOTSTRAP") {
+            Ok(path) => Self::new(
+                &std::fs::read(path).map_err(|_| "Unreadable OPENFINGERPRINT_RDAP_BOOTSTRAP")?,
+                true,
+                cache,
+            ),
+            Err(_) => Self::new(include_bytes!("../data/rdap-dns.json"), false, cache),
+        }
+    }
+
+    /// `allow_http` exists for local test servers; the bundled bootstrap uses HTTPS only.
+    pub fn new(
+        bootstrap: &[u8],
+        allow_http: bool,
+        cache: crate::cache::Cache,
+    ) -> Result<Self, &'static str> {
+        let servers = parse_bootstrap(bootstrap, allow_http).ok_or("Invalid RDAP bootstrap")?;
+        let connector = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_webpki_roots()
+            .https_or_http()
+            .enable_http1()
+            .build();
+        Ok(Self {
+            client: Client::builder(TokioExecutor::new()).build(connector),
+            servers,
+            counts: Default::default(),
+            cache,
+        })
+    }
+
+    /// `domain` must already be a validated, lower-case hostname without a trailing dot.
+    pub async fn lookup(&self, domain: &str) -> Registration {
+        let Some((registrable, tld)) = registrable(domain) else {
+            return Registration::status("not_applicable");
+        };
+        let Some(base) = self.servers.get(tld) else {
+            self.counts[4].fetch_add(1, Ordering::Relaxed);
+            return Registration::status("unsupported_tld");
+        };
+        // Hashed so a cache dump does not list checked domains in clear text.
+        let key = format!(
+            "openfingerprint:rdap:v1:{}",
+            crate::check::sha256(registrable)
+        );
+        if let Some(cached) = self.cache.get(&key).await.and_then(|v| decode(&v)) {
+            return cached;
+        }
+        let result =
+            tokio::time::timeout(TIMEOUT, self.fetch(&format!("{base}domain/{registrable}")))
+                .await
+                .unwrap_or(Registration::status("unavailable"));
+        if let Some(i) = RESULTS.iter().position(|s| *s == result.status) {
+            self.counts[i].fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some((value, ttl)) = encode(&result) {
+            self.cache.set(&key, &value, ttl).await;
+        }
+        result
+    }
+
+    async fn fetch(&self, url: &str) -> Registration {
+        let unavailable = Registration::status("unavailable");
+        let Ok(request) = Request::get(url)
+            .header(header::ACCEPT, "application/rdap+json")
+            .body(Empty::new())
+        else {
+            return unavailable;
+        };
+        let Ok(response) = self.client.request(request).await else {
+            return unavailable;
+        };
+        match response.status().as_u16() {
+            200 => {}
+            404 => return Registration::status("not_found"),
+            _ => return unavailable,
+        }
+        match Limited::new(response.into_body(), MAX_BODY).collect().await {
+            Ok(body) => parse_domain(&body.to_bytes(), url),
+            Err(_) => unavailable,
+        }
+    }
+
+    pub fn metrics(&self) -> String {
+        let mut out = self.cache.metrics();
+        out.push_str(
+            "# HELP openfingerprint_rdap_lookups_total RDAP registration lookups by outcome.\n# TYPE openfingerprint_rdap_lookups_total counter\n",
+        );
+        for (result, count) in RESULTS.iter().zip(&self.counts) {
+            let _ = writeln!(
+                out,
+                "openfingerprint_rdap_lookups_total{{result=\"{result}\"}} {}",
+                count.load(Ordering::Relaxed)
+            );
+        }
+        out
+    }
+}
+
+/// Cached answers: registration dates change only when a domain is re-registered; a domain
+/// that is not registered yet may be soon. Unavailable answers are never cached.
+fn encode(r: &Registration) -> Option<(String, u64)> {
+    match (r.status, r.registered_at_unix) {
+        ("found", Some(at)) => Some((format!("found:{at}"), 86400)),
+        ("no_date", _) => Some(("no_date".into(), 86400)),
+        ("not_found", _) => Some(("not_found".into(), 3600)),
+        _ => None,
+    }
+}
+
+fn decode(value: &str) -> Option<Registration> {
+    match value {
+        "no_date" => Some(Registration::status("no_date")),
+        "not_found" => Some(Registration::status("not_found")),
+        _ => Some(Registration {
+            status: "found",
+            registered_at_unix: Some(value.strip_prefix("found:")?.parse().ok()?),
+        }),
+    }
+}
+
+fn parse_bootstrap(bytes: &[u8], allow_http: bool) -> Option<HashMap<String, String>> {
+    #[derive(serde::Deserialize)]
+    struct Bootstrap {
+        services: Vec<(Vec<String>, Vec<String>)>,
+    }
+    let bootstrap: Bootstrap = serde_json::from_slice(bytes).ok()?;
+    let mut servers = HashMap::new();
+    for (tlds, urls) in bootstrap.services {
+        let Some(url) = urls
+            .iter()
+            .find(|u| u.starts_with("https://") || (allow_http && u.starts_with("http://")))
+        else {
+            continue;
+        };
+        let url = if url.ends_with('/') {
+            url.clone()
+        } else {
+            format!("{url}/")
+        };
+        for tld in tlds {
+            servers.insert(tld.to_ascii_lowercase(), url.clone());
+        }
+    }
+    (!servers.is_empty()).then_some(servers)
+}
+
+/// The domain registered under its ICANN public suffix, and its TLD. `None` for tenants of
+/// private namespaces (their registrable domain belongs to the namespace operator) and for
+/// public suffixes themselves.
+fn registrable(domain: &str) -> Option<(&str, &str)> {
+    let own = psl::suffix(domain.as_bytes())?;
+    if own.typ() == Some(psl::Type::Private) && own.as_bytes().len() < domain.len() {
+        return None;
+    }
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(domain.match_indices('.').map(|(i, _)| i + 1))
+        .collect();
+    let last = *starts.last()?;
+    let public = starts
+        .iter()
+        .position(|&start| {
+            let candidate = &domain[start..];
+            psl::suffix(candidate.as_bytes()).is_some_and(|s| {
+                s.as_bytes() == candidate.as_bytes() && s.typ() != Some(psl::Type::Private)
+            })
+        })
+        .unwrap_or(starts.len() - 1);
+    Some((
+        &domain[*starts.get(public.checked_sub(1)?)?..],
+        &domain[last..],
+    ))
+}
+
+fn parse_domain(body: &[u8], url: &str) -> Registration {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return Registration::status("unavailable");
+    };
+    let queried = url.rsplit('/').next().unwrap_or_default();
+    if value["objectClassName"] != "domain"
+        || value["ldhName"]
+            .as_str()
+            .is_some_and(|name| !name.trim_end_matches('.').eq_ignore_ascii_case(queried))
+    {
+        return Registration::status("unavailable");
+    }
+    let registered = value["events"].as_array().and_then(|events| {
+        events
+            .iter()
+            .find(|e| e["eventAction"] == "registration")
+            .and_then(|e| unix(e["eventDate"].as_str()?))
+    });
+    match registered {
+        Some(at) => Registration {
+            status: "found",
+            registered_at_unix: Some(at),
+        },
+        None => Registration::status("no_date"),
+    }
+}
+
+/// RFC 3339 date-time to Unix seconds.
+fn unix(s: &str) -> Option<u64> {
+    let b = s.as_bytes();
+    if b.len() < 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || !matches!(b[10], b'T' | b't')
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| {
+        s.get(r)
+            .filter(|t| t.bytes().all(|c| c.is_ascii_digit()))?
+            .parse::<i64>()
+            .ok()
+    };
+    let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (h, mi, se) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    let mut rest = &s[19..];
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let digits = fraction.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 {
+            return None;
+        }
+        rest = &fraction[digits..];
+    }
+    let offset = match rest.as_bytes() {
+        [b'Z' | b'z'] => 0,
+        [sign @ (b'+' | b'-'), _, _, b':', _, _] => {
+            let minutes = num(s.len() - 5..s.len() - 3)? * 60 + num(s.len() - 2..s.len())?;
+            if *sign == b'-' { -minutes } else { minutes }
+        }
+        _ => return None,
+    };
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 60 {
+        return None;
+    }
+    let y = if mo <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((mo + 9) % 12) + 2) / 5 + d - 1;
+    let days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+    u64::try_from(days * 86400 + h * 3600 + mi * 60 + se - offset * 60).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_rfc3339_instants() {
+        for (input, expected) in [
+            ("1970-01-01T00:00:00Z", Some(0)),
+            ("1995-08-14T04:00:00Z", Some(808372800)),
+            ("2014-03-20T12:59:17.0Z", Some(1395320357)),
+            ("2024-02-29T23:59:59.123456z", Some(1709251199)),
+            ("2026-11-06T22:00:00+01:00", Some(1793998800)),
+            ("2026-11-06T20:30:00-00:30", Some(1793998800)),
+            ("2026-11-06 21:00:00Z", None),
+            ("2026-13-06T21:00:00Z", None),
+            ("2026-11-06T21:00:00", None),
+            ("2026-11-06T21:00:00.Z", None),
+            ("2026-11-06T21:00:00+0100", None),
+            ("+026-11-06T21:00:00Z", None),
+            ("1969-12-31T23:59:59Z", None),
+            ("", None),
+        ] {
+            assert_eq!(unix(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn queries_the_icann_registrable_domain() {
+        for (domain, expected) in [
+            ("mail.example.com", Some(("example.com", "com"))),
+            ("example.com", Some(("example.com", "com"))),
+            ("a.b.bbc.co.uk", Some(("bbc.co.uk", "uk"))),
+            ("github.io", Some(("github.io", "io"))),
+            ("new.example", Some(("new.example", "example"))),
+            ("tenant.github.io", None),
+            ("co.uk", None),
+        ] {
+            assert_eq!(registrable(domain), expected, "{domain}");
+        }
+    }
+
+    #[test]
+    fn reads_only_the_registration_event_of_the_queried_domain() {
+        let url = "https://rdap.example/domain/example.com";
+        let body = |name: &str, events: &str| {
+            format!(r#"{{"objectClassName":"domain","ldhName":"{name}","events":{events}}}"#)
+        };
+        let events = r#"[{"eventAction":"expiration","eventDate":"2030-01-01T00:00:00Z"},{"eventAction":"registration","eventDate":"1995-08-14T04:00:00Z"}]"#;
+        assert_eq!(
+            parse_domain(body("EXAMPLE.COM.", events).as_bytes(), url),
+            Registration {
+                status: "found",
+                registered_at_unix: Some(808372800)
+            }
+        );
+        for (input, status) in [
+            (body("example.com", "[]"), "no_date"),
+            (
+                body(
+                    "example.com",
+                    r#"[{"eventAction":"registration","eventDate":"redacted"}]"#,
+                ),
+                "no_date",
+            ),
+            (body("other.com", events), "unavailable"),
+            (
+                r#"{"objectClassName":"entity","events":[]}"#.into(),
+                "unavailable",
+            ),
+            ("not json".into(), "unavailable"),
+        ] {
+            assert_eq!(parse_domain(input.as_bytes(), url).status, status);
+        }
+    }
+
+    #[test]
+    fn bootstrap_maps_tlds_to_https_servers() {
+        let bootstrap = br#"{"services":[[["COM","net"],["https://rdap.verisign.example/v1"]],[["plain"],["http://rdap.plain.example/"]]]}"#;
+        let servers = parse_bootstrap(bootstrap, false).unwrap();
+        assert_eq!(servers["com"], "https://rdap.verisign.example/v1/");
+        assert_eq!(servers["net"], "https://rdap.verisign.example/v1/");
+        assert!(!servers.contains_key("plain"));
+        assert!(
+            parse_bootstrap(bootstrap, true)
+                .unwrap()
+                .contains_key("plain")
+        );
+        assert!(parse_bootstrap(b"{}", false).is_none());
+        let bundled = parse_bootstrap(include_bytes!("../data/rdap-dns.json"), false).unwrap();
+        assert!(bundled.len() > 1000 && bundled.values().all(|u| u.starts_with("https://")));
+    }
+
+    #[tokio::test]
+    async fn fetches_bounded_responses_without_following_redirects() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let bootstrap = format!(r#"{{"services":[[["test"],["http://{addr}/rdap"]]]}}"#);
+        // A Redis that refuses connections: every lookup falls back to the registry.
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let down = closed.local_addr().unwrap().to_string();
+        drop(closed);
+        let rdap = Rdap::new(
+            bootstrap.as_bytes(),
+            true,
+            crate::cache::Cache::new(crate::cache::tests::client_for(&down)),
+        )
+        .unwrap();
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let served = requests.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                served.fetch_add(1, Ordering::Relaxed);
+                let mut buf = [0; 2048];
+                let n = stream.read(&mut buf).await.unwrap();
+                let request = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
+                let path = request
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned();
+                assert!(request.contains("accept: application/rdap+json"));
+                let (status, body) = match path.as_str() {
+                    "/rdap/domain/found.test" => ("200 OK", r#"{"objectClassName":"domain","ldhName":"found.test","events":[{"eventAction":"registration","eventDate":"2026-11-01T00:00:00Z"}]}"#.to_owned()),
+                    "/rdap/domain/huge.test" => ("200 OK", format!(r#"{{"objectClassName":"domain","pad":"{}"}}"#, "x".repeat(MAX_BODY))),
+                    "/rdap/domain/moved.test" => ("302 Found", String::new()),
+                    "/rdap/domain/broken.test" => ("503 Service Unavailable", String::new()),
+                    _ => ("404 Not Found", String::new()),
+                };
+                let _ = stream
+                    .write_all(format!("HTTP/1.1 {status}\r\nLocation: http://{addr}/rdap/domain/found.test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes())
+                    .await;
+            }
+        });
+        let found = rdap.lookup("mail.found.test").await;
+        assert_eq!(found.registered_at_unix, Some(1793491200));
+        for (domain, status) in [
+            ("missing.test", "not_found"),
+            ("huge.test", "unavailable"),
+            ("moved.test", "unavailable"),
+            ("broken.test", "unavailable"),
+            ("example.zz", "unsupported_tld"),
+        ] {
+            assert_eq!(rdap.lookup(domain).await.status, status, "{domain}");
+        }
+        let metrics = rdap.metrics();
+        assert!(metrics.contains("result=\"found\"} 1"));
+        assert!(metrics.contains("result=\"unavailable\"} 3"));
+
+        let (redis, store) = crate::cache::tests::fake_redis(None).await;
+        let cached = Rdap::new(
+            bootstrap.as_bytes(),
+            true,
+            crate::cache::Cache::new(crate::cache::tests::client_for(&redis)),
+        )
+        .unwrap();
+        let before = requests.load(Ordering::Relaxed);
+        for domain in [
+            "found.test",
+            "www.found.test",
+            "missing.test",
+            "missing.test",
+            "broken.test",
+            "broken.test",
+        ] {
+            cached.lookup(domain).await;
+        }
+        assert_eq!(cached.lookup("found.test").await, found);
+        assert_eq!(
+            requests.load(Ordering::Relaxed) - before,
+            4,
+            "found and missing once, unavailable every time"
+        );
+        let store = store.lock().unwrap();
+        assert_eq!(store.len(), 2);
+        assert!(
+            store
+                .keys()
+                .all(|k| k.starts_with("openfingerprint:rdap:v1:") && !k.contains("test"))
+        );
+        let ttls: std::collections::BTreeSet<_> = store
+            .values()
+            .map(|(v, ttl)| (v.clone(), ttl.clone()))
+            .collect();
+        assert_eq!(
+            ttls,
+            [
+                ("found:1793491200".into(), "86400".into()),
+                ("not_found".into(), "3600".into())
+            ]
+            .into()
+        );
+    }
+
+    #[test]
+    fn cached_answers_round_trip() {
+        for r in [
+            Registration {
+                status: "found",
+                registered_at_unix: Some(808372800),
+            },
+            Registration::status("no_date"),
+            Registration::status("not_found"),
+        ] {
+            assert_eq!(decode(&encode(&r).unwrap().0), Some(r));
+        }
+        assert_eq!(encode(&Registration::status("unavailable")), None);
+        assert_eq!(decode("found:soon"), None);
+        assert_eq!(decode("garbage"), None);
+    }
+}

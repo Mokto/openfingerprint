@@ -1,5 +1,5 @@
 name: Domain data refresh
-# Proposes the refreshed bundled snapshot weekly. Deployments refresh their own data with the
+# Proposes the refreshed bundled snapshot and IANA RDAP bootstrap weekly. Deployments refresh their own data with the
 # chart's CronJob; this keeps the copy built into release images and used by self-hosters current.
 on:
   schedule:
@@ -30,6 +30,13 @@ jobs:
           set -euo pipefail
           git show HEAD:api/data/domains.json > /tmp/previous.json
           node api/update-domain-data.mjs 2>&1 | tee /tmp/update.log
+          curl -fsS --max-time 60 --max-filesize 1000000 https://data.iana.org/rdap/dns.json -o /tmp/rdap.json
+          # A truncated or reshaped bootstrap would silently drop registries; keep the previous one.
+          if node -e 'const d = JSON.parse(require("fs").readFileSync("/tmp/rdap.json", "utf8")); process.exit(d.services.flatMap(s => s[0]).length > 1000 ? 0 : 1)'; then
+            cp /tmp/rdap.json api/data/rdap-dns.json
+          else
+            echo "::warning::IANA RDAP bootstrap looks invalid; keeping the bundled copy"
+          fi
           if git diff --quiet; then
             echo "Snapshot unchanged"
             exit 0
@@ -67,6 +74,8 @@ jobs:
             echo '```'
             cat /tmp/update.log
             echo '```'
+            echo
+            echo "The IANA RDAP bootstrap (api/data/rdap-dns.json) is refreshed in the same commit when it changed."
             echo
             echo "Licenses are unchanged: the updater refuses changed source licenses. Reviewed sources keep their own review dates; renewing them needs a person to re-check the evidence."
           } > /tmp/body.md
