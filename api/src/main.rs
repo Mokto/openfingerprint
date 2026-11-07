@@ -5,6 +5,7 @@ mod collection;
 mod country;
 mod domains;
 mod email;
+mod grpc;
 mod mailauth;
 mod metrics;
 mod mx;
@@ -30,6 +31,7 @@ fn app(state: Arc<check::AppState>) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/v1/check", post(check::check))
+        .route(grpc::PATH, post(grpc::check))
         .route("/v1/verify", post(check::verify))
         .route("/v1/challenges", post(collection::challenge))
         .route("/v1/collect", post(collection::collect))

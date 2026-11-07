@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, chmodSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { connect } from 'node:http2';
 import { seal } from '../sdk/src/token.ts';
 
 const { values } = parseArgs({
@@ -503,6 +504,53 @@ try {
         fingerprint: null, invalid: ['signals', 'ip']
     });
     assert.deepEqual(await compactCall({ signals: signals(), domain: 'mail.example' }), { fingerprint: null, invalid: ['signals'], ...await compactCall({ domain: 'mail.example' }) });
+    const grpcCall = (fields, key = sites[4].secret_key) => new Promise((resolve, reject) => {
+        const session = connect(origin);
+        session.on('error', reject);
+        const stream = session.request({
+            ':method': 'POST', ':path': '/openfingerprint.v1.OpenFingerprint/Check',
+            'content-type': 'application/grpc', te: 'trailers', ...(key ? { authorization: `Bearer ${key}` } : {})
+        });
+        const message = Buffer.concat(Object.entries(fields).map(([tag, text]) => {
+            const value = Buffer.from(text);
+            const size = value.length < 128 ? [value.length] : [(value.length & 127) | 128, value.length >> 7];
+            return Buffer.concat([Buffer.from([(Number(tag) << 3) | 2, ...size]), value]);
+        }));
+        const frame = Buffer.alloc(5 + message.length);
+        frame.writeUInt32BE(message.length, 1);
+        message.copy(frame, 5);
+        const chunks = [];
+        let trailers;
+        stream.on('response', (headers) => { trailers = headers; });
+        stream.on('data', (chunk) => chunks.push(chunk));
+        stream.on('trailers', (t) => { trailers = { ...trailers, ...t }; });
+        stream.on('end', () => {
+            session.close();
+            const body = Buffer.concat(chunks).subarray(5);
+            const decoded = {};
+            for (let i = 0; i < body.length;) {
+                const tag = body[i] >> 3;
+                if ((body[i++] & 7) === 0) { decoded[tag] = body[i++] === 1; continue; }
+                const length = body[i++];
+                assert(length < 128);
+                const text = body.subarray(i, i + length).toString();
+                i += length;
+                decoded[tag] = tag === 14 ? [...(decoded[tag] ?? []), text] : text;
+            }
+            resolve({ status: Number(trailers?.['grpc-status'] ?? NaN), decoded });
+        });
+        stream.on('error', reject);
+        stream.end(frame);
+    });
+    const grpcResult = await grpcCall({ 1: seal({ ...signals(), automation: { version: 1, webdriver: true } }), 2: 'mail.example', 4: 'nope' });
+    assert.equal(grpcResult.status, 0);
+    assert.equal(grpcResult.decoded[1], shortId(signals().fingerprint));
+    assert.equal(grpcResult.decoded[2], true);
+    assert.equal(grpcResult.decoded[4], mode === 'fresh' ? true : undefined);
+    assert.equal(grpcResult.decoded[8], false);
+    assert.deepEqual(grpcResult.decoded[14], ['ip']);
+    assert.equal((await grpcCall({ 2: 'mail.example' }, null)).status, 16);
+    assert.equal((await grpcCall({}, sites[4].secret_key)).status, 3);
     console.log('All 15 input combinations, requested-only results, evidence counts and domain data state passed.');
     phase = `domain classification and source scope (${mode})`;
     for (const [domain, expected] of [

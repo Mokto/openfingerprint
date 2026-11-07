@@ -326,13 +326,13 @@ struct Verified {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CheckRequest {
-    automation: Option<serde_json::Value>,
-    signals: Option<serde_json::Value>,
-    domain: Option<serde_json::Value>,
-    email: Option<serde_json::Value>,
-    ip: Option<serde_json::Value>,
-    detail: Option<bool>,
+pub(crate) struct CheckRequest {
+    pub(crate) automation: Option<serde_json::Value>,
+    pub(crate) signals: Option<serde_json::Value>,
+    pub(crate) domain: Option<serde_json::Value>,
+    pub(crate) email: Option<serde_json::Value>,
+    pub(crate) ip: Option<serde_json::Value>,
+    pub(crate) detail: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -635,6 +635,13 @@ pub async fn check(
     let Json(input) = Json::<CheckRequest>::from_request(request, &())
         .await
         .map_err(json_error)?;
+    Ok(Json(evaluate(&state, input).await?).into_response())
+}
+
+pub(crate) async fn evaluate(
+    state: &AppState,
+    input: CheckRequest,
+) -> Result<serde_json::Value, ApiError> {
     let empty = input.automation.is_none()
         && input.signals.is_none()
         && input.domain.is_none()
@@ -682,7 +689,7 @@ pub async fn check(
     if input.detail != Some(true) {
         compact(&mut response);
     }
-    Ok(Json(response).into_response())
+    Ok(response)
 }
 
 pub(crate) fn json_error(error: axum::extract::rejection::JsonRejection) -> ApiError {
@@ -724,7 +731,7 @@ pub(crate) fn sha256(s: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn config() -> String {
@@ -745,7 +752,7 @@ mod tests {
         )
         .unwrap()
     }
-    fn state() -> AppState {
+    pub(crate) fn state() -> AppState {
         AppState::configure(&config(), dns(), rdap()).unwrap()
     }
     fn signals() -> Signals {
