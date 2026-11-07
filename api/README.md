@@ -76,8 +76,10 @@ creation date (DENIC for `.de`, EURid for `.eu`): those answer `no_date`. At mos
 four RDAP and two WHOIS requests run at once per server; others wait inside the
 same two-second budget, because bursts get throttled. The registry sees the
 registered domains you check, and its terms of use apply. Answers are cached in Redis for a day (an hour for `not_found`)
-under `openfingerprint:rdap:v1:<SHA-256 of the registered domain>`; unavailable
-answers are not cached. A slow or failing Redis (250 ms limit) only means asking the
+under `openfingerprint:rdap:v2:<SHA-256 of the registered domain>`; unavailable
+answers are not cached. Version 2 ignores older cached dates that may have been
+normalized from invalid calendar dates or timezone offsets; old keys expire
+without flushing Redis or touching collection state. A slow or failing Redis (250 ms limit) only means asking the
 registry. The cache holds public registry dates, not who asked. Tenants of private namespaces (`name.github.io`, a
 listed free-subdomain service) are not looked up: their registered domain belongs
 to the namespace operator. The API needs HTTPS and TCP 43 to public addresses for
@@ -361,13 +363,13 @@ No match yields null, never false or a residential/human verdict. The independen
 
 Fact statuses include `matched`, `not_listed`, `not_in_database`,
 `not_configured`, `invalid_data`, `stale_data`, `clock_skew` and
-`lookup_failed`. Each loaded source includes its license, attribution, immutable
+`lookup_failed` and `observation_time_unavailable`. Each loaded source includes its license, attribution, immutable
 revision/URL and updated/fetched/expiry timestamps. Failed refreshes never
 relabel old data as newly updated.
 
 | Source | Evidence and limitations | License | Maximum age |
 | --- | --- | --- | --- |
-| [Tor CollecTor exit lists](https://collector.torproject.org/recent/exit-lists/) | Recently measured exit addresses only, not relay listening addresses or proof of abuse. Observations older than 24 hours are discarded. Incomplete coverage, including IPv6; absence stays unknown. | [CC0](https://metrics.torproject.org/about.html) | 3 hours from the collected list timestamp. |
+| [Tor CollecTor exit lists](https://collector.torproject.org/recent/exit-lists/) | Recently measured exit addresses only, not relay listening addresses or proof of abuse. Each observation expires at 24 hours, even while its snapshot is fresh. Incomplete coverage, including IPv6; absence stays unknown. | [CC0](https://metrics.torproject.org/about.html) | 3 hours from the collected list timestamp. |
 | [Published cloud ranges](https://github.com/tobilg/public-cloud-provider-ip-ranges) | Source-labelled provider ranges, not a physical datacenter/device classifier. Includes shared/CDN infrastructure; not all hosting providers are covered. No organization-name or whole-ASN heuristics. | MIT; exact license pinned and retained in the manifest. | 7 days from the last commit changing the source data file. |
 | [DB-IP ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) | Monthly IPv4/IPv6 ASN number and organization, with reduced coverage/accuracy. ASN is not visitor identity, geolocation or hosting proof. | CC BY 4.0. | 45 days from the earlier of the release month and actual MMDB build time. |
 
@@ -395,6 +397,19 @@ nonzero so the job is observable. Invalid baselines are not silently discarded.
 An OS lock serializes writers and releases on process death; the empty `.lock`
 file remains intentionally. **Do not delete it while a writer may be running.**
 SIGTERM aborts downloads/validation and preserves the prior manifest.
+
+Tor snapshot entries are `{"ip":"8.8.8.8","observed_at_unix":<Unix seconds>}`;
+duplicate addresses keep their latest observation. Positive Tor facts carry
+`expires_at_unix`, bounded by both that observation's 24-hour window and the
+snapshot expiry. The API rechecks both limits on lookup and event consumption,
+without retaining the checked address in the event.
+
+Upgrade API readers before the network updater. Old bare-address Tor entries
+remain readable alongside other sources, but their matches are unknown with
+`observation_time_unavailable` until a refresh supplies timestamps. Already-stored
+Tor matches without a per-fact expiry likewise become unknown when consumed;
+other facts remain independent. Old API readers reject the new entry format and
+retain their last-good snapshot with its original expiry.
 
 The manifest and immutable `asn-<sha256>.mmdb` files must travel together.
 Old ASN versions are retained for safe readers/rollback; prune unreferenced
