@@ -594,7 +594,7 @@ CORS and preflight are deliberately unsupported.
 
 The collection body accepts only `challenge`, a full SDK `signals` object with
 valid embedded `automation`, and `context`:
-`{"userAgent": "<up to 512 UTF-8 bytes or null>", "platform": "<up to 128 bytes or null>"}`.
+`{"userAgent": "<up to 512 UTF-8 bytes or null>", "platform": "<up to 128 bytes or null>", "webrtc": {"addresses": ["<up to 8 IP literals>"]}}`.
 Context properties may be omitted; other metadata is rejected. The global 64 KiB
 body limit applies. Non-null `storageId` is still rejected. Origin must match
 the backend-issued challenge; cookies and Authorization are forbidden.
@@ -629,9 +629,16 @@ and `request`.
 The latter contains the matched `origin` and nullable request-UA
 `headless_user_agent` observation, never raw UA/platform strings or an inferred IP.
 
-`consistency` has `rule_version: 1`, `status`, `indicators` and
+`consistency` has `rule_version`, `status`, `indicators` and
 `unavailable_checks`. Check names are `user_agent_mismatch`,
-`headless_evidence_mismatch`, `platform_mismatch`. Status is `detected` for
+`headless_evidence_mismatch`, `platform_mismatch`. When the SDK sent
+`context.webrtc` (opt-in `webrtcStun`), `rule_version` is 2 and
+`webrtc_ip_mismatch` is added: the submitted public WebRTC addresses are compared
+with the request IP, on its address family only. A mismatch means none of the
+same-family addresses equals the request IP. The check is unknown when the request IP
+is not public or trusted, or no same-family address was submitted. Submitted
+addresses must be at most 8 IP literals, are never stored or returned, and a
+mismatch also occurs behind multi-egress NAT, so treat it as an indicator. Status is `detected` for
 any mismatch, `unknown` for incomplete checks without mismatches, otherwise
 `not_detected`. This is not a calibrated browser-tampering classifier.
 

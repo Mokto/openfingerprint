@@ -386,6 +386,16 @@ impl Store {
             }
         }
     }
+    pub fn client_address(
+        &self,
+        headers: &HeaderMap,
+        peer: Option<ConnectInfo<SocketAddr>>,
+    ) -> Option<IpAddr> {
+        self.client_ip(headers, peer.map(|p| p.0.ip()))
+            .ok()
+            .map(|(ip, _)| ip)
+            .filter(|ip| public(*ip))
+    }
     pub fn request_check(
         &self,
         headers: &HeaderMap,

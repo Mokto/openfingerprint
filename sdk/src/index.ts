@@ -629,10 +629,53 @@ export interface IdentifyOptions {
 	challenge: string;
 	timeoutMs?: number;
 	networkTimeoutMs?: number;
+	webrtcStun?: string;
+}
+
+const privateAddress =
+	/^(?:10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|::1$|f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/i;
+
+function webrtcAddresses(stun: string, timeoutMs: number): Promise<string[] | null> {
+	return new Promise((resolve) => {
+		if (typeof RTCPeerConnection === 'undefined') return resolve(null);
+		const found = new Set<string>();
+		let connection: RTCPeerConnection;
+		try {
+			connection = new RTCPeerConnection({ iceServers: [{ urls: stun }] });
+		} catch {
+			return resolve(null);
+		}
+		const finish = () => {
+			clearTimeout(timer);
+			try {
+				connection.close();
+			} catch {}
+			resolve([...found].slice(0, 8));
+		};
+		const timer = setTimeout(finish, timeoutMs);
+		connection.onicecandidate = (event) => {
+			if (!event.candidate) return finish();
+			const match = /^candidate:\S+ \d+ \w+ \d+ (\S+) \d+ typ (?:srflx|host)\b/.exec(
+				event.candidate.candidate
+			);
+			const address = match?.[1];
+			if (address && !address.endsWith('.local') && !privateAddress.test(address))
+				found.add(address);
+		};
+		try {
+			connection.createDataChannel('');
+			connection
+				.createOffer()
+				.then((offer) => connection.setLocalDescription(offer))
+				.catch(finish);
+		} catch {
+			finish();
+		}
+	});
 }
 
 export async function identify(options: IdentifyOptions): Promise<{ eventId: string }> {
-	const { endpoint, challenge, timeoutMs, networkTimeoutMs = 5000 } = options;
+	const { endpoint, challenge, timeoutMs, networkTimeoutMs = 5000, webrtcStun } = options;
 	if (typeof location === 'undefined') throw new Error('A browser context is required');
 	if (typeof endpoint !== 'string' || !endpoint.length)
 		throw new TypeError('endpoint is required');
@@ -645,6 +688,11 @@ export async function identify(options: IdentifyOptions): Promise<{ eventId: str
 		throw new TypeError('challenge must be a 64-character lowercase hexadecimal token');
 	if (!Number.isFinite(networkTimeoutMs) || networkTimeoutMs < 1 || networkTimeoutMs > 30000)
 		throw new RangeError('networkTimeoutMs must be between 1 and 30000');
+	if (
+		webrtcStun !== undefined &&
+		(typeof webrtcStun !== 'string' || !/^stuns?:[A-Za-z0-9.:[\]-]{1,200}$/.test(webrtcStun))
+	)
+		throw new TypeError('webrtcStun must be a stun: or stuns: URL without a path');
 	const text = (read: () => unknown, limit: number): string | null => {
 		try {
 			const value = read();
@@ -654,11 +702,15 @@ export async function identify(options: IdentifyOptions): Promise<{ eventId: str
 			return null;
 		}
 	};
+	const [signals, addresses] = await Promise.all([
+		collect({ timeoutMs }),
+		webrtcStun === undefined ? null : webrtcAddresses(webrtcStun, 2000)
+	]);
 	const context = {
 		userAgent: text(() => navigator.userAgent, 512),
-		platform: text(() => navigator.platform, 128)
+		platform: text(() => navigator.platform, 128),
+		...(addresses ? { webrtc: { addresses } } : {})
 	};
-	const signals = await collect({ timeoutMs });
 	const response = await fetch(url, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
