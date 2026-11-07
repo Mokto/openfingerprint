@@ -283,8 +283,14 @@ WEB.DE and mail.com, whose vanity catalogue (`email.com`, `usa.com`...) is cover
 In the Tranco top 20,000 this matched 25 domains, all shared consumer or ISP mail.
 Patterns that also serve organisations (Microsoft `mx.microsoft`, Yandex, Mail.ru)
 are deliberately not used. `relay` is true for reviewed forwarding-alias domains (Apple Hide My Email,
-DuckDuckGo, Firefox Relay, SimpleLogin, Proton Pass, addy.io, StartMail, AliasVault) and their subdomains: a real mailbox
-hides behind the address. Neither is a risk verdict.
+DuckDuckGo, Firefox Relay, SimpleLogin, Proton Pass, addy.io, StartMail, AliasVault, ManyMe, Bump,
+33mail, erine.email) and their subdomains: a real mailbox hides behind the address. An otherwise
+unlisted domain whose MX hosts all belong to one alias service's forwarding servers (SimpleLogin
+and Proton Pass `mx1/mx2.simplelogin.co`, addy.io `mail/mail2.anonaddy.me`) yields
+`value: true, status: mx_listed`: its own alias domains and its users' custom domains, whose
+every address is an alias. Generic forwarders that organisations use for their own domains
+(Cloudflare Email Routing, ImprovMX, Forward Email) are not relays; they appear in
+`mxProviders` with `type: forwarding`. Neither fact is a risk verdict.
 
 `suggestedDomain` suggests the public mailbox domain a registered domain was probably
 meant to be (`gmial.com` and `gmail.con` suggest `gmail.com`), or is null. It needs a

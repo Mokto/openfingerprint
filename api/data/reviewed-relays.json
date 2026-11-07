@@ -1,7 +1,7 @@
 {
   "license": "CC0-1.0",
-  "reviewed_at_unix": 1794043942,
-  "expires_at_unix": 1796635942,
+  "reviewed_at_unix": 1794081281,
+  "expires_at_unix": 1796673281,
   "entries": [
     {
       "domain": "4wrd.cc",
@@ -92,6 +92,26 @@
       "domain": "use.startmail.com",
       "evidence_url": "https://www.startmail.com/aliases",
       "evidence": "StartMail's alias page says personal and quick aliases end in @use.startmail.com and forward to the StartMail mailbox. At review, its MX routed to StartMail (mx1.startmail.com). Addresses on startmail.com itself are mailboxes and do not match."
+    },
+    {
+      "domain": "manyme.com",
+      "evidence_url": "https://manyme.com/",
+      "evidence": "ManyMe hands out @manyme.com alias addresses that forward to the owner's inbox. At review, its MX routed to inbound-smtp.us-east-1.amazonaws.com."
+    },
+    {
+      "domain": "erine.email",
+      "evidence_url": "https://erine.email/",
+      "evidence": "erine.email hands out @erine.email alias addresses that forward to the owner's inbox. At review, its MX routed to smtp-in.erine.email."
+    },
+    {
+      "domain": "bumpmail.io",
+      "evidence_url": "https://alias.email/help/what-is-email-alias",
+      "evidence": "Bump (alias.email) hands out @bumpmail.io alias addresses that forward to the owner's inbox. At review, its MX routed to mx.bump.email."
+    },
+    {
+      "domain": "33mail.com",
+      "evidence_url": "https://www.33mail.com/",
+      "evidence": "33mail hands out alias addresses at <username>.33mail.com that forward to the owner's inbox; aliases live on subdomains, which this entry covers. At review, a user subdomain's MX routed to 33mail (smtpv2.ec2.33mail.com)."
     }
   ]
 }
