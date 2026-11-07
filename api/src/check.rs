@@ -190,7 +190,44 @@ struct Profile<'a> {
     components: Vec<(&'a String, &'a String)>,
     hints: Vec<(&'a String, &'a String)>,
 }
+const GROUPS: [(&str, &[&str]); 4] = [
+    ("fonts", &["fontFallbacks", "fontPreferences", "fonts"]),
+    (
+        "hardware",
+        &["architecture", "display", "hardware", "screen"],
+    ),
+    ("rendering", &["audio", "canvas", "gpu"]),
+    (
+        "software",
+        &["browser", "features", "math", "media", "platform"],
+    ),
+];
+
 impl Signals {
+    fn identity_groups(&self) -> BTreeMap<&'static str, String> {
+        GROUPS
+            .iter()
+            .filter_map(|(group, members)| {
+                let entries = members
+                    .iter()
+                    .map(|m| {
+                        let m = *m;
+                        let hash = self.components.get(m).or_else(|| self.hints.get(m))?;
+                        (!self.excluded.iter().any(|e| e == m)).then_some((m, hash))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                let payload = serde_json::to_string(&entries).expect("string entries");
+                Some((
+                    *group,
+                    sha256(&format!(
+                        "stealth-group:{group}:{}\0{payload}",
+                        self.version
+                    )),
+                ))
+            })
+            .collect()
+    }
+
     fn verified(&self) -> Result<Verified, ApiError> {
         if !self.valid() {
             return Err(ApiError::invalid());
@@ -311,6 +348,8 @@ pub(crate) struct SignalCheck {
 
 #[derive(Serialize)]
 struct Evidence {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    identity_groups: BTreeMap<&'static str, String>,
     included_components: usize,
     included_hints: usize,
     unavailable_probes: usize,
@@ -321,11 +360,13 @@ pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
     if let Ok(signals) = serde_json::from_value::<Signals>(value)
         && let Ok(profile) = signals.verified()
     {
+        let identity_groups = signals.identity_groups();
         return SignalCheck {
             automation: signals.automation.map(crate::automation::check),
             profile,
             reason: None,
             evidence: Some(Evidence {
+                identity_groups,
                 included_components: signals
                     .components
                     .keys()
@@ -672,6 +713,32 @@ mod tests {
             assert_eq!(body["status"], "ok");
             assert!(body.get("components").is_none());
         }
+    }
+
+    #[test]
+    fn identity_groups_need_every_member_and_ignore_other_probes() {
+        let mut s = signals();
+        assert!(s.identity_groups().is_empty());
+        for m in ["audio", "canvas"] {
+            s.components.insert(m.into(), sha256(m));
+        }
+        s.hints.insert("gpu".into(), sha256("gpu"));
+        let groups = s.identity_groups();
+        assert_eq!(groups.keys().copied().collect::<Vec<_>>(), ["rendering"]);
+        let baseline = groups["rendering"].clone();
+
+        s.components
+            .insert("fontPreferences".into(), sha256("other"));
+        assert_eq!(s.identity_groups()["rendering"], baseline);
+
+        s.hints.insert("gpu".into(), sha256("other gpu"));
+        assert_ne!(s.identity_groups()["rendering"], baseline);
+
+        s.excluded = vec!["canvas".into()];
+        assert!(s.identity_groups().is_empty());
+        s.version = 5;
+        s.excluded.clear();
+        assert_ne!(s.identity_groups()["rendering"], baseline);
     }
 
     #[test]
