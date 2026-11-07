@@ -177,7 +177,7 @@ try {
     assert.deepEqual((await check(server, '::ffff:8.8.8.8')).ip, expected);
     assert.equal((await check(server, '2001:4860::8888')).ip.countryCode, 'SE');
     const compact = await check(server, '2001:4860::8888', { detail: false });
-    assert.equal(compact.ip.country, 'SE');
+    assert.equal(compact.ip.country, 'se');
     assert(!('countryCode' in compact.ip) && !('source' in compact.ip));
     assert.equal((await check(server, '2606:4700::1111')).ip.reason, 'not_found');
     for (const ip of ['127.0.0.1', '192.0.2.1', '10.0.0.1', '100.64.0.1', '::1', 'fe80::1', '2001:db8::1', '::ffff:10.0.0.1']) {

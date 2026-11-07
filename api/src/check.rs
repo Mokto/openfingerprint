@@ -454,19 +454,21 @@ fn bare(fact: &serde_json::Value) -> Option<serde_json::Value> {
         .then(|| fact.get("value").cloned())?
 }
 
-/// Default response: `signals` becomes a bare `fingerprint` (null unless fully
-/// verified) with its automation/tampering verdicts lifted next to it, facts
-/// become their values, and provenance and rule metadata are dropped.
+/// Default response: a short list of verdicts. `signals` becomes a bare
+/// `fingerprint` (null unless fully verified); everything else keeps only the
+/// facts to act on. Unknown facts are omitted, so a missing key means unknown.
 fn compact(response: &mut serde_json::Value) {
-    use serde_json::{Value, json};
+    use serde_json::{Map, Value, json};
     let Some(map) = response.as_object_mut() else {
         return;
     };
+    let failed = |v: &Value| {
+        (v["status"] == "invalid_input")
+            .then(|| json!({"status": "invalid_input", "reason": v["reason"]}))
+    };
+    let mut out = Map::new();
     if let Some(signals) = map.remove("signals") {
-        map.insert(
-            "fingerprint".into(),
-            signals.get("fingerprint").cloned().unwrap_or_default(),
-        );
+        out.insert("fingerprint".into(), signals["fingerprint"].clone());
         for key in ["automation", "tampering"] {
             if let Some(check) = signals.get(key) {
                 map.entry(key).or_insert_with(|| check.clone());
@@ -474,38 +476,74 @@ fn compact(response: &mut serde_json::Value) {
         }
     }
     for key in ["automation", "tampering"] {
-        if let Some(check) = map.get_mut(key).and_then(Value::as_object_mut) {
-            for field in [
-                "ruleVersion",
-                "rule_version",
-                "source",
-                "unavailableProbes",
-                "unavailable_probes",
-            ] {
-                check.remove(field);
-            }
+        if let Some(check) = map.remove(key) {
+            let detected = match check["status"].as_str() {
+                Some("detected") => json!({"detected": true, "indicators": check["indicators"]}),
+                Some("not_detected") => json!({"detected": false}),
+                Some("unknown") => json!({}),
+                _ => failed(&check).unwrap_or_else(|| json!({})),
+            };
+            out.insert(key.into(), detected);
         }
     }
-    if let Some(domain) = map.get_mut("domain").and_then(Value::as_object_mut) {
-        for fact in domain.values_mut() {
-            if let Some(value) = bare(fact) {
-                *fact = value;
+    let domain = map.remove("domain");
+    let email = map.remove("email");
+    if domain.is_some() || email.is_some() {
+        let mut verdicts = match &domain {
+            Some(d) if d["status"] != "ok" => failed(d).unwrap_or_else(|| json!({})),
+            Some(d) => {
+                let mut v = Map::new();
+                for (name, key) in [
+                    ("disposable", "disposable"),
+                    ("free", "publicMailbox"),
+                    ("spam", "spam"),
+                    ("relay", "relay"),
+                ] {
+                    if let Some(fact) = bare(&d[key]).filter(|f| !f.is_null()) {
+                        v.insert(name.into(), fact);
+                    }
+                }
+                match d["mxLookup"].as_str() {
+                    Some("resolved") => v.insert("mx".into(), json!(true)),
+                    Some("no_records" | "no_domain") => v.insert("mx".into(), json!(false)),
+                    _ => None,
+                };
+                Value::Object(v)
             }
-        }
-    }
-    if let Some(ip) = map.get_mut("ip") {
-        *ip = if ip["status"] == "invalid_input" {
-            json!({"status": "invalid_input", "reason": ip["reason"]})
-        } else {
-            let network: serde_json::Map<_, _> = ip["network"]
-                .as_object()
-                .into_iter()
-                .flatten()
-                .filter_map(|(key, fact)| Some((key.clone(), bare(fact)?)))
-                .collect();
-            json!({"country": ip["countryCode"], "network": network})
+            None => json!({}),
         };
+        if let Some(email) = &email {
+            match failed(email) {
+                Some(invalid) => verdicts = invalid,
+                None => {
+                    if let Some(role) = email.get("roleAccount").filter(|r| !r.is_null()) {
+                        verdicts["role"] = role.clone();
+                    }
+                }
+            }
+        }
+        out.insert(
+            if email.is_some() { "email" } else { "domain" }.into(),
+            verdicts,
+        );
     }
+    if let Some(ip) = map.remove("ip") {
+        let mut v = Map::new();
+        if let Some(invalid) = failed(&ip) {
+            v = invalid.as_object().cloned().unwrap_or_default();
+        } else {
+            if let Some(code) = ip["countryCode"].as_str() {
+                v.insert("country".into(), code.to_ascii_lowercase().into());
+            }
+            for key in ["vpn", "tor", "datacenter", "proxy"] {
+                if let Some(fact) = bare(&ip["network"][key]).filter(|f| !f.is_null()) {
+                    v.insert(key.into(), fact);
+                }
+            }
+        }
+        out.insert("ip".into(), Value::Object(v));
+    }
+    *response = Value::Object(out);
 }
 
 pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
@@ -937,27 +975,39 @@ mod tests {
         let mut response = serde_json::json!({
             "signals": {"status":"ok","fingerprint":"abc","evidence":{},
                 "automation":{"status":"detected","ruleVersion":2,"source":"client_reported","indicators":["webdriver"],"unavailableProbes":[]}},
+            "email": {"status":"checked","roleAccount":false},
             "domain": {"status":"ok","disposable":{"value":true,"status":"listed","scope":"s","sources":[]},
+                "spam":{"value":null,"status":"unknown"},
+                "publicMailbox":{"value":false,"status":"not_listed"},
                 "mxLookup":"resolved","registration":{"status":"found"}},
             "ip": {"status":"ok","countryCode":"DK","source":{},
-                "network":{"status":"ok","source":"x","tor":{"value":false,"status":"ok","source":null}}}
+                "network":{"status":"ok","source":"x","tor":{"value":false,"status":"ok","source":null},
+                    "vpn":{"value":null,"status":"unknown"},"asn":{"value":{"number":1},"status":"ok"}}}
         });
         compact(&mut response);
         assert_eq!(
             response,
             serde_json::json!({
                 "fingerprint":"abc",
-                "automation":{"status":"detected","indicators":["webdriver"]},
-                "domain":{"status":"ok","disposable":true,"mxLookup":"resolved","registration":{"status":"found"}},
-                "ip":{"country":"DK","network":{"tor":false}}
+                "automation":{"detected":true,"indicators":["webdriver"]},
+                "email":{"disposable":true,"free":false,"mx":true,"role":false},
+                "ip":{"country":"dk","tor":false}
             })
         );
-        let mut invalid =
-            serde_json::json!({"ip":{"status":"invalid_input","reason":"invalid_ip","network":{}}});
+        let mut domain = serde_json::json!({"domain":{"status":"ok","mxLookup":"no_domain"}});
+        compact(&mut domain);
+        assert_eq!(domain, serde_json::json!({"domain":{"mx":false}}));
+        let mut invalid = serde_json::json!({
+            "automation":{"status":"not_detected","indicators":[]},
+            "email":{"status":"invalid_input","reason":"invalid_email"},
+            "ip":{"status":"invalid_input","reason":"invalid_ip","network":{}}});
         compact(&mut invalid);
         assert_eq!(
             invalid,
-            serde_json::json!({"ip":{"status":"invalid_input","reason":"invalid_ip"}})
+            serde_json::json!({
+                "automation":{"detected":false},
+                "email":{"status":"invalid_input","reason":"invalid_email"},
+                "ip":{"status":"invalid_input","reason":"invalid_ip"}})
         );
     }
 

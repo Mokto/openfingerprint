@@ -493,11 +493,16 @@ try {
     assert.equal(compactResult.signals, undefined);
     assert.equal(compactResult.fingerprint, shortId(signals().fingerprint));
     assert.match(compactResult.fingerprint, /^[A-Za-z0-9_-]{21}$/);
-    assert.deepEqual(compactResult.automation, { status: 'detected', indicators: ['webdriver'] });
-    assert.equal(compactResult.domain.disposable, mode === 'fresh' ? true : null);
-    assert(Object.values(compactResult.domain).every(v => !(v && typeof v === 'object' && 'sources' in v)));
-    assert.deepEqual(Object.keys(compactResult.ip).sort(), ['country', 'network']);
-    assert.equal(compactResult.ip.country, null);
+    assert.deepEqual(compactResult.automation, { detected: true, indicators: ['webdriver'] });
+    assert.equal(compactResult.domain.disposable, mode === 'fresh' ? true : undefined);
+    assert.equal(compactResult.domain.mx, mode === 'fresh' ? false : undefined);
+    assert(Object.values(compactResult.domain).every(v => typeof v === 'boolean'));
+    assert.deepEqual(compactResult.ip, {});
+    const compactEmail = await compactCall({ email: 'Admin@mail.example', domain: undefined });
+    assert.equal(compactEmail.domain, undefined);
+    assert.equal(compactEmail.email.role, true);
+    assert.equal(compactEmail.email.mx, mode === 'fresh' ? false : undefined);
+    assert.deepEqual(await compactCall({ email: 'nope' }), { email: { status: 'invalid_input', reason: 'invalid_email' } });
     assert.deepEqual(await compactCall({ signals: 'not-a-token', ip: 'nope' }), {
         fingerprint: null, ip: { status: 'invalid_input', reason: 'invalid_ip' }
     });
