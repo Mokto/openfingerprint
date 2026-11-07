@@ -493,7 +493,7 @@ try {
     assert.equal(compactResult.signals, undefined);
     assert.equal(compactResult.fingerprint, shortId(signals().fingerprint));
     assert.match(compactResult.fingerprint, /^[A-Za-z0-9_-]{21}$/);
-    assert.deepEqual(compactResult.automation, { detected: true, indicators: ['webdriver'] });
+    assert.equal(compactResult.automation, true);
     assert.equal(compactResult.domain.disposable, mode === 'fresh' ? true : undefined);
     assert.equal(compactResult.domain.mx, mode === 'fresh' ? false : undefined);
     assert(Object.values(compactResult.domain).every(v => typeof v === 'boolean'));

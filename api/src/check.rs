@@ -478,9 +478,9 @@ fn compact(response: &mut serde_json::Value) {
     for key in ["automation", "tampering"] {
         if let Some(check) = map.remove(key) {
             let detected = match check["status"].as_str() {
-                Some("detected") => json!({"detected": true, "indicators": check["indicators"]}),
-                Some("not_detected") => json!({"detected": false}),
-                Some("unknown") => json!({}),
+                Some("detected") => json!(true),
+                Some("not_detected") => json!(false),
+                Some("unknown") => continue,
                 _ => failed(&check).unwrap_or_else(|| json!({})),
             };
             out.insert(key.into(), detected);
@@ -990,8 +990,8 @@ mod tests {
             response,
             serde_json::json!({
                 "fingerprint":"abc",
-                "automation":{"detected":true,"indicators":["webdriver"]},
-                "tampering":{"detected":true,"indicators":["canvas_readback_altered"]},
+                "automation":true,
+                "tampering":true,
                 "email":{"disposable":true,"free":false,"mx":true,"role":false},
                 "ip":{"country":"dk","tor":false}
             })
@@ -1007,7 +1007,7 @@ mod tests {
         assert_eq!(
             invalid,
             serde_json::json!({
-                "automation":{"detected":false},
+                "automation":false,
                 "email":{"status":"invalid_input","reason":"invalid_email"},
                 "ip":{"status":"invalid_input","reason":"invalid_ip"}})
         );

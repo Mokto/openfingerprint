@@ -172,7 +172,8 @@ By default the response is compact, a short list of verdicts:
 
 ```json
 {"fingerprint":"_AJUXF4ttBmXt1N1es89S",
- "automation":{"detected":true,"indicators":["webdriver"]},
+ "automation":true,
+ "tampering":false,
  "email":{"disposable":false,"free":true,"role":false,"mx":true},
  "ip":{"country":"us","vpn":false,"tor":false,"datacenter":false}}
 ```
@@ -183,7 +184,7 @@ A key that is missing means unknown, so there are no `null` facts. Only the
 | Key | Contents |
 | --- | --- |
 | `fingerprint` | From `signals`; `null` when the token is invalid or has no full ID (`detail: true` says which). |
-| `automation`, `tampering` | `detected: true` with `indicators`, or `detected: false`. Empty when the evidence is inconclusive. |
+| `automation`, `tampering` | `true` or `false`. Omitted when the evidence is inconclusive; the indicator list is only in `detail: true`. |
 | `email` / `domain` | Named after what you sent. `disposable`, `free` (public mailbox), `spam`, `relay`, `mx` (the domain has mail servers) and, for `email`, `role`. |
 | `ip` | `country` (lowercase ISO 3166-1 alpha-2) plus `vpn`, `tor`, `datacenter`, `proxy` when known. |
 
