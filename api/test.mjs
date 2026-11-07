@@ -66,26 +66,45 @@ const mxAnswers = {
     'yahoobiz.example': [[10, 'mx-biz.mail.am0.yahoodns.net']],
     'workspace.example': [[5, 'eu-smtp-inbound-1.mimecast.com'], [1, 'smtp.google.com'], [9, 'eu-smtp-inbound-2.mimecast.com']]
 };
+const bigSpf = `v=spf1 ${Array.from({ length: 40 }, (_, i) => `ip4:192.0.2.${i}`).join(' ')} -all`;
+const txtAnswers = {
+    'authmail.example': [['v=spf1 include:_spf.mail.example -all'], ['site-verification=abc']],
+    '_dmarc.authmail.example': [['v=DMARC1; p=reject; sp=quarantine; rua=mailto:d@authmail.example']],
+    'twospf.example': [['v=spf1 -all'], ['v=spf1 ~all']],
+    'badpolicy.example': [['v=spf1 -all']],
+    '_dmarc.badpolicy.example': [['v=DMARC1; p=sometimes']],
+    'bigtxt.example': [bigSpf.match(/.{1,255}/g), ...Array.from({ length: 4 }, (_, i) => [`verification-${i}=${'x'.repeat(240)}`])]
+};
+const txtQueries = [];
 const dns = createSocket('udp4');
 const dnsName = name => Buffer.concat([...name.split('.').filter(Boolean).map(l => Buffer.concat([Buffer.from([l.length]), Buffer.from(l)])), Buffer.from([0])]);
-dns.on('message', (msg, peer) => {
+// Answers one query; `send` gets the reply bytes. Over UDP, TXT sets above 512 bytes are truncated.
+function answerDns(msg, send, tcp = false) {
     let pos = 12;
     const labels = [];
     while (msg[pos]) { labels.push(msg.subarray(pos + 1, pos + 1 + msg[pos]).toString()); pos += msg[pos] + 1; }
     const name = labels.join('.');
-    dnsQueries.push(name);
-    const reply = (rcode, records = [], { id = msg.readUInt16BE(0), flags = 0x8180 } = {}) => {
+    const qtype = msg.readUInt16BE(pos + 1);
+    const reply = (rcode, records = [], { id = msg.readUInt16BE(0), flags = 0x8180, type = 15 } = {}) => {
         const header = Buffer.alloc(12);
         header.writeUInt16BE(id, 0);
         header.writeUInt16BE(flags | rcode, 2);
         header.writeUInt16BE(1, 4);
         header.writeUInt16BE(records.length, 6);
-        const answers = records.map(([preference, host]) => {
-            const data = Buffer.concat([Buffer.from([0, preference]), dnsName(host)]);
-            return Buffer.concat([Buffer.from([0xc0, 12, 0, 15, 0, 1, 0, 0, 0, 60, 0, data.length]), data]);
+        const answers = records.map(record => {
+            const data = type === 16 ? Buffer.concat(record.map(t => Buffer.concat([Buffer.from([t.length]), Buffer.from(t)]))) : Buffer.concat([Buffer.from([0, record[0]]), dnsName(record[1])]);
+            return Buffer.concat([Buffer.from([0xc0, 12, 0, type, 0, 1, 0, 0, 0, 60, data.length >> 8, data.length & 0xff]), data]);
         });
-        dns.send(Buffer.concat([header, msg.subarray(12, pos + 5), ...answers]), peer.port, peer.address);
+        send(Buffer.concat([header, msg.subarray(12, pos + 5), ...answers]));
     };
+    if (qtype === 16) {
+        txtQueries.push(`${tcp ? 'tcp:' : ''}${name}`);
+        const records = txtAnswers[name] ?? [];
+        if (!tcp && records.flat().join('').length > 512) reply(0, [], { flags: 0x8380, type: 16 });
+        else reply(0, records, { type: 16 });
+        return;
+    }
+    dnsQueries.push(name);
     if (name === 'dnsdrop.example' && !dnsQueries.slice(0, -1).includes(name)) return; // lose the first query
     if (mxAnswers[name]) reply(0, mxAnswers[name]);
     else if (name === 'dnsnx.example') reply(3);
@@ -94,8 +113,11 @@ dns.on('message', (msg, peer) => {
     else if (name === 'dnstrunc.example') reply(0, [], { flags: 0x8380 });
     else if (name === 'dnsspoof.example') { reply(0, [[10, 'mx1.mail.example']], { id: msg.readUInt16BE(0) ^ 0xffff }); reply(0); }
     else if (name !== 'dnsslow.example') reply(0);
-});
+}
+dns.on('message', (msg, peer) => answerDns(msg, out => dns.send(out, peer.port, peer.address)));
 await new Promise(resolve => dns.bind(0, container ? '0.0.0.0' : '127.0.0.1', resolve));
+const dnsTcp = createTcpServer(socket => socket.once('data', chunk => answerDns(chunk.subarray(2), out => socket.end(Buffer.concat([Buffer.from([out.length >> 8, out.length & 0xff]), out])), true)).on('error', () => {}));
+await new Promise(resolve => dnsTcp.listen(dns.address().port, container ? '0.0.0.0' : '127.0.0.1', resolve));
 const registered = '2026-11-01T00:00:00Z';
 const rdapRequests = [];
 const rdap = createServer((req, res) => {
@@ -266,6 +288,8 @@ function domainExpected(overrides = {}) {
     result.mx_lookup = overrides.mx_lookup ?? 'no_records';
     if (overrides.mx_providers) result.mx_providers = overrides.mx_providers;
     result.registration = overrides.registration ?? { status: 'not_found' };
+    result.spf = overrides.spf ?? { status: overrides.mx_lookup === 'not_needed' ? 'not_needed' : 'none' };
+    result.dmarc = overrides.dmarc ?? { status: overrides.mx_lookup === 'not_needed' ? 'not_needed' : 'none' };
     return result;
 }
 try {
@@ -493,6 +517,22 @@ try {
     }
     console.log(`Public mailboxes (exact and consumer MX), relays (with subdomains), typo suggestions and MX providers passed (${mode}).`);
 
+    phase = `SPF and DMARC (${mode})`;
+    for (const [domain, spf, dmarc] of [
+        ['authmail.example', { status: 'found' }, { status: 'found', policy: 'reject' }],
+        ['news.authmail.example', { status: 'none' }, { status: 'found', policy: 'quarantine', inherited: true }],
+        ['twospf.example', { status: 'multiple' }, { status: 'none' }],
+        ['badpolicy.example', { status: 'found' }, { status: 'invalid' }],
+        ['bigtxt.example', { status: 'found' }, { status: 'none' }]
+    ]) {
+        const body = await (await request('/v1/check', authHeaders(sites[9]), { domain })).json();
+        assert.deepEqual([body.domain.spf, body.domain.dmarc], [spf, dmarc], domain);
+    }
+    assert(txtQueries.includes('bigtxt.example') && txtQueries.includes('tcp:bigtxt.example'), 'Truncated TXT answers are repeated over TCP');
+    assert(txtQueries.includes('_dmarc.news.authmail.example') && txtQueries.includes('_dmarc.authmail.example'));
+    assert(!txtQueries.some(name => name.endsWith('co.uk')), 'Public suffixes are not sent to DNS');
+    console.log(`SPF and DMARC records, organisational-domain fallback and TCP for truncated answers passed (${mode}).`);
+
     phase = `RDAP registration dates (${mode})`;
     for (const [domain, registration] of [
         ['rdapfound.example', { status: 'found', registered_at_unix: Date.parse(registered) / 1000 }],
@@ -616,6 +656,8 @@ try {
     assert.equal(await metric('openfingerprint_domain_data_loaded'), 1);
     assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), 10);
     assert.equal(await metric('openfingerprint_whois_lookups_total{result="found"}'), 1);
+    assert.equal(await metric('openfingerprint_dns_tcp_queries_total'), 2, 'bigtxt (TXT) and dnstrunc (MX, truncated over TCP too)');
+    assert(await metric('openfingerprint_txt_lookups_total{result="resolved"}') >= 6);
     assert.equal(await metric('openfingerprint_rdap_lookups_total{result="found"}'), 1);
     assert(await metric('openfingerprint_rdap_cache_total{result="hit"}') >= 1);
     assert.equal(await metric('openfingerprint_rdap_cache_total{result="error"}'), 0);
@@ -688,6 +730,7 @@ try {
     rdap.closeAllConnections();
     rdap.close();
     redis.close();
+    dnsTcp.close();
     whois.close();
     rmSync(directory, { recursive: true, force: true });
 }

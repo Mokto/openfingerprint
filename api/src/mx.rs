@@ -6,10 +6,13 @@ use std::{
 };
 
 const TIMEOUT: Duration = Duration::from_secs(2);
+const MX: u8 = 15;
+const TXT: u8 = 16;
 // Resent once if unanswered; this fits inside the RDAP lookup that runs alongside.
 const RETRANSMIT: Duration = Duration::from_secs(1);
 const RESULTS: [&str; 4] = ["resolved", "no_records", "no_domain", "unavailable"];
 
+/// `Hosts` holds MX hosts by preference, or the strings of each TXT record.
 #[derive(Debug, PartialEq)]
 pub enum Lookup {
     Hosts(Vec<String>),
@@ -32,11 +35,13 @@ impl Lookup {
     }
 }
 
-// ponytail: one UDP query to one nameserver, resent once after a second, with no cache or TCP
-// fallback; a truncated answer is reported as unavailable. Add TCP if MX sets exceed 1232 bytes.
+// One UDP query to one nameserver, resent once after a second, and repeated over TCP only when
+// the answer is truncated (large TXT sets). No cache: the nameserver caches.
 pub struct Resolver {
     server: SocketAddr,
     counts: [AtomicU64; 4],
+    txt_counts: [AtomicU64; 4],
+    tcp: AtomicU64,
 }
 
 impl Resolver {
@@ -70,25 +75,36 @@ impl Resolver {
             .map(|server| Self {
                 server,
                 counts: Default::default(),
+                txt_counts: Default::default(),
+                tcp: AtomicU64::new(0),
             })
             .ok_or("No DNS server: set OPENFINGERPRINT_DNS to system, an IP, IP:port or host:port")
     }
 
     /// `domain` must already be a validated, lower-case hostname without a trailing dot.
     pub async fn mx(&self, domain: &str) -> Lookup {
-        let result = tokio::time::timeout(TIMEOUT, self.query(domain))
+        self.lookup(domain, MX, &self.counts).await
+    }
+
+    /// `name` must be a lower-case hostname without a trailing dot; labels may start with `_`.
+    pub async fn txt(&self, name: &str) -> Lookup {
+        self.lookup(name, TXT, &self.txt_counts).await
+    }
+
+    async fn lookup(&self, name: &str, qtype: u8, counts: &[AtomicU64; 4]) -> Lookup {
+        let result = tokio::time::timeout(TIMEOUT, self.query(name, qtype))
             .await
             .unwrap_or(Lookup::Unavailable);
-        self.counts[result.index()].fetch_add(1, Ordering::Relaxed);
+        counts[result.index()].fetch_add(1, Ordering::Relaxed);
         result
     }
 
-    async fn query(&self, domain: &str) -> Lookup {
+    async fn query(&self, domain: &str, qtype: u8) -> Lookup {
         let mut id = [0; 2];
         if ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut id).is_err() {
             return Lookup::Unavailable;
         }
-        let query = encode(u16::from_be_bytes(id), domain);
+        let query = encode(u16::from_be_bytes(id), domain, qtype);
         let bind = SocketAddr::new(
             if self.server.is_ipv4() {
                 IpAddr::V4(Ipv4Addr::UNSPECIFIED)
@@ -123,8 +139,33 @@ impl Resolver {
                 return Lookup::Unavailable;
             };
             if let Some(result) = parse(&buf[..n], &query) {
-                return result;
+                return if truncated(&buf[..n]) {
+                    self.tcp(&query).await
+                } else {
+                    result
+                };
             }
+        }
+    }
+
+    async fn tcp(&self, query: &[u8]) -> Lookup {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        self.tcp.fetch_add(1, Ordering::Relaxed);
+        let Ok(mut stream) = tokio::net::TcpStream::connect(self.server).await else {
+            return Lookup::Unavailable;
+        };
+        let framed = [&(query.len() as u16).to_be_bytes()[..], query].concat();
+        let mut len = [0; 2];
+        if stream.write_all(&framed).await.is_err() || stream.read_exact(&mut len).await.is_err() {
+            return Lookup::Unavailable;
+        }
+        let mut msg = vec![0; usize::from(u16::from_be_bytes(len))];
+        if stream.read_exact(&mut msg).await.is_err() {
+            return Lookup::Unavailable;
+        }
+        match parse(&msg, query) {
+            Some(result) if !truncated(&msg) => result,
+            _ => Lookup::Unavailable,
         }
     }
 
@@ -139,20 +180,33 @@ impl Resolver {
                 count.load(Ordering::Relaxed)
             );
         }
+        out.push_str("# HELP openfingerprint_txt_lookups_total TXT lookups for SPF and DMARC by outcome.\n# TYPE openfingerprint_txt_lookups_total counter\n");
+        for (result, count) in RESULTS.iter().zip(&self.txt_counts) {
+            let _ = writeln!(
+                out,
+                "openfingerprint_txt_lookups_total{{result=\"{result}\"}} {}",
+                count.load(Ordering::Relaxed)
+            );
+        }
+        let _ = writeln!(
+            out,
+            "# HELP openfingerprint_dns_tcp_queries_total Truncated DNS answers repeated over TCP.\n# TYPE openfingerprint_dns_tcp_queries_total counter\nopenfingerprint_dns_tcp_queries_total {}",
+            self.tcp.load(Ordering::Relaxed)
+        );
         out
     }
 }
 
 const OPT: [u8; 11] = [0, 0, 41, 0x04, 0xd0, 0, 0, 0, 0, 0, 0];
 
-fn encode(id: u16, domain: &str) -> Vec<u8> {
+fn encode(id: u16, domain: &str, qtype: u8) -> Vec<u8> {
     let mut query = id.to_be_bytes().to_vec();
     query.extend_from_slice(&[0x01, 0, 0, 1, 0, 0, 0, 0, 0, 1]);
     for label in domain.split('.') {
         query.push(label.len() as u8);
         query.extend_from_slice(label.as_bytes());
     }
-    query.extend_from_slice(&[0, 0, 15, 0, 1]);
+    query.extend_from_slice(&[0, 0, qtype, 0, 1]);
     query.extend_from_slice(&OPT);
     query
 }
@@ -169,11 +223,15 @@ fn parse(msg: &[u8], query: &[u8]) -> Option<Lookup> {
     {
         return None;
     }
-    Some(answers(msg, end).unwrap_or(Lookup::Unavailable))
+    Some(answers(msg, end, question[question.len() - 3]).unwrap_or(Lookup::Unavailable))
 }
 
-fn answers(msg: &[u8], mut pos: usize) -> Option<Lookup> {
-    if msg[2] & 0x7a != 0 {
+fn truncated(msg: &[u8]) -> bool {
+    msg[2] & 0x02 != 0
+}
+
+fn answers(msg: &[u8], mut pos: usize, qtype: u8) -> Option<Lookup> {
+    if msg[2] & 0x78 != 0 || truncated(msg) {
         return None;
     }
     match msg[3] & 0x0f {
@@ -188,7 +246,18 @@ fn answers(msg: &[u8], mut pos: usize) -> Option<Lookup> {
         let data = pos + 10;
         pos = data + usize::from(u16::from_be_bytes([fixed[8], fixed[9]]));
         let rdata = msg.get(data..pos)?;
-        if fixed[..4] == [0, 15, 0, 1] {
+        if qtype == TXT && fixed[..4] == [0, TXT, 0, 1] {
+            let mut text = Vec::new();
+            let mut i = 0;
+            while i < rdata.len() {
+                let len = usize::from(rdata[i]);
+                text.extend_from_slice(rdata.get(i + 1..i + 1 + len)?);
+                i += 1 + len;
+            }
+            if hosts.len() < 64 {
+                hosts.push((0, String::from_utf8_lossy(&text).into_owned()));
+            }
+        } else if qtype == MX && fixed[..4] == [0, MX, 0, 1] {
             let preference = u16::from_be_bytes([*rdata.first()?, *rdata.get(1)?]);
             let (host, end) = name(msg, data + 2)?;
             if end != pos {
@@ -202,8 +271,10 @@ fn answers(msg: &[u8], mut pos: usize) -> Option<Lookup> {
             }
         }
     }
-    hosts.sort_by_key(|(preference, _)| *preference);
-    hosts.truncate(10);
+    if qtype == MX {
+        hosts.sort_by_key(|(preference, _)| *preference);
+        hosts.truncate(10);
+    }
     Some(if hosts.is_empty() {
         Lookup::NoRecords
     } else {
@@ -276,7 +347,7 @@ mod tests {
 
     #[test]
     fn encodes_a_recursive_mx_question_with_edns() {
-        let query = encode(0xabcd, "mail.example");
+        let query = encode(0xabcd, "mail.example", MX);
         let mut expected = vec![0xab, 0xcd, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1];
         expected.extend_from_slice(b"\x04mail\x07example\x00\x00\x0f\x00\x01");
         expected.extend_from_slice(&OPT);
@@ -285,7 +356,7 @@ mod tests {
 
     #[test]
     fn parses_answers_conservatively() {
-        let query = encode(7, "new.example");
+        let query = encode(7, "new.example", MX);
         let ok = [0x81, 0x80];
         let parsed = parse(
             &reply(
@@ -350,7 +421,7 @@ mod tests {
         other_id[1] ^= 1;
         let mut not_reply = reply(&query, ok, &[]);
         not_reply[2] &= 0x7f;
-        let other_question = reply(&encode(7, "other.example"), ok, &[]);
+        let other_question = reply(&encode(7, "other.example", MX), ok, &[]);
         for ignored in [other_id, not_reply, other_question, query.clone(), vec![]] {
             assert_eq!(parse(&ignored, &query), None);
         }
@@ -441,6 +512,95 @@ mod tests {
         let metrics = resolver.metrics();
         assert!(metrics.contains("result=\"no_records\"} 1"));
         assert!(metrics.contains("result=\"unavailable\"} 1"));
+    }
+
+    fn txt_reply(query: &[u8], flags: [u8; 2], records: &[&[&str]]) -> Vec<u8> {
+        let question = &query[12..query.len() - OPT.len()];
+        let mut msg = query[..2].to_vec();
+        msg.extend_from_slice(&flags);
+        msg.extend_from_slice(&[0, 1, 0, records.len() as u8, 0, 0, 0, 0]);
+        msg.extend_from_slice(question);
+        for strings in records {
+            let data: Vec<u8> = strings
+                .iter()
+                .flat_map(|s| [&[s.len() as u8][..], s.as_bytes()].concat())
+                .collect();
+            msg.extend_from_slice(&[0xc0, 12, 0, TXT, 0, 1, 0, 0, 0, 60]);
+            msg.extend_from_slice(&(data.len() as u16).to_be_bytes());
+            msg.extend_from_slice(&data);
+        }
+        msg
+    }
+
+    #[test]
+    fn joins_txt_strings_and_ignores_other_record_types() {
+        let query = encode(9, "example.test", TXT);
+        let mut msg = txt_reply(&query, [0x81, 0x80], &[&["v=spf1 ", "-all"], &["other"]]);
+        assert_eq!(
+            parse(&msg, &query),
+            Some(Lookup::Hosts(vec!["v=spf1 -all".into(), "other".into()]))
+        );
+        assert_eq!(
+            parse(
+                &reply(&query, [0x81, 0x80], &[(10, "mx.example.test")]),
+                &query
+            ),
+            Some(Lookup::NoRecords)
+        );
+        msg[2] |= 0x02;
+        assert_eq!(parse(&msg, &query), Some(Lookup::Unavailable));
+        assert!(truncated(&msg));
+    }
+
+    #[tokio::test]
+    async fn repeats_truncated_answers_over_tcp() {
+        let (udp, tcp) = loop {
+            let udp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            if let Ok(tcp) = tokio::net::TcpListener::bind(udp.local_addr().unwrap()).await {
+                break (udp, tcp);
+            }
+        };
+        let resolver = Resolver::new(&udp.local_addr().unwrap().to_string(), None).unwrap();
+        let server = async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut buf = [0; 512];
+            let (n, peer) = udp.recv_from(&mut buf).await.unwrap();
+            udp.send_to(&txt_reply(&buf[..n], [0x83, 0x80], &[]), peer)
+                .await
+                .unwrap();
+            let (mut stream, _) = tcp.accept().await.unwrap();
+            let mut len = [0; 2];
+            stream.read_exact(&mut len).await.unwrap();
+            let mut query = vec![0; usize::from(u16::from_be_bytes(len))];
+            stream.read_exact(&mut query).await.unwrap();
+            let big = "x".repeat(250);
+            let answer = txt_reply(
+                &query,
+                [0x81, 0x80],
+                &[&[&big, &big, &big, &big, &big, &big]],
+            );
+            stream
+                .write_all(&(answer.len() as u16).to_be_bytes())
+                .await
+                .unwrap();
+            stream.write_all(&answer).await.unwrap();
+            std::future::pending::<()>().await;
+        };
+        let result = tokio::select! {
+            r = resolver.txt("big.example") => r,
+            _ = server => unreachable!(),
+        };
+        assert_eq!(result, Lookup::Hosts(vec!["x".repeat(1500)]));
+        assert!(
+            resolver
+                .metrics()
+                .contains("openfingerprint_dns_tcp_queries_total 1")
+        );
+        assert!(
+            resolver
+                .metrics()
+                .contains("openfingerprint_txt_lookups_total{result=\"resolved\"} 1")
+        );
     }
 
     #[tokio::test]

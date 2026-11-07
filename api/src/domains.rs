@@ -67,12 +67,24 @@ pub struct DomainCheck {
     mx_providers: Option<Vec<crate::providers::Provider>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     registration: Option<crate::rdap::Registration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spf: Option<crate::mailauth::Spf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dmarc: Option<crate::mailauth::Dmarc>,
 }
 
 impl DomainCheck {
     pub fn with_registration(self, registration: crate::rdap::Registration) -> Self {
         Self {
             registration: Some(registration),
+            ..self
+        }
+    }
+
+    pub fn with_mail_auth(self, spf: crate::mailauth::Spf, dmarc: crate::mailauth::Dmarc) -> Self {
+        Self {
+            spf: Some(spf),
+            dmarc: Some(dmarc),
             ..self
         }
     }
@@ -246,6 +258,8 @@ impl DomainData {
                 mx_lookup: None,
                 mx_providers: None,
                 registration: None,
+                spf: None,
+                dmarc: None,
             })),
         }
     }
@@ -324,6 +338,8 @@ impl DomainData {
             mx_lookup: None,
             mx_providers: None,
             registration: None,
+            spf: None,
+            dmarc: None,
         }
     }
 

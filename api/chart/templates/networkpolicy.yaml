@@ -44,10 +44,8 @@ spec:
       ports:
         - protocol: UDP
           port: 53
-        {{- if .Values.countryData.enabled }}
         - protocol: TCP
           port: 53
-        {{- end }}
     {{- if .Values.countryData.enabled }}
     - to:
         - ipBlock:

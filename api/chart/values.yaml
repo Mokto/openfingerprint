@@ -145,8 +145,8 @@ networkPolicy:
   # automatically.
   redisTo: []
   redisPort: 6379
-  # MX lookups use UDP 53 through the pod's first resolv.conf nameserver,
-  # which these peers must include.
+  # MX, SPF and DMARC lookups use UDP 53 through the pod's first resolv.conf nameserver,
+  # which these peers must include, and TCP 53 only for answers too large for UDP.
   dnsTo:
     - namespaceSelector:
         matchLabels:
