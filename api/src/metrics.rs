@@ -83,12 +83,13 @@ const STEPS: [&str; 13] = [
 ];
 static STEP_TIMES: [Histogram; STEPS.len()] = [const { Histogram::new() }; STEPS.len()];
 
-pub const ROUTES: [&str; 6] = [
+pub const ROUTES: [&str; 7] = [
     "check",
     "verify",
     "challenges",
     "collect",
     "consume",
+    "grpc",
     "other",
 ];
 const CLASSES: [&str; 4] = ["2xx", "4xx", "5xx", "other"];
@@ -102,7 +103,8 @@ pub fn route(path: &str) -> usize {
         "/v1/challenges" => 2,
         "/v1/collect" => 3,
         "/v1/events/consume" => 4,
-        _ => 5,
+        crate::grpc::PATH => 5,
+        _ => 6,
     }
 }
 pub fn observe_request(route: usize, status: u16, elapsed: Duration) {

@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package openfingerprint.v1;
+
+// The same compact verdicts as POST /v1/check, on the same listener (HTTP/2
+// without TLS). Authenticate with the metadata `authorization: Bearer <key>`.
+service OpenFingerprint {
+  rpc Check(CheckRequest) returns (CheckResponse);
+}
+
+// At least one field is required. `domain` and `email` are mutually exclusive.
+message CheckRequest {
+  // The `token` string from the SDK result.
+  optional string signals = 1;
+  optional string domain = 2;
+  optional string email = 3;
+  optional string ip = 4;
+}
+
+// An unset field means unknown, not false.
+message CheckResponse {
+  // Unset when the token is missing, invalid or has no full ID.
+  optional string fingerprint = 1;
+  optional bool automation = 2;
+  optional bool tampering = 3;
+  optional bool disposable = 4;
+  optional bool free = 5;
+  optional bool spam = 6;
+  optional bool relay = 7;
+  optional bool mx = 8;
+  // Lowercase ISO 3166-1 alpha-2 code.
+  optional string country = 9;
+  optional bool vpn = 10;
+  optional bool tor = 11;
+  optional bool datacenter = 12;
+  optional bool proxy = 13;
+  // Inputs that were rejected: signals, automation, tampering, domain, email, ip.
+  repeated string invalid = 14;
+}

@@ -6,7 +6,7 @@ license = "MIT"
 publish = false
 
 [dependencies]
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["http2"] }
 http-body-util = "0.1.5"
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "ring", "webpki-roots", "tls12"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
@@ -21,3 +21,5 @@ url = "2.5.8"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["full"] }
+tonic = { version = "0.14.9", default-features = false, features = ["codegen"] }
+prost = "0.14.4"
