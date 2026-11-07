@@ -490,23 +490,19 @@ try {
         signals: seal({ ...signals(), automation: { version: 1, webdriver: true } }),
         domain: 'mail.example', ip: '192.0.2.1'
     });
-    assert.equal(compactResult.signals, undefined);
+    assert.deepEqual(Object.keys(compactResult).filter(k => ['signals', 'domain', 'ip', 'email'].includes(k)), []);
     assert.equal(compactResult.fingerprint, shortId(signals().fingerprint));
     assert.match(compactResult.fingerprint, /^[A-Za-z0-9_-]{21}$/);
     assert.equal(compactResult.automation, true);
-    assert.equal(compactResult.domain.disposable, mode === 'fresh' ? true : undefined);
-    assert.equal(compactResult.domain.mx, mode === 'fresh' ? false : undefined);
-    assert(Object.values(compactResult.domain).every(v => typeof v === 'boolean'));
-    assert.deepEqual(compactResult.ip, {});
-    const compactEmail = await compactCall({ email: 'Admin@mail.example', domain: undefined });
-    assert.equal(compactEmail.domain, undefined);
-    assert.equal(compactEmail.email.role, true);
-    assert.equal(compactEmail.email.mx, mode === 'fresh' ? false : undefined);
-    assert.deepEqual(await compactCall({ email: 'nope' }), { email: { status: 'invalid_input', reason: 'invalid_email' } });
+    assert.equal(compactResult.disposable, mode === 'fresh' ? true : undefined);
+    assert.equal(compactResult.mx, false);
+    const compactEmail = await compactCall({ email: 'Admin@mail.example' });
+    assert.deepEqual(compactEmail, mode === 'fresh' ? { disposable: true, mx: false } : { mx: false });
+    assert.deepEqual(await compactCall({ email: 'nope' }), { invalid: ['email'] });
     assert.deepEqual(await compactCall({ signals: 'not-a-token', ip: 'nope' }), {
-        fingerprint: null, ip: { status: 'invalid_input', reason: 'invalid_ip' }
+        fingerprint: null, invalid: ['signals', 'ip']
     });
-    assert.deepEqual(await compactCall({ signals: signals(), domain: 'mail.example' }), { fingerprint: null, domain: (await compactCall({ domain: 'mail.example' })).domain });
+    assert.deepEqual(await compactCall({ signals: signals(), domain: 'mail.example' }), { fingerprint: null, invalid: ['signals'], ...await compactCall({ domain: 'mail.example' }) });
     console.log('All 15 input combinations, requested-only results, evidence counts and domain data state passed.');
     phase = `domain classification and source scope (${mode})`;
     for (const [domain, expected] of [

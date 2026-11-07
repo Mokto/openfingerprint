@@ -168,30 +168,35 @@ The JSON object accepts only these fields:
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
 | `detail` | Optional boolean, default false. `true` returns the full response described in this guide, with evidence counts, rule metadata and per-source provenance. |
 
-By default the response is compact, a short list of verdicts:
+By default the response is one flat object of verdicts:
 
 ```json
 {"fingerprint":"_AJUXF4ttBmXt1N1es89S",
  "automation":true,
  "tampering":false,
- "email":{"disposable":false,"free":true,"role":false,"mx":true},
- "ip":{"country":"us","vpn":false,"tor":false,"datacenter":false}}
+ "disposable":false,
+ "free":true,
+ "mx":true,
+ "country":"us",
+ "vpn":false,
+ "tor":false}
 ```
 
 A key that is missing means unknown, so there are no `null` facts. Only the
 `fingerprint` can be `null`.
 
-| Key | Contents |
+| Key | Meaning |
 | --- | --- |
-| `fingerprint` | From `signals`; `null` when the token is invalid or has no full ID (`detail: true` says which). |
-| `automation`, `tampering` | `true` or `false`. Omitted when the evidence is inconclusive; the indicator list is only in `detail: true`. |
-| `email` / `domain` | Named after what you sent. `disposable`, `free` (public mailbox), `spam`, `relay`, `mx` (the domain has mail servers) and, for `email`, `role`. |
-| `ip` | `country` (lowercase ISO 3166-1 alpha-2) plus `vpn`, `tor`, `datacenter`, `proxy` when known. |
+| `fingerprint` | From `signals`; `null` when the token is invalid or has no full ID. |
+| `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
+| `disposable`, `free`, `spam`, `relay`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `mx` says the domain has mail servers. |
+| `country`, `vpn`, `tor`, `datacenter`, `proxy` | From `ip`. `country` is a lowercase ISO 3166-1 alpha-2 code. |
+| `invalid` | Only present when an input was rejected: a list of `signals`, `automation`, `tampering`, `domain`, `email` and/or `ip`. |
 
-An invalid input becomes `{"status":"invalid_input","reason":"..."}` in its own key.
-Everything else (evidence counts, rule versions, ASN and hosting provider, MX
-providers, SPF/DMARC, registration date, suggested domain, `mx_listed` provenance,
-uppercase `countryCode`, sources) is only in the `detail: true` response.
+`email` and `domain` give the same keys. Everything else (evidence counts, indicator
+lists, rule versions, role account, ASN and hosting provider, MX providers,
+SPF/DMARC, registration date, suggested domain, `mx_listed` provenance, uppercase
+`countryCode`, sources, and rejection reasons) is only in the `detail: true` response.
 
 The rest of this guide describes the `detail: true` shape.
 
