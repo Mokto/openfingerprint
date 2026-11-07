@@ -28,7 +28,7 @@ API and updater image digests.
 | Resource | Purpose |
 | --- | --- |
 | Deployment and ClusterIP Service | The API on port 80 (container 8180) and, when enabled, metrics on 9180. No Ingress. |
-| NetworkPolicy `<release>-api` (with `networkPolicy.enabled`) | Ingress only from `networkPolicy.apiFrom` (and `metricsFrom` on the metrics port). Egress UDP 53 (also TCP 53 with country refresh) to `networkPolicy.dnsTo` (default: `kube-dns` pods in `kube-system`) for MX and registry-host lookups, TCP 443 to `networkPolicy.rdapTo` (default: public IPv4/IPv6, no private, CGNAT, loopback or link-local ranges) for RDAP, public TCP 443 for country refresh when enabled, and Redis: the bundled HAProxy pods on 6379, or `networkPolicy.redisTo` on `redisPort`. |
+| NetworkPolicy `<release>-api` (with `networkPolicy.enabled`) | Ingress only from `networkPolicy.apiFrom` (and `metricsFrom` on the metrics port). Egress UDP 53 (also TCP 53 with country refresh) to `networkPolicy.dnsTo` (default: `kube-dns` pods in `kube-system`) for MX and registry-host lookups, TCP 443 and 43 to `networkPolicy.rdapTo` (default: public IPv4/IPv6, no private, CGNAT, loopback or link-local ranges) for RDAP and WHOIS, public TCP 443 for country refresh when enabled, and Redis: the bundled HAProxy pods on 6379, or `networkPolicy.redisTo` on `redisPort`. |
 | CronJob `<release>-domain-data` | Every six hours, fetches the pinned public sources and publishes the snapshot to the `<release>-domain-data` ConfigMap. |
 | ServiceAccount, Role, RoleBinding | Only the updater gets a token: it may create ConfigMaps and get/patch its own. Kubernetes cannot scope `create` to a name. |
 | NetworkPolicy `<release>-domain-data` (with `networkPolicy.enabled`) | The updater accepts nothing; it may reach DNS, HTTPS and `kubeApiServerPorts`. |
@@ -111,9 +111,11 @@ See [collection integration and Redis retention](../README.md#challenge-bound-co
 
 ## RDAP registration dates
 
-The API asks each domain's registry for its creation date over HTTPS. Registries are
-spread across the Internet, so `networkPolicy.rdapTo` allows TCP 443 to every public
-address while excluding cluster and private ranges. Narrow it if your CNI supports
+The API asks each domain's registry for its creation date over HTTPS (RDAP) or, for
+TLDs without RDAP, over WHOIS on TCP 43. Registries are spread across the Internet,
+so `networkPolicy.rdapTo` allows TCP 443 and 43 to every public address while
+excluding cluster and private ranges. `openfingerprint_whois_lookups_total{result}`
+counts WHOIS outcomes. Narrow it if your CNI supports
 FQDN policies. API pods use `ndots: 1`, so registry hostnames skip the cluster
 search domains. `openfingerprint_rdap_lookups_total{result}` counts outcomes.
 

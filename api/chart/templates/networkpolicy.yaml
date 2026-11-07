@@ -64,6 +64,8 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+        - protocol: TCP
+          port: 43
     {{- if (index .Values "redis-ha" "enabled") }}
     - to:
         - podSelector:
