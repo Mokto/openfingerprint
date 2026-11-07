@@ -29,6 +29,10 @@ struct Entry {
     #[serde(default)]
     #[allow(dead_code)]
     consumer_evidence: String,
+    /// Why a suffix the provider does not document is still the provider's.
+    #[serde(default)]
+    #[allow(dead_code)]
+    ownership: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -154,6 +158,27 @@ mod tests {
                 "{}",
                 e.slug
             );
+        }
+    }
+
+    #[test]
+    fn cloud_domains_match_documented_mail_hosts_only() {
+        let slugs = |h: &str| {
+            detect(&[h.to_owned()])
+                .into_iter()
+                .map(|p| p.slug)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(slugs("inbound-smtp.eu-west-1.amazonaws.com"), ["amazonses"]);
+        assert_eq!(slugs("mx0a-00148501.pphosted.com"), ["proofpoint"]);
+        assert_eq!(slugs("eforward3.registrar-servers.com"), ["namecheap"]);
+        for unrelated in [
+            "ec2-54-1-2-3.us-west-1.compute.amazonaws.com",
+            "smtp.us-east-1.amazonaws.com",
+            "dns1.registrar-servers.com",
+            "vps-1234.vps.ovh.net",
+        ] {
+            assert!(slugs(unrelated).is_empty(), "{unrelated}");
         }
     }
 
