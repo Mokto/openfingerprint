@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/Mokto/openfingerprint/compare/api-v0.8.0...api-v0.9.0) (2026-11-07)
+
+
+### Features
+
+* **chart:** per-pod network refresh sidecar ([#50](https://github.com/Mokto/openfingerprint/issues/50)) ([36996e4](https://github.com/Mokto/openfingerprint/commit/36996e43865bba5bd32b9e504590df2dd8b832d5))
+
 ## [0.8.0](https://github.com/Mokto/openfingerprint/compare/api-v0.7.0...api-v0.8.0) (2026-11-07)
 
 
