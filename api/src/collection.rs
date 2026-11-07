@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use axum::{
     Json,
@@ -109,6 +109,12 @@ struct ChallengeInput {
 struct Context {
     user_agent: Option<String>,
     platform: Option<String>,
+    webrtc: Option<WebRtc>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WebRtc {
+    addresses: Vec<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -180,7 +186,25 @@ fn headless(value: &str) -> bool {
     })
 }
 
-fn consistency(context: &Context, signals: &Value, headers: &HeaderMap) -> Value {
+// A STUN-reflexive address on the connection's address family that differs from the
+// request IP means the browser reaches the network by a path the HTTP request did not take.
+fn webrtc_matches(addresses: &[String], client: Option<IpAddr>) -> Option<bool> {
+    let client = client?;
+    let same_family: Vec<IpAddr> = addresses
+        .iter()
+        .filter_map(|a| a.parse::<IpAddr>().ok())
+        .map(|a| a.to_canonical())
+        .filter(|a| a.is_ipv4() == client.is_ipv4())
+        .collect();
+    (!same_family.is_empty()).then(|| same_family.contains(&client))
+}
+
+fn consistency(
+    context: &Context,
+    signals: &Value,
+    headers: &HeaderMap,
+    client: Option<IpAddr>,
+) -> Value {
     let ua = text(headers, "user-agent", 512);
     let reported = context.user_agent.as_deref();
     let claimed_headless = signals["automation"]["headlessUserAgent"].as_bool();
@@ -205,7 +229,14 @@ fn consistency(context: &Context, signals: &Value, headers: &HeaderMap) -> Value
                 .zip(text(headers, "sec-ch-ua-platform", 64))
                 .map(|(a, b)| a == b),
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        context
+            .webrtc
+            .as_ref()
+            .map(|w| ("webrtc_ip_mismatch", webrtc_matches(&w.addresses, client))),
+    ) {
         match matches {
             Some(false) => indicators.push(name),
             None => unavailable.push(name),
@@ -213,7 +244,7 @@ fn consistency(context: &Context, signals: &Value, headers: &HeaderMap) -> Value
         }
     }
     json!({
-        "rule_version": 1,
+        "rule_version": if context.webrtc.is_some() { 2 } else { 1 },
         "status": if !indicators.is_empty() { "detected" } else if !unavailable.is_empty() { "unknown" } else { "not_detected" },
         "indicators": indicators,
         "unavailable_checks": unavailable
@@ -290,6 +321,12 @@ pub async fn collect(
             .platform
             .as_ref()
             .is_some_and(|v| v.is_empty() || v.len() > 128)
+        || input.context.webrtc.as_ref().is_some_and(|w| {
+            w.addresses.len() > 8
+                || w.addresses
+                    .iter()
+                    .any(|a| a.len() > 64 || a.parse::<IpAddr>().is_err())
+        })
     {
         return Err(ApiError::invalid());
     }
@@ -315,7 +352,8 @@ pub async fn collect(
         return Err(ApiError(StatusCode::FORBIDDEN, "origin_not_allowed"));
     }
     let network = state.network.request_check(&headers, peer);
-    let consistency = consistency(&input.context, &input.signals, &headers);
+    let client = state.network.client_address(&headers, peer);
+    let consistency = consistency(&input.context, &input.signals, &headers, client);
     let observed_headless = text(&headers, "user-agent", 512).map(headless);
     if observed_headless == Some(true) {
         input.signals["automation"]["headlessUserAgent"] = json!(true);
@@ -429,33 +467,84 @@ mod tests {
         let context = Context {
             user_agent: Some("Chrome/156".into()),
             platform: Some("Win32".into()),
+            webrtc: None,
         };
         let signals = json!({"automation": {"headlessUserAgent": false}});
         let mut headers = HeaderMap::new();
         assert_eq!(
-            consistency(&context, &signals, &headers)["status"],
+            consistency(&context, &signals, &headers, None)["status"],
             "unknown"
         );
         headers.insert("user-agent", "Chrome/156".parse().unwrap());
         headers.insert("sec-ch-ua-platform", "\"Windows\"".parse().unwrap());
         assert_eq!(
-            consistency(&context, &signals, &headers)["status"],
+            consistency(&context, &signals, &headers, None)["status"],
             "not_detected"
         );
         headers.insert("user-agent", "HeadlessChrome/156".parse().unwrap());
         assert_eq!(
-            consistency(&context, &signals, &headers)["indicators"],
+            consistency(&context, &signals, &headers, None)["indicators"],
             json!(["user_agent_mismatch"])
         );
         let context = Context {
             user_agent: Some("HeadlessChrome/156".into()),
             platform: None,
+            webrtc: None,
         };
         assert_eq!(
-            consistency(&context, &signals, &headers)["indicators"],
+            consistency(&context, &signals, &headers, None)["indicators"],
             json!(["headless_evidence_mismatch"])
+        );
+        assert_eq!(
+            consistency(&context, &signals, &headers, None)["rule_version"],
+            1
         );
         assert!(headless("Mozilla/5.0 HeadlessChrome/156"));
         assert!(!headless("NotHeadlessChrome/156"));
+    }
+
+    #[test]
+    fn webrtc_addresses_are_compared_on_the_connection_family_only() {
+        let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
+        let addrs = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let both = addrs(&["203.0.113.5", "2001:db8::5"]);
+        assert_eq!(webrtc_matches(&both, ip("203.0.113.5")), Some(true));
+        assert_eq!(webrtc_matches(&both, ip("2001:db8::5")), Some(true));
+        assert_eq!(webrtc_matches(&both, ip("198.51.100.9")), Some(false));
+        assert_eq!(
+            webrtc_matches(&addrs(&["::ffff:203.0.113.5"]), ip("203.0.113.5")),
+            Some(true)
+        );
+        assert_eq!(
+            webrtc_matches(&addrs(&["2001:db8::5"]), ip("198.51.100.9")),
+            None
+        );
+        assert_eq!(webrtc_matches(&[], ip("198.51.100.9")), None);
+        assert_eq!(webrtc_matches(&both, None), None);
+
+        let context = |addresses: Vec<String>| Context {
+            user_agent: None,
+            platform: None,
+            webrtc: Some(WebRtc { addresses }),
+        };
+        let signals = json!({"automation": {"headlessUserAgent": false}});
+        let headers = HeaderMap::new();
+        let result = consistency(
+            &context(both.clone()),
+            &signals,
+            &headers,
+            ip("198.51.100.9"),
+        );
+        assert_eq!(result["rule_version"], 2);
+        assert_eq!(result["indicators"], json!(["webrtc_ip_mismatch"]));
+        let result = consistency(&context(both), &signals, &headers, ip("203.0.113.5"));
+        assert!(!result["indicators"].to_string().contains("webrtc"));
+        assert!(!result["unavailable_checks"].to_string().contains("webrtc"));
+        let result = consistency(&context(vec![]), &signals, &headers, ip("203.0.113.5"));
+        assert!(
+            result["unavailable_checks"]
+                .to_string()
+                .contains("webrtc_ip_mismatch")
+        );
     }
 }

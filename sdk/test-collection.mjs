@@ -57,6 +57,7 @@ try {
             assert.equal(request.body.signals.automation.version, 2);
             assert.equal(request.body.context.userAgent, request.headers['user-agent']);
             assert.equal(request.body.context.platform, await page.evaluate(() => navigator.platform));
+            assert.equal(request.body.context.webrtc, undefined);
             assert.equal(request.headers.origin, origin);
             assert.equal(request.headers.cookie, undefined);
             assert.equal(request.headers.authorization, undefined);
@@ -71,7 +72,10 @@ try {
                 { endpoint: '' },
                 { challenge: 'wrong' },
                 { networkTimeoutMs: 0 },
-                { networkTimeoutMs: 30001 }
+                { networkTimeoutMs: 30001 },
+                { webrtcStun: 'http://stun.example' },
+                { webrtcStun: 'stun:host/path' },
+                { webrtcStun: 42 }
             ]) {
                 const count = requests.length;
                 assert.equal(await page.evaluate(async args => {
@@ -79,6 +83,43 @@ try {
                 }, { endpoint: '/collect', challenge, ...options }), true);
                 assert.equal(requests.length, count);
             }
+            phase = `${name}: opt-in WebRTC addresses`;
+            const rtc = await browser.newPage();
+            await rtc.addInitScript(() => {
+                window.RTCPeerConnection = class {
+                    constructor(config) { window.iceConfig = config; }
+                    createDataChannel() {}
+                    async createOffer() { return {}; }
+                    async setLocalDescription() {
+                        const lines = [
+                            'candidate:1 1 udp 1677729535 203.0.113.5 46342 typ srflx raddr 0.0.0.0 rport 0',
+                            'candidate:2 1 udp 2122260223 192.168.1.20 50000 typ host',
+                            'candidate:3 1 udp 2122260223 4f0d1a2b-0000-4000-8000-000000000000.local 50001 typ host',
+                            'candidate:4 1 udp 2122194687 2001:db8::5 50002 typ host',
+                            'candidate:5 1 udp 41885439 198.51.100.7 3478 typ relay',
+                            'candidate:6 1 udp 1677729535 203.0.113.5 46343 typ srflx'
+                        ];
+                        setTimeout(() => {
+                            for (const candidate of lines) this.onicecandidate({ candidate: { candidate } });
+                            this.onicecandidate({ candidate: null });
+                        });
+                    }
+                    close() { window.rtcClosed = true; }
+                };
+            });
+            await rtc.goto(origin);
+            await rtc.evaluate(challenge => OpenFingerprint.identify({
+                endpoint: '/collect', challenge, timeoutMs: 1000, webrtcStun: 'stun:stun.example.test:3478'
+            }), challenge);
+            assert.deepEqual(requests.at(-1).body.context.webrtc, { addresses: ['203.0.113.5', '2001:db8::5'] });
+            assert.deepEqual(await rtc.evaluate(() => [window.iceConfig, window.rtcClosed]), [{ iceServers: [{ urls: 'stun:stun.example.test:3478' }] }, true]);
+            const unsupported = await browser.newPage();
+            await unsupported.addInitScript(() => { window.RTCPeerConnection = class { constructor() { throw new Error('blocked'); } }; });
+            await unsupported.goto(origin);
+            await unsupported.evaluate(challenge => OpenFingerprint.identify({
+                endpoint: '/collect', challenge, timeoutMs: 1000, webrtcStun: 'stun:stun.example.test:3478'
+            }), challenge);
+            assert.equal(requests.at(-1).body.context.webrtc, undefined);
             phase = `${name}: no redirects, retries or unauthenticated verdicts`;
             for (const endpoint of ['/redirect', '/invalid', '/failure', '/slow']) {
                 const count = requests.length;

@@ -172,6 +172,24 @@ over-limit values become null. They are not included in identity hashes, returne
 to the browser or retained in the event. `identify()` does not use storage and
 does not expose an `onIdentity` callback.
 
+#### Optional WebRTC address check
+
+`identify({ ..., webrtcStun: 'stun:stun.example.org:3478' })` also gathers the
+browser's WebRTC candidate addresses and sends the public ones in
+`context.webrtc.addresses` (at most 8). The API compares them with the connection
+IP, discards them and reports only `webrtc_ip_mismatch` in `consistency`. A mismatch
+means the browser's UDP path leaves through a different address than its HTTP
+request, for example a proxy or VPN extension that does not cover WebRTC.
+
+It is off by default, and `collect()` never does it. Setting it makes the browser
+send a STUN request to the server you name, which sees the visitor's address:
+use a STUN server you run or trust, and tell your visitors. Only `stun:` and
+`stuns:` URLs without a path are accepted. Private and mDNS (`.local`)
+candidates are dropped in the browser before sending. Gathering stops after at
+most 2 seconds. If WebRTC is missing, blocked or yields no public address, the field is
+omitted or empty and the check reports unknown. CSP `connect-src` does not govern
+WebRTC; use your network policy if you restrict it.
+
 Challenge/event binding prevents replacement and reuse of evaluated results; it
 does not attest honest browser execution. Unknown results stay unknown. Missing,
 expired or already-used events must never authorize a protected action. See the
