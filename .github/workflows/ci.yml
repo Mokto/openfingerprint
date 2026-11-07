@@ -20,6 +20,15 @@ jobs:
   api:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
+        ports: [6379:6379]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -31,4 +40,7 @@ jobs:
       - run: cargo +stable test --manifest-path api/Cargo.toml --locked
       - run: cargo +stable build --manifest-path api/Cargo.toml --locked
       - run: node api/test.mjs
+      - run: node api/test-collection.mjs
+        env:
+          OPENFINGERPRINT_TEST_REDIS_URL: redis://127.0.0.1:6379/15
       - run: bash api/chart/test.sh

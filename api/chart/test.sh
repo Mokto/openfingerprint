@@ -72,9 +72,17 @@ check.call(docs.all? { |d| d["metadata"]["namespace"].nil? || d["metadata"]["nam
 puts "Chart selectors, isolation, RBAC, refresh and monitoring checks passed."
 ' "$rendered"
 if render --set-json 'networkPolicy.dnsTo=[]' >/dev/null 2>&1; then echo "An empty DNS peer list must fail" >&2; exit 1; fi
+render --set-json 'networkPolicy.redisTo=[{"podSelector":{"matchLabels":{"app":"redis"}}}]' --set networkPolicy.redisPort=6380 > "$rendered"
+ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact
+policy = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]
+expected = {"to" => [{"podSelector" => {"matchLabels" => {"app" => "redis"}}}], "ports" => [{"protocol" => "TCP", "port" => 6380}]}
+abort("Redis egress must be scoped to configured peers/port") unless policy["egress"].size == 2 && policy["egress"][1] == expected
+puts "Optional Redis egress check passed."
+' "$rendered"
 static=$(render --set domainData.refresh.enabled=false)
 grep -q 'kind: CronJob\|OPENFINGERPRINT_DOMAIN_DATA\|kind: Role' <<< "$static" && { echo "Disabled refresh must render no updater or override" >&2; exit 1; }
-for bad in "existingSecret=" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short"; do
+for bad in "existingSecret=" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short" "networkPolicy.redisTo=bad" "networkPolicy.redisPort=0" "networkPolicy.redisPort=65536" "networkPolicy.redisPort=6379.5"; do
   if render --set "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi
 done
 if render --set-json 'networkPolicy.apiFrom=[]' >/dev/null 2>&1; then echo "Empty API caller list must fail" >&2; exit 1; fi

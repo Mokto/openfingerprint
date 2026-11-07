@@ -1,16 +1,16 @@
 # Experimental Rust check API
 
 A self-hosted, MIT-licensed backend companion to the browser SDK. The next release
-provides `GET /health` and one primary business endpoint, `POST /v1/check`, with
-independent browser, automation, domain and IP sections. `POST /v1/verify` is retained as a
-compatibility adapter while existing callers migrate.
+provides stateless `POST /v1/check` with independent browser, automation, domain
+and IP sections, plus a Redis-backed collection flow for single-use server-owned
+events. `POST /v1/verify` remains a compatibility adapter.
 
 Domain intelligence runs locally against openly licensed, versioned snapshots:
 
 | Requested check | Available behavior |
 | --- | --- |
 | `signals` | Canonical schema-4/5 verification and bounded evidence counts. |
-| `automation` | Versioned rules for opt-in, client-reported automation observations. |
+| `automation` | Versioned rules for client-reported observations, now included automatically inside SDK `signals`. |
 | `domain` | Disposable-domain, free-subdomain and source-scoped referrer-spam evidence, with provenance and expiry. |
 | `ip` | IPv4/IPv6 literal validation; otherwise `unknown/not_configured`. |
 
@@ -22,23 +22,27 @@ IP intelligence, RDAP and domain authority are not implemented. The spam scope i
 not email-sending reputation. See [sources, licenses and refresh](data/README.md). Older API releases, including 0.4.0, have a different
 `/v1/check` contract; this guide describes the next release, not a live upgrade.
 
-The API does not collect browser signals, recognize physical devices, execute
+The API does not execute browser probes, recognize physical devices, execute
 signup decisions or provide Fingerprint Pro feature parity. Probe values can be
 forged, and matching hashes can collide or change with settings and updates.
 
 ## Data minimization and networking
 
-There is no visitor database, observation cache, email processing, visitor token,
-account history or outgoing provider request. The only outbound traffic is at
-most one MX query per domain check. Request evidence,
-domains and IPs are dropped after processing and are not logged or persisted.
+Stateless checks have no visitor database, observation cache, email processing or
+account history. Their evidence, domains and IPs are dropped after processing.
+With collection enabled, Redis temporarily holds random action bindings, origins,
+challenges and evaluated events, subject to TTL and capacity limits below. Raw
+collection user agents/platforms are discarded after evaluation; request evidence
+and credentials are not logged. Outbound traffic consists of MX DNS queries and,
+when configured, Redis commands.
 Responses have `Cache-Control: no-store` and set no cookies. Domain/IP inputs are
 not echoed in responses. No browser/server IP is inferred from the connection or
 forwarded headers. Signals-only calls do not run domain/IP checks.
 
-Retained runtime state consists of configured server credential tags and a
-read-only public domain snapshot. No visitor/domain request cache is created. The
-API does no rate limiting; apply quotas at your edge or gateway.
+The process retains configured credential tags and a read-only domain snapshot;
+collection state is shared in Redis, not an in-memory fallback. There is no
+visitor-history or domain cache. Collection capacity limits are not rate limiting:
+apply quotas and request limits at your edge/gateway, including the public collector.
 
 A separate operator updater refreshes public snapshots without rebuilding the
 image; the API re-reads an override file every minute and swaps in a changed
@@ -53,9 +57,10 @@ check; use a resolver you trust, such as the cluster DNS, and allow only it on U
 RDAP and other live lookups are not implemented.
 There are no lookup retries, remote-provider waits or visitor-history fallbacks.
 
-The SDK hashes identity signals locally; optional automation evidence contains
-only booleans/nulls and its version. It makes no network requests and writes no
-storage unless the caller opts into `storageKey`. Leave that option
+The SDK hashes identity signals locally and automatically includes bounded
+automation evidence outside those hashes. `collect()` has no networking;
+`identify()` posts evidence plus bounded browser context to a configured same-origin
+collection proxy. Neither writes storage unless `collect()` opts into `storageKey`. Leave that option
 unset when sending results here. Hashes are pseudonymous, not anonymous. Your
 application and hosting proxy have their own logging, retention, disclosure and
 access-control responsibilities.
@@ -69,6 +74,9 @@ build arguments, command-line arguments or logs.
 | --- | --- |
 | `OPENFINGERPRINT_SITES` | JSON array of 1–16 site configurations, each with `id` and `secret_key`. |
 | `OPENFINGERPRINT_LISTEN_ADDR` | Optional listener, default `127.0.0.1:8180`. |
+| `OPENFINGERPRINT_REDIS_URL` | Optional private Redis/Valkey connection URL; enables collection. Supports `rediss://` with certificate validation. Missing/unreachable Redis yields HTTP 503 on collection routes; no memory fallback. |
+| `OPENFINGERPRINT_COLLECTION_TTL_SECONDS` | Lifetime of each challenge and, separately, each published event: 1–300 seconds, default 120. Use identical settings on every replica. |
+| `OPENFINGERPRINT_COLLECTION_CAPACITY` | Maximum outstanding challenges plus events per server credential: 1–100000, default 1024. Issuance at capacity returns 429. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
 | `OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS` | Seconds between checks of the override file, 1–86400, default 60. A changed file that fails to read or parse is rejected and the last valid snapshot stays until its sources expire. |
 | `OPENFINGERPRINT_DNS` | Nameserver for MX lookups, default `system` (the first `nameserver` in `/etc/resolv.conf`). Also accepts an IP, `IP:port` or `host:port` (resolved once at startup). Startup fails without a usable nameserver. |
@@ -89,14 +97,17 @@ running image before deploying the compatible release.
 The process does not terminate TLS. Protect credential transport with TLS or an
 equivalent protected boundary; cluster-local HTTP and NetworkPolicy do not encrypt
 traffic. Restrict the deployment to its intended backend callers and do not forward
-browser Origin/cookies. No dashboard, SDK hosting, billing or tenant-management
+browser Origin/cookies to private routes. Only the public collection proxy forwards
+Origin and the relevant browser headers; it must strip cookies and Authorization.
+No dashboard, SDK hosting, billing or tenant-management
 endpoint is provided.
 
 ## Endpoints
 
-Both POST routes require `Authorization: Bearer <server secret>` and
+Private POST routes require `Authorization: Bearer <server secret>` and
 `Content-Type: application/json`, with no `Origin` header. Authentication runs
-before JSON parsing. Browser-origin requests are forbidden; no CORS is enabled.
+before JSON parsing. Only `POST /v1/collect` accepts browser-origin requests,
+authorized by a single-use challenge. No route enables cross-origin CORS.
 
 ### `GET /health`
 
@@ -203,8 +214,10 @@ raw browser context are not additional inputs. All request bodies are limited to
 
 #### Automation indicators
 
-Call the SDK's `collectAutomation()` separately and forward its result through
-your backend in `automation`, not inside `signals`. No fingerprint is required:
+`collect()` includes observations automatically as `signals.automation`, and
+`/v1/check` returns their evaluation as `signals.automation`. No additional SDK
+option or forwarding step is needed. Existing callers may still send standalone
+`automation` (including without a fingerprint):
 
 ```json
 {"automation":{"version":1,"webdriver":true,"headlessUserAgent":false,"seleniumArtifacts":false,"phantomArtifacts":null}}
@@ -242,7 +255,8 @@ can be forged or hidden. `not_detected` is not proof of a human, and automation
 may be legitimate testing or assistive tooling, not malicious traffic. No
 good/bad bot classification, confidence, fraud score, retention or new outbound
 traffic is introduced. Deploy the compatible API before sending this field;
-older servers reject it. `/v1/verify` remains unchanged and rejects diagnostics.
+older servers reject it. `/v1/verify` accepts embedded automation but ignores it,
+retaining its status/schema/fingerprint-only response.
 
 #### Domain and IP boundaries
 
@@ -260,6 +274,113 @@ accepted, but receive no clean/public-network verdict. Use trusted proxy
 configuration to obtain the actual visitor IP; do not trust a browser-provided
 value or accidentally supply the application server's address.
 
+### Challenge-bound collection
+
+Enable these routes with `OPENFINGERPRINT_REDIS_URL`. Every API replica must
+use the same authoritative Redis database, credentials and collection settings.
+There is no local-state fallback. A single Redis/Valkey primary is supported,
+not Redis Cluster (the atomic scripts operate on multiple keys).
+
+#### 1. Your backend issues a challenge
+
+`POST /v1/challenges` requires the server credential and accepts only:
+
+```json
+{"binding":"<64 lowercase hexadecimal characters>","origin":"https://your-app.example"}
+```
+
+Generate a random 32-byte binding in your backend and retain it against the
+authenticated session and specific action. Never accept the expected binding from
+the browser, reuse one across unrelated actions, or send account/session data
+instead. Apply your application's authentication, CSRF and issuance limits.
+Origin must be an exact canonical HTTPS origin without path, credentials, query
+or fragment (HTTP loopback is allowed for development).
+
+The response is `{"challenge":"<random token>","expires_in_ms":120000}`.
+Give only the challenge to the browser; do not expose the binding or server key.
+
+#### 2. The SDK submits evidence to your same-origin proxy
+
+Call `identify({ endpoint: '/fingerprint/collect', challenge })`. Automation is
+included automatically. Expose only a bounded POST proxy to `POST /v1/collect`:
+preserve the browser's Origin, User-Agent and Sec-CH-UA-Platform; strip cookies,
+Authorization and other forwarded headers. Do not replace the browser's UA with
+the proxy's UA. Require HTTPS and appropriate CSP `connect-src`; cross-origin
+CORS and preflight are deliberately unsupported.
+
+The collection body accepts only `challenge`, a full SDK `signals` object with
+valid embedded `automation`, and `context`:
+`{"userAgent": "<up to 512 UTF-8 bytes or null>", "platform": "<up to 128 bytes or null>"}`.
+Context properties may be omitted; other metadata is rejected. The global 64 KiB
+body limit applies. Non-null `storageId` is still rejected. Origin must match
+the backend-issued challenge; cookies and Authorization are forbidden.
+
+The server validates evidence, compares submitted UA against the request header,
+checks reported headless status against the submitted UA, and compares recognized
+Windows/macOS platform observations against Client Hints when present. Missing
+or unrecognized evidence stays unknown. A HeadlessChrome token observed in the
+request UA adds a headless indicator even if the submitted boolean denies it.
+Raw UA/platform values are discarded, not stored in the event.
+
+Publishing the evaluated event and consuming the challenge is one atomic Redis
+operation. Only one concurrent request can succeed, across API replicas.
+The browser gets only `{"event_id":"<random token>"}`; it cannot overwrite the
+stored verdict. The SDK returns `{ eventId }`.
+
+#### 3. Your backend consumes the event with the protected action
+
+`POST /v1/events/consume` requires the server credential and accepts only:
+
+```json
+{"event_id":"<ID from the browser>","binding":"<expected server-stored action binding>"}
+```
+
+Consumption checks the credential scope, expected action binding and expiry,
+and atomically deletes the event before returning it. Concurrent consumption
+succeeds once. A wrong binding or credential does not destroy the rightful event.
+The response contains `event_id`, `created_at_unix_ms`, `expires_at_unix_ms`,
+evaluated `signals` (including `automation`), `consistency` and `request`.
+The latter contains the matched `origin` and nullable request-UA
+`headless_user_agent` observation, never raw UA/platform strings or an inferred IP.
+
+`consistency` has `rule_version: 1`, `status`, `indicators` and
+`unavailable_checks`. Check names are `user_agent_mismatch`,
+`headless_evidence_mismatch`, `platform_mismatch`. Status is `detected` for
+any mismatch, `unknown` for incomplete checks without mismatches, otherwise
+`not_detected`. This is not a calibrated browser-tampering classifier.
+
+Use this server-owned response for protected decisions, not the browser's raw
+`signals`, fingerprint or boolean claims. Missing, mismatched, expired or used
+records return 409 `expired_used_or_mismatched`. Redis errors/timeouts return
+503 `collection_unavailable`; unavailable collection must not become a trusted
+or clean result. Do not retry ambiguous submissions/consumption automatically:
+a lost response may follow successful consumption. Restart with a new challenge
+and apply application-level action idempotency.
+
+#### Security and retention limits
+
+Challenges and events each expire after the configured TTL, independently.
+The per-credential capacity counts both, and expired entries are pruned during
+issuance. Redis time controls expiry timestamps, avoiding API-replica clock drift.
+No raw browser context, accounts, domains, IPs or visitor history are retained.
+Retained data is still pseudonymous and sensitive: configure Redis authentication,
+private access, `rediss://` where needed, memory limits and `noeviction`.
+Allow the scripting and key/sorted-set commands used by the collector.
+Disable persistence/backups when not needed; TTL is not backup erasure.
+
+Atomic single-use guarantees assume one authoritative Redis history. A rollback,
+restored backup or asynchronous failover can resurrect consumed state. After
+such a rollback, stop old API replicas and rotate affected server credentials
+before accepting protected actions; old records are then outside the new scope.
+Redis deletion/eviction instead loses pending flows and fails closed.
+
+This flow protects evaluated-result integrity and reuse, not honest execution of
+JavaScript. Attackers can still fabricate observations, forge HTTP headers outside
+a normal browser, or run fresh automated sessions. Origin checks are browser
+constraints, not bot authentication. Transport uses HTTPS, not a browser-held
+signing secret, custom encrypted SDK protocol, obfuscation or device attestation.
+Combine evidence with application controls; `not_detected` never means trusted.
+
 ### SDK evidence
 
 | Field | Shape |
@@ -275,8 +396,9 @@ value or accidentally supply the application server's address.
 | `storageId` | Omitted or null only. |
 
 Each map has at most 32 entries. Names are 1–64 ASCII characters, start with a
-letter and otherwise contain letters, digits, underscores or dots. Unknown fields
-and unsolicited visitor metadata are rejected. Non-null IDs must match the
+letter and otherwise contain letters, digits, underscores or dots. `automation` is the only additional SDK field accepted and is evaluated separately
+from identity; it may be omitted by older SDKs. Unknown fields and unsolicited
+visitor metadata are rejected. Non-null IDs must match the
 canonical hash for the reported schema; changing only the version does not
 translate an identity between schemas.
 
@@ -309,7 +431,7 @@ This source change does not migrate or deploy any existing caller.
 Errors return
 `{"error":"<reason>"}`: 400 invalid envelope/evidence, 401 unauthorized, 403 browser
 Origin, or 413 oversized body. Unsupported methods return
-405. The retired `/v1/collect` endpoint and collection preflight return 404.
+405. Collection preflight returns 405; collection is same-origin only.
 
 Use a background flow where missing/failed verification leaves the ID unknown,
 not blocked authentication. Applications may save a full ID and schema alongside
@@ -350,11 +472,21 @@ pnpm api:check
 
 This runs formatting, Clippy, unit tests and a real loopback HTTP self-check. It
 generates credentials in RAM, boots without a signing key, checks both schemas,
-all 15 input combinations, automation rules, partial failures, scoped domain matches, public-suffix
+all 15 input combinations, automatic/nested automation rules, partial failures, scoped domain matches, public-suffix
 boundaries, fresh/stale/invalid/missing snapshots, strict metadata/body boundaries,
 compatibility and no request logging, then stops the
 server. Updater checks use local fixtures and verify license-change rejection and
 atomic failure preservation; CI does not download feeds. It prints no credentials or visitor payloads.
+
+With a disposable Redis database, run the cross-replica collection checks too:
+
+```sh
+OPENFINGERPRINT_TEST_REDIS_URL=redis://127.0.0.1:6379/15 node api/test-collection.mjs
+```
+
+They check racing publication/consumption, binding/tenant isolation, expiry,
+capacity, unknowns, input limits and Redis failures. Without that variable this
+suite explicitly skips; CI runs it against a Redis service.
 
 After release, images are published as `ghcr.io/mokto/openfingerprint-api:<version>`
 for linux/amd64 and linux/arm64. Pin a released manifest digest; publishing does

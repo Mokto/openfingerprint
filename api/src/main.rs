@@ -1,5 +1,6 @@
 mod automation;
 mod check;
+mod collection;
 mod domains;
 mod mx;
 
@@ -20,6 +21,9 @@ fn app(state: Arc<check::AppState>) -> Router {
         .route("/health", get(|| async { "ok" }))
         .route("/v1/check", post(check::check))
         .route("/v1/verify", post(check::verify))
+        .route("/v1/challenges", post(collection::challenge))
+        .route("/v1/collect", post(collection::collect))
+        .route("/v1/events/consume", post(collection::consume))
         .layer(DefaultBodyLimit::max(check::BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .with_state(state)

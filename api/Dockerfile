@@ -25,9 +25,11 @@ COPY LICENSE /out/licenses/openfingerprint-api/LICENSE
 
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 LABEL org.opencontainers.image.source="https://github.com/Mokto/openfingerprint" \
-      org.opencontainers.image.description="Stateless browser verification and open-data domain checks" \
+      org.opencontainers.image.description="Browser verification, challenge-bound collection and open-data domain checks" \
       org.opencontainers.image.licenses="MIT"
 WORKDIR /app
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /usr/share/doc/ca-certificates/copyright /usr/share/licenses/openfingerprint-api/ca-certificates/copyright
 COPY --from=build /out/openfingerprint-api /usr/local/bin/openfingerprint-api
 COPY --from=build /out/licenses /usr/share/licenses/openfingerprint-api
 ENV OPENFINGERPRINT_LISTEN_ADDR=0.0.0.0:8180

@@ -104,6 +104,7 @@ const args = container
 		]
 	: [];
 delete process.env.OPENFINGERPRINT_SIGNING_KEY;
+delete process.env.OPENFINGERPRINT_REDIS_URL;
 const child = spawn(container ? 'docker' : values.binary, args, {
 	env: {
 		...process.env,
@@ -206,7 +207,7 @@ function domainExpected(overrides = {}) {
 }
 try {
     origin = await base;
-    phase = 'health and retired routes';
+    phase = 'health and collection disabled without Redis';
     const health = await request('/health', {}, undefined, 'GET');
     assert.equal(health.status, 200);
     assert.equal(await health.text(), 'ok');
@@ -214,14 +215,14 @@ try {
     assert.equal(health.headers.get('set-cookie'), null);
     for (const method of ['GET', 'POST', 'OPTIONS']) {
         const response = await request('/v1/collect', { Origin: 'https://alpha.test' }, undefined, method);
-        assert.equal(response.status, 404);
+        assert.equal(response.status, method === 'POST' ? 503 : 405);
         assert.equal(response.headers.get('access-control-allow-origin'), null);
     }
     for (const path of ['/v1/check', '/v1/verify']) {
         assert.equal((await request(path, {}, undefined, 'GET')).status, 405);
         assert.equal((await request(path, {}, undefined, 'OPTIONS')).status, 405);
     }
-    console.log('Health, unified check and legacy verification routes are available; collection is retired.');
+    console.log('Health, check and verification routes are available; collection fails closed without Redis.');
 
     phase = 'authentication before parsing and no browser CORS';
     for (const path of ['/v1/check', '/v1/verify']) {
@@ -351,7 +352,12 @@ try {
     const omittedAutomation = await request('/v1/check', authHeaders(sites[4]), { automation: null, signals: signals() });
     assert.deepEqual(await omittedAutomation.json(), { signals: checkedProfile(signals()) });
     const legacyAutomation = await request('/v1/verify', authHeaders(sites[4]), { ...signals(), automation });
-    assert.equal(legacyAutomation.status, 400);
+    assert.equal(legacyAutomation.status, 200);
+    assert.deepEqual(await legacyAutomation.json(), { status: 'ok', schema_version: 4, fingerprint: signals().fingerprint });
+    const nestedAutomation = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), automation } });
+    assert.deepEqual(await nestedAutomation.json(), { signals: { ...checkedProfile(signals()), automation: automationExpected } });
+    const invalidNested = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), automation: false } });
+    assert.deepEqual(await invalidNested.json(), { signals: { ...checkedProfile(signals()), automation: { ...automationExpected, status: 'invalid_input', indicators: [], reason: 'invalid_automation' } } });
     console.log('Automation rules, all 15 input combinations, unknowns, stable identities and independent failures passed.');
     const coreOnly = await request('/v1/check', authHeaders(sites[4]), {
         signals: { ...signals(), fingerprint: null }, domain: 'example.test'

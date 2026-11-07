@@ -1,7 +1,8 @@
 import { environment } from './environment';
 import { identityExclusions } from './policy';
 
-export { collectAutomation, type AutomationEvidence } from './automation';
+import { collectAutomation, type AutomationEvidence } from './automation';
+export { collectAutomation, type AutomationEvidence };
 
 const unsupported = Symbol();
 const unstable = Symbol();
@@ -464,6 +465,7 @@ export interface Options {
 	onIdentity?: (snapshot: Result) => unknown;
 }
 export interface Result {
+	automation: AutomationEvidence;
 	version: 5;
 	excluded: Name[];
 	fingerprint: string | null;
@@ -512,6 +514,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		return controller.signal.aborted;
 	};
 	const result: Result = {
+		automation: collectAutomation(),
 		version: 5,
 		excluded: identityExclusions(navigator.userAgent, navigator.vendor),
 		fingerprint: null,
@@ -592,6 +595,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		if (onIdentity) {
 			const snapshot: Result = {
 				...result,
+				automation: { ...result.automation },
 				excluded: [...result.excluded],
 				components: { ...result.components },
 				hints: { ...result.hints },
@@ -614,4 +618,59 @@ export async function collect(options: Options = {}): Promise<Result> {
 		controller.abort();
 		clearTimeout(timer);
 	}
+}
+
+export interface IdentifyOptions {
+	endpoint: string;
+	challenge: string;
+	timeoutMs?: number;
+	networkTimeoutMs?: number;
+}
+
+export async function identify(options: IdentifyOptions): Promise<{ eventId: string }> {
+	const { endpoint, challenge, timeoutMs, networkTimeoutMs = 5000 } = options;
+	if (typeof location === 'undefined') throw new Error('A browser context is required');
+	if (typeof endpoint !== 'string' || !endpoint.length)
+		throw new TypeError('endpoint is required');
+	const url = new URL(endpoint, location.href);
+	if (
+		url.origin !== location.origin || url.username || url.password || url.hash || url.search ||
+		(url.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+	) throw new TypeError('endpoint must be same-origin HTTPS (HTTP loopback is allowed)');
+	if (typeof challenge !== 'string' || !/^[0-9a-f]{64}$/.test(challenge))
+		throw new TypeError('challenge must be a 64-character lowercase hexadecimal token');
+	if (!Number.isFinite(networkTimeoutMs) || networkTimeoutMs < 1 || networkTimeoutMs > 30000)
+		throw new RangeError('networkTimeoutMs must be between 1 and 30000');
+	const text = (read: () => unknown, limit: number): string | null => {
+		try {
+			const value = read();
+			return typeof value === 'string' && value.length > 0 && new TextEncoder().encode(value).length <= limit
+				? value : null;
+		} catch {
+			return null;
+		}
+	};
+	const context = {
+		userAgent: text(() => navigator.userAgent, 512),
+		platform: text(() => navigator.platform, 128)
+	};
+	const signals = await collect({ timeoutMs });
+	const response = await fetch(url, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ challenge, signals, context }),
+		credentials: 'omit',
+		cache: 'no-store',
+		redirect: 'error',
+		referrerPolicy: 'no-referrer',
+		signal: AbortSignal.timeout(networkTimeoutMs)
+	});
+	if (!response.ok) throw new Error('Identification failed; request a new challenge before retrying');
+	const result = await response.json();
+	if (
+		!result || typeof result !== 'object' || Array.isArray(result) ||
+		Object.keys(result).length !== 1 || typeof result.event_id !== 'string' ||
+		!/^[0-9a-f]{64}$/.test(result.event_id)
+	) throw new Error('Invalid identification response');
+	return { eventId: result.event_id };
 }
