@@ -1,3 +1,4 @@
+mod automation;
 mod check;
 mod domains;
 mod mx;

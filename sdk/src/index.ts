@@ -1,6 +1,8 @@
 import { environment } from './environment';
 import { identityExclusions } from './policy';
 
+export { collectAutomation, type AutomationEvidence } from './automation';
+
 const unsupported = Symbol();
 const unstable = Symbol();
 type Value = string | Uint8Array | typeof unsupported | typeof unstable;

@@ -7,7 +7,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { gzipSync } from 'node:zlib';
-import { collect } from './dist/index.js';
+import { collect, collectAutomation } from './dist/index.js';
 import { identityExclusions } from './src/policy.ts';
 
 const { values } = parseArgs({
@@ -31,6 +31,7 @@ for (const [ua, vendor, expected] of [
 ])
 	assert.equal(identityExclusions(ua, vendor).length > 0, expected);
 await assert.rejects(collect(), /secure browser context/);
+assert.throws(collectAutomation, /browser context/);
 const require = createRequire(new URL('./package.json', import.meta.url));
 const { chromium, firefox, webkit } = require('playwright-core');
 const sources = { custom: await readFile(new URL('dist/index.iife.js', import.meta.url), 'utf8') };
@@ -171,10 +172,54 @@ try {
 		};
 		try {
 			await page.goto(`${origin}/custom`);
+			const automation = await page.evaluate(() => OpenFingerprint.collectAutomation());
+			assert.equal(automation.version, 1);
+			assert.equal(automation.webdriver, await page.evaluate(() =>
+				typeof navigator.webdriver === 'boolean' ? navigator.webdriver : null));
+			if (name === 'chromium' || name === 'chrome') assert.equal(automation.webdriver, true);
+			assert.equal(automation.headlessUserAgent, await page.evaluate(() =>
+				/\bHeadlessChrome\//.test(navigator.userAgent)));
+			assert.equal(automation.seleniumArtifacts, false);
+			assert.equal(automation.phantomArtifacts, false);
+			for (const scenario of ['absent', 'markers', 'errors', 'unsupported', 'wrong_type']) {
+				const p = await fresh((scenario) => {
+					Object.defineProperty(navigator, 'webdriver', { configurable: true, get: () => {
+						if (scenario === 'errors') throw new Error('unavailable');
+						return scenario === 'unsupported' ? undefined : scenario === 'wrong_type' ? 'false' : false;
+					} });
+					Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => {
+						if (scenario === 'errors') throw new Error('unavailable');
+						return scenario === 'unsupported' ? '' : scenario === 'wrong_type' ? 123 :
+							scenario === 'markers' ? 'Mozilla/5.0 HeadlessChrome/156.0.0.0' : 'Mozilla/5.0 Chrome/156.0.0.0';
+					} });
+					if (scenario === 'markers') {
+						Object.defineProperty(document, '__webdriver_script_fn', { get() { throw new Error('must not execute'); } });
+						Object.defineProperty(window, 'callPhantom', { get() { throw new Error('must not execute'); } });
+					}
+				}, scenario);
+				try {
+					assert.deepEqual(await p.evaluate(() => OpenFingerprint.collectAutomation()), {
+						version: 1,
+						webdriver: ['errors', 'unsupported', 'wrong_type'].includes(scenario) ? null : false,
+						headlessUserAgent: ['errors', 'unsupported', 'wrong_type'].includes(scenario) ? null : scenario === 'markers',
+						seleniumArtifacts: scenario === 'markers',
+						phantomArtifacts: scenario === 'markers'
+					});
+				} finally {
+					await p.close();
+				}
+			}
+			report.checks.push({
+				browser: name,
+				check: 'Automation observations isolate throwing/missing properties and never execute artifact getters',
+				passed: true
+			});
 			const a = await page.evaluate(() =>
 				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 5000 })
 			);
 			valid(a);
+			assert(!('automation' in a));
+			assert(!('webdriver' in a.hints));
 			assert(
 				a.fingerprint,
 				`${name}: no initial ID ${JSON.stringify({ durationMs: a.durationMs, unavailable: a.unavailable, components: Object.keys(a.components), timings: a.timings })}`
