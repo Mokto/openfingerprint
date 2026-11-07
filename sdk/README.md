@@ -94,16 +94,20 @@ Every `collect()` result and `onIdentity` snapshot includes `automation`.
 Forward `{ signals: result }` to a compatible `/v1/check` to receive the evaluation
 inside `response.signals.automation`. No opt-in or separate call is needed.
 Automation remains outside fingerprint hashes, so identity schema 5 is unchanged.
-Deploy the compatible API first: older versions reject this additional SDK field.
+Deploy the compatible API first: older versions reject this additional SDK field, and API versions before automation rule 2 reject the version 2 evidence.
 `collectAutomation()` remains available as a synchronous browser-only helper.
 
 | Field | Observation |
 | --- | --- |
-| `version` | Always `1`, independent of fingerprint schema 5. |
+| `version` | Always `2`, independent of fingerprint schema 5. Version 1 had only the first four observations. |
 | `webdriver` | The boolean `navigator.webdriver` value. |
 | `headlessUserAgent` | A `HeadlessChrome/` token in the user-agent string. |
 | `seleniumArtifacts` | Presence of `__webdriver_evaluate`, `__selenium_evaluate`, `__webdriver_script_fn` or `__selenium_unwrapped` on `document`. |
 | `phantomArtifacts` | Presence of `callPhantom` or `_phantom` on `window`. |
+| `softwareRenderer` | The unmasked WebGL renderer names SwiftShader, llvmpipe, softpipe or Software Rasterizer. Virtual machines and GPU-less hosts also match. Set by `collect()` from its GPU probe; null from the standalone `collectAutomation()` and when the GPU probe is unavailable. |
+| `missingChromeObject` | A Chromium user agent without `window.chrome`. Null for non-Chromium browsers, iOS Chrome and Android WebViews. |
+| `noLanguages` | `navigator.languages` is empty. |
+| `platformInconsistent` | `navigator.userAgentData.platform` (Windows, macOS, Linux, Android) disagrees with `navigator.platform`. Null without client hints. |
 
 Each observation is `boolean | null`. Missing/non-boolean WebDriver values,
 empty/non-string user agents and throwing reads return null independently.

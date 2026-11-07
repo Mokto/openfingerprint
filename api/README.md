@@ -337,14 +337,22 @@ The response contains:
 }
 ```
 
-Evidence accepts only `version: 1` and four optional booleans:
-`webdriver`, `headlessUserAgent`, `seleniumArtifacts`, `phantomArtifacts`.
+Evidence accepts `version: 1` with four optional booleans (`webdriver`,
+`headlessUserAgent`, `seleniumArtifacts`, `phantomArtifacts`) or `version: 2`, which
+adds `softwareRenderer`, `missingChromeObject`, `noLanguages` and
+`platformInconsistent`. The response reports `rule_version` 1 or 2 to match, and
+version 1 evidence carrying a version 2 field is invalid. Current SDKs send version 2;
+older SDKs keep working. Names in `indicators` and `unavailable_probes` for the added
+probes are `software_renderer`, `missing_chrome_object`, `no_languages`,
+`platform_inconsistent`. A software renderer also occurs on virtual machines and
+GPU-less servers, so it indicates automation without establishing it.
 Null or omitted observations remain unknown. Names in `indicators` and
 `unavailable_probes` are respectively `webdriver`, `headless_user_agent`,
 `selenium_artifacts`, `phantom_artifacts`, in that order.
 
-Rule version 1 reports `detected` if any observation is true, `unknown` if none
-is true and any is unavailable, or `not_detected` only if all four are false.
+Both rule versions report `detected` if any observation is true, `unknown` if none
+is true and any is unavailable, or `not_detected` only if all observations (four in
+version 1, eight in version 2) are false.
 Malformed evidence, unknown keys, unsupported versions and non-boolean/non-null
 observations produce `invalid_input` with `reason: invalid_automation` and empty
 indicator/unavailable arrays. Other sections still run. Top-level

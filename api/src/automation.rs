@@ -8,6 +8,10 @@ struct Evidence {
     headless_user_agent: Option<bool>,
     selenium_artifacts: Option<bool>,
     phantom_artifacts: Option<bool>,
+    software_renderer: Option<bool>,
+    missing_chrome_object: Option<bool>,
+    no_languages: Option<bool>,
+    platform_inconsistent: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -33,15 +37,29 @@ pub fn check(value: serde_json::Value) -> Check {
     let Ok(evidence) = serde_json::from_value::<Evidence>(value) else {
         return result;
     };
-    if evidence.version != 1 {
+    let added = [
+        ("software_renderer", evidence.software_renderer),
+        ("missing_chrome_object", evidence.missing_chrome_object),
+        ("no_languages", evidence.no_languages),
+        ("platform_inconsistent", evidence.platform_inconsistent),
+    ];
+    // Version 1 predates the added probes, so a v1 report must not carry them.
+    if !matches!(evidence.version, 1 | 2)
+        || (evidence.version == 1 && added.iter().any(|(_, v)| v.is_some()))
+    {
         return result;
     }
-    for (name, observed) in [
+    let mut probes = vec![
         ("webdriver", evidence.webdriver),
         ("headless_user_agent", evidence.headless_user_agent),
         ("selenium_artifacts", evidence.selenium_artifacts),
         ("phantom_artifacts", evidence.phantom_artifacts),
-    ] {
+    ];
+    if evidence.version == 2 {
+        probes.extend(added);
+    }
+    result.rule_version = evidence.version;
+    for (name, observed) in probes {
         match observed {
             Some(true) => result.indicators.push(name),
             None => result.unavailable_probes.push(name),
@@ -107,6 +125,9 @@ mod tests {
         let result = check(json!({"version": 1}));
         assert_eq!(result.status, "unknown");
         assert_eq!(result.unavailable_probes.len(), 4);
+        let result = check(json!({"version": 2}));
+        assert_eq!(result.rule_version, 2);
+        assert_eq!(result.unavailable_probes.len(), 8);
         for name in [
             "webdriver",
             "headless_user_agent",
@@ -125,7 +146,9 @@ mod tests {
             json!([]),
             json!("automation"),
             json!({}),
-            json!({"version": 2}),
+            json!({"version": 3}),
+            json!({"version": 1, "softwareRenderer": false}),
+            json!({"version": 2, "noLanguages": "true"}),
             json!({"version": -1}),
             json!({"version": 1.5}),
             json!({"version": "1"}),
@@ -154,6 +177,17 @@ mod tests {
             let result = check(json!({"version": 1, (field): true}));
             assert_eq!(result.indicators, [reason]);
             assert_eq!(result.unavailable_probes.len(), 3);
+        }
+        for (field, reason) in [
+            ("softwareRenderer", "software_renderer"),
+            ("missingChromeObject", "missing_chrome_object"),
+            ("noLanguages", "no_languages"),
+            ("platformInconsistent", "platform_inconsistent"),
+        ] {
+            let result = check(json!({"version": 2, (field): true}));
+            assert_eq!(result.rule_version, 2);
+            assert_eq!(result.indicators, [reason]);
+            assert_eq!(result.unavailable_probes.len(), 7);
         }
     }
 }

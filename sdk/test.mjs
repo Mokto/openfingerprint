@@ -173,7 +173,12 @@ try {
 		try {
 			await page.goto(`${origin}/custom`);
 			const automation = await page.evaluate(() => OpenFingerprint.collectAutomation());
-			assert.equal(automation.version, 1);
+			assert.equal(automation.version, 2);
+			for (const key of ['softwareRenderer', 'missingChromeObject', 'noLanguages', 'platformInconsistent'])
+				assert([true, false, null].includes(automation[key]), `${name}: ${key}`);
+			assert.equal(automation.noLanguages, await page.evaluate(() => navigator.languages.length === 0));
+			assert.equal(automation.missingChromeObject, await page.evaluate(() =>
+				/\bChrome\/\d/.test(navigator.userAgent) ? !('chrome' in window) : null));
 			assert.equal(automation.webdriver, await page.evaluate(() =>
 				typeof navigator.webdriver === 'boolean' ? navigator.webdriver : null));
 			if (name === 'chromium' || name === 'chrome') assert.equal(automation.webdriver, true);
@@ -198,8 +203,12 @@ try {
 					}
 				}, scenario);
 				try {
-					assert.deepEqual(await p.evaluate(() => OpenFingerprint.collectAutomation()), {
-						version: 1,
+					const observed = await p.evaluate(() => OpenFingerprint.collectAutomation());
+					const { softwareRenderer, missingChromeObject, noLanguages, platformInconsistent } = observed;
+					assert.equal(missingChromeObject, ['errors', 'unsupported', 'wrong_type', 'markers'].includes(scenario) ? null : !(await p.evaluate(() => 'chrome' in window)));
+					assert.deepEqual(observed, {
+						version: 2,
+						softwareRenderer, missingChromeObject, noLanguages, platformInconsistent,
 						webdriver: ['errors', 'unsupported', 'wrong_type'].includes(scenario) ? null : false,
 						headlessUserAgent: ['errors', 'unsupported', 'wrong_type'].includes(scenario) ? null : scenario === 'markers',
 						seleniumArtifacts: scenario === 'markers',
@@ -218,7 +227,14 @@ try {
 				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 5000 })
 			);
 			valid(a);
-			assert.deepEqual(a.automation, automation);
+			assert.deepEqual({ ...a.automation, softwareRenderer: null }, automation);
+			assert.equal(automation.softwareRenderer, null);
+			assert.equal(a.automation.softwareRenderer, await page.evaluate(() => {
+				const gl = document.createElement('canvas').getContext('webgl');
+				const debug = gl?.getExtension('WEBGL_debug_renderer_info');
+				const renderer = debug && gl.getParameter(debug.UNMASKED_RENDERER_WEBGL);
+				return typeof renderer === 'string' && renderer ? /SwiftShader|llvmpipe|softpipe|Software Rasterizer/i.test(renderer) : null;
+			}));
 			assert(!('webdriver' in a.hints));
 			assert(
 				a.fingerprint,
@@ -971,7 +987,7 @@ try {
 			assert(!diagnosticTimeout.excluded.includes('fonts'));
 			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
 			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
-			assert.equal(diagnosticTimeout.automation.version, 1);
+			assert.equal(diagnosticTimeout.automation.version, 2);
 			assert(diagnosticTimeout.components.canvas);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);

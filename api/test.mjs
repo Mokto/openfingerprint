@@ -398,7 +398,7 @@ try {
             signals: checkedProfile(signals())
         });
     }
-    for (const invalid of [false, [], 'browser', {}, { version: 2 }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
+    for (const invalid of [false, [], 'browser', {}, { version: 3 }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
         const response = await request('/v1/check', authHeaders(sites[4]), { ...fields, automation: invalid });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {

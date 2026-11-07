@@ -1,7 +1,7 @@
 import { environment } from './environment';
 import { identityExclusions } from './policy';
 
-import { collectAutomation, type AutomationEvidence } from './automation';
+import { collectAutomation, softwareRenderer, type AutomationEvidence } from './automation';
 export { collectAutomation, type AutomationEvidence };
 
 const unsupported = Symbol();
@@ -336,6 +336,8 @@ async function fontPreferences(signal: AbortSignal): Promise<Value> {
 	}
 }
 
+let gpuRenderer: unknown = null;
+
 function gpu(): Value {
 	const el = document.createElement('canvas');
 	el.width = el.height = 1;
@@ -384,6 +386,7 @@ function gpu(): Value {
 				return p ? [p.rangeMin, p.rangeMax, p.precision] : null;
 			})
 		);
+		gpuRenderer = debug ? ctx.getParameter(debug.UNMASKED_RENDERER_WEBGL) : null;
 		const anisotropy = ctx.getExtension('EXT_texture_filter_anisotropic');
 		const buffers = ctx.getExtension('WEBGL_draw_buffers');
 		return JSON.stringify([
@@ -505,6 +508,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		throw new TypeError('onIdentity must be a function');
 	if (typeof window === 'undefined' || !globalThis.crypto?.subtle)
 		throw new Error('A secure browser context is required');
+	gpuRenderer = null;
 	const start = performance.now();
 	const deadline = start + timeoutMs;
 	const controller = new AbortController();
@@ -567,6 +571,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		for (const name of Object.keys(probes) as Name[])
 			if (name !== 'audio' && name !== 'gpu' && !excluded.has(name)) await run(name);
 		await run('gpu');
+		result.automation.softwareRenderer = softwareRenderer(gpuRenderer);
 		await audioJob;
 		const entries = Object.entries(result.components)
 			.filter(([name]) => !result.excluded.includes(name as Name))
