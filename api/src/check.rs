@@ -32,6 +32,7 @@ pub struct AppState {
     pub dns: crate::mx::Resolver,
     pub rdap: crate::rdap::Rdap,
     pub countries: crate::country::CountryStore,
+    pub network: crate::network::Store,
 }
 impl AppState {
     pub fn from_env() -> Result<Self, &'static str> {
@@ -46,6 +47,7 @@ impl AppState {
         state.domains = crate::domains::DomainStore::from_env();
         state.countries = crate::country::CountryStore::from_env();
         state.collection = Some(crate::collection::Store::from_env(redis)?);
+        state.network = crate::network::Store::from_env()?;
         Ok(state)
     }
     fn configure(
@@ -87,6 +89,7 @@ impl AppState {
         Ok(Self {
             sites,
             collection: None,
+            network: crate::network::Store::empty(),
             domains: crate::domains::DomainStore::new(crate::domains::DomainData::unavailable(
                 "not_configured",
             )),
@@ -275,6 +278,13 @@ struct CheckRequest {
 }
 
 #[derive(Serialize)]
+struct IpCheck {
+    #[serde(flatten)]
+    country: crate::country::Check,
+    network: serde_json::Value,
+}
+
+#[derive(Serialize)]
 struct CheckResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     automation: Option<crate::automation::Check>,
@@ -283,7 +293,7 @@ struct CheckResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     domain: Option<crate::domains::DomainCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ip: Option<crate::country::Check>,
+    ip: Option<IpCheck>,
 }
 
 #[derive(Serialize)]
@@ -414,7 +424,10 @@ pub async fn check(
         automation: input.automation.map(crate::automation::check),
         signals: input.signals.map(check_signals),
         domain,
-        ip: input.ip.map(|value| state.countries.check(value)),
+        ip: input.ip.map(|ip| IpCheck {
+            country: state.countries.check(ip.clone()),
+            network: state.network.current().check(ip, "backend_supplied"),
+        }),
     })
     .into_response())
 }
@@ -768,6 +781,11 @@ mod tests {
             let result = state().countries.check(serde_json::json!(valid));
             assert_eq!(result.status, "unknown");
             assert_eq!(result.reason, Some("not_configured"));
+            let result = crate::network::Store::empty()
+                .current()
+                .check(serde_json::json!(valid), "backend_supplied");
+            assert_eq!(result["status"], "unknown");
+            assert_eq!(result["reason"], "non_global_ip");
         }
         for invalid in [
             "",

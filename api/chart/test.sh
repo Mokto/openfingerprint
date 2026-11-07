@@ -145,6 +145,29 @@ pod = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]
 abort("Country refresh must work without domain refresh") unless pod["containers"].size == 2 && pod["volumes"].map { |v| v["name"] } == ["country-data"]
 abort("Country updater requires no Kubernetes RBAC") if docs.any? { |d| %w[CronJob Role RoleBinding ServiceAccount].include?(d["kind"]) }
 ' "$rendered"
+if render --set networkData.refresh.enabled=true >/dev/null 2>&1; then echo "Network refresh requires a shared claim" >&2; exit 1; fi
+render --set networkData.existingClaim=network-data --set networkData.refresh.enabled=true --set "networkData.refresh.image.digest=$digest" > "$rendered"
+ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact
+pod = docs.find { |d| d["kind"] == "Deployment" && d["metadata"]["name"] == "openfingerprint" }["spec"]["template"]["spec"]
+api = pod["containers"][0]
+abort("API must mount shared network data read-only") unless api["volumeMounts"].include?({"name"=>"network-data","mountPath"=>"/network-data","readOnly"=>true})
+abort("Network manifest path missing") unless api["env"].include?({"name"=>"OPENFINGERPRINT_NETWORK_DATA","value"=>"/network-data/network.json"})
+abort("Wrong shared claim") unless pod["volumes"].include?({"name"=>"network-data","persistentVolumeClaim"=>{"claimName"=>"network-data"}})
+cron = docs.find { |d| d["kind"] == "CronJob" && d["metadata"]["name"] == "openfingerprint-network-data" }
+job = cron["spec"]["jobTemplate"]["spec"]["template"]
+updater = job["spec"]["containers"][0]
+abort("Network updater must have no service-account token") unless job["spec"]["automountServiceAccountToken"] == false
+abort("Writer must be non-root with volume group permissions") unless job["spec"]["securityContext"]["runAsUser"] == 65532 && job["spec"]["securityContext"]["fsGroup"] == 65532
+abort("Network updater isolation") unless cron["spec"]["concurrencyPolicy"] == "Forbid" && updater["securityContext"]["readOnlyRootFilesystem"] && updater["args"] == ["--output","/network-data/network.json"]
+abort("Pinned network updater image missing") unless updater["image"].start_with?("ghcr.io/mokto/openfingerprint-network-updater:") && updater["image"].end_with?("@sha256:" + "a"*64)
+policy = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-network-data" }["spec"]
+abort("Network updater policy must select only updater pods") unless policy["podSelector"]["matchLabels"] == job["metadata"]["labels"] && policy["ingress"] == []
+abort("Only DNS and HTTPS egress") unless policy["egress"].flat_map { |r| r["ports"].map { |p| [p["protocol"],p["port"]] } } == [["UDP",53],["TCP",53],["TCP",443]]
+groups = docs.find { |d| d["kind"] == "PrometheusRule" }["spec"]["groups"]
+abort("Network alerts missing") unless groups.any? { |g| g["name"] == "openfingerprint-network-data" && g["rules"].size == 2 }
+puts "Shared network volume, isolated refresh and freshness alerts passed."
+' "$rendered"
 for bad in "existingSecret=" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short" "networkPolicy.redisTo=bad" "networkPolicy.redisPort=0" "networkPolicy.redisPort=65536" "networkPolicy.redisPort=6379.5"; do
   if render --set "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi
 done

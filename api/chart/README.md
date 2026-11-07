@@ -124,6 +124,47 @@ a TTL; values are public registration dates; unavailable answers are not cached.
 API waits at most 250 ms for Redis and falls back to the registry.
 `openfingerprint_rdap_cache_total{result}` counts hits, misses and errors.
 
+## Network intelligence
+
+Network data uses an external shared volume, not a ConfigMap. Provision a PVC
+writable by UID/group 65532 and readable by every API replica and the updater.
+For pods on different nodes this normally requires ReadWriteMany storage with
+coherent atomic rename and cross-node file locking. The network-data claim must
+be provisioned separately.
+
+```yaml
+networkData:
+  existingClaim: openfingerprint-network-data
+  refresh:
+    enabled: true
+```
+
+The API mounts it read-only at `/network-data` and checks `network.json` every
+60 seconds. The isolated, non-root network updater writes it hourly, gets no
+Kubernetes token/RBAC or server credentials, and has only DNS/HTTPS egress.
+The manifest's ASN sidecars must remain in the same directory. Source failures
+keep their original expiry and produce a failed/degraded job, not clean results.
+No visitor IPs are sent to sources or stored on the volume.
+
+Published charts pin `networkData.refresh.image` to the matching
+`ghcr.io/mokto/openfingerprint-network-updater` digest. For source builds:
+
+```sh
+nice -n 15 docker build --target network-updater -f api/Dockerfile \
+  -t openfingerprint-network-updater:local .
+```
+
+Set `OPENFINGERPRINT_TRUSTED_PROXIES` in `existingSecret` to a JSON array of
+the real proxy CIDRs; the default is no proxy trust. The public collection proxy
+must sanitize/append forwarding headers correctly. Keep the API private and
+`apiFrom` restricted. See the [source, licensing and proxy guide](../README.md#local-network-intelligence).
+
+An empty `network.json.lock` file is normal: the OS lock, not file existence,
+serializes writers and is released on process death. Never delete an active lock
+file. Old content-addressed ASN versions may be pruned when no manifest/reader
+needs them. Prefer an hourly updater; source expiry is intentionally short for
+Tor. The API has no network-dataset fallback or per-request provider calls.
+
 ## Alerts
 
 With `prometheusRule.enabled`:
@@ -137,6 +178,8 @@ With `prometheusRule.enabled`:
 | `OpenFingerprintCountryDataUnavailable` | No country database for 30 minutes, or the metric is missing. |
 | `OpenFingerprintCountryDataExpiring` | The database expires within `expiryWarningDays` or has expired. |
 | `OpenFingerprintCountryDataReloadFailing` | The API rejected a changed country file in the last hour. |
+| `OpenFingerprintNetworkSourceUnavailable` | With a network claim configured, any of the three expected network sources is missing, stale or future-dated for 15 minutes. |
+| `OpenFingerprintNetworkDataReloadFailing` | A network reload was rejected in the last hour; last-good sources keep their original expiry. |
 
 ## Upgrading from a single-file deployment
 

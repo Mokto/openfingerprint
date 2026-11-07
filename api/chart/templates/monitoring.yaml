@@ -88,4 +88,23 @@ spec:
             summary: OpenFingerprint rejected a changed country database
             description: The API retains the last valid database until it expires.
         {{- end }}
+    {{- if .Values.networkData.existingClaim }}
+    - name: openfingerprint-network-data
+      rules:
+        - alert: OpenFingerprintNetworkSourceUnavailable
+          expr: openfingerprint_network_data_source_fresh{ {{- $selector -}} } == 0 or absent(openfingerprint_network_data_source_fresh{ {{- $selector -}} })
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: OpenFingerprint network evidence is missing, expired or future-dated
+            description: Check the network-data CronJob, source availability and shared volume; unknown is not a clean result.
+        - alert: OpenFingerprintNetworkDataReloadFailing
+          expr: increase(openfingerprint_network_data_reload_failures_total{ {{- $selector -}} }[1h]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: OpenFingerprint rejected a changed network snapshot
+            description: The last valid snapshot stays loaded without extending source expiry.
+    {{- end }}
 {{- end }}

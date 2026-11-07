@@ -11,6 +11,7 @@ concurrency:
 env:
   IMAGE: ghcr.io/mokto/openfingerprint-api
   UPDATER: ghcr.io/mokto/openfingerprint-domain-updater
+  NETWORK_UPDATER: ghcr.io/mokto/openfingerprint-network-updater
 jobs:
   release:
     runs-on: ubuntu-24.04
@@ -81,12 +82,25 @@ jobs:
             --entrypoint /nodejs/bin/node -v "$out:/out" "$UPDATER:sha-$GITHUB_SHA-$ARCH" \
             /app/update-country-data.mjs --output /out/country.mmdb
           test -s "$out/country.mmdb"
+      - name: Build and smoke-test the network updater against licensed public sources
+        run: |
+          docker buildx build --load --provenance=false --platform "linux/$ARCH" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -f api/Dockerfile --target network-updater -t "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH" .
+          out="$(mktemp -d)"
+          chmod 777 "$out"
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            -v "$out:/out" "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH" --output /out/network.json
+          docker run --rm --read-only --network none --cap-drop=ALL \
+            -v "$out:/out:ro" "$IMAGE:sha-$GITHUB_SHA-$ARCH" --validate-network-data /out/network.json
       - env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - run: |
           docker push "$IMAGE:sha-$GITHUB_SHA-$ARCH"
           docker push "$UPDATER:sha-$GITHUB_SHA-$ARCH"
+          docker push "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH"
   manifest:
     needs: [release, build]
     runs-on: ubuntu-24.04
@@ -97,12 +111,13 @@ jobs:
     outputs:
       api-digest: ${{ steps.digests.outputs.api }}
       updater-digest: ${{ steps.digests.outputs.updater }}
+      network-updater-digest: ${{ steps.digests.outputs.network-updater }}
     steps:
       - env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - run: |
-          for image in "$IMAGE" "$UPDATER"; do
+          for image in "$IMAGE" "$UPDATER" "$NETWORK_UPDATER"; do
             docker buildx imagetools create \
               -t "$image:$VERSION" -t "$image:sha-$GITHUB_SHA" \
               "$image:sha-$GITHUB_SHA-amd64" "$image:sha-$GITHUB_SHA-arm64"
@@ -111,7 +126,7 @@ jobs:
           printf '\nFirst release of a package: set its GHCR visibility to Public, then rerun if anonymous verification fails.\n' >> "$GITHUB_STEP_SUMMARY"
       - id: digests
         run: |
-          for pair in "api=$IMAGE" "updater=$UPDATER"; do
+          for pair in "api=$IMAGE" "updater=$UPDATER" "network-updater=$NETWORK_UPDATER"; do
             digest="$(docker buildx imagetools inspect "${pair#*=}:$VERSION" --format '{{json .Manifest}}' | jq -er .digest)"
             [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]
             echo "${pair%%=*}=$digest" >> "$GITHUB_OUTPUT"
@@ -119,7 +134,7 @@ jobs:
       - name: Verify public multi-architecture pulls
         run: |
           export DOCKER_CONFIG="$(mktemp -d)"
-          for image in "$IMAGE" "$UPDATER"; do
+          for image in "$IMAGE" "$UPDATER" "$NETWORK_UPDATER"; do
             if ! docker manifest inspect "$image:$VERSION" > /tmp/manifest.json; then
               echo "::error::Anonymous access failed. Set the ${image#ghcr.io/mokto/} package visibility to Public in GitHub Package settings, then rerun this job."
               exit 1
@@ -145,6 +160,7 @@ jobs:
       VERSION: ${{ needs.release.outputs.version }}
       API_DIGEST: ${{ needs.manifest.outputs.api-digest }}
       UPDATER_DIGEST: ${{ needs.manifest.outputs.updater-digest }}
+      NETWORK_UPDATER_DIGEST: ${{ needs.manifest.outputs.network-updater-digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -162,11 +178,12 @@ jobs:
         run: |
           set -euo pipefail
           bash api/chart/test.sh
-          yq -i '.image.digest = strenv(API_DIGEST) | .domainData.refresh.image.digest = strenv(UPDATER_DIGEST)' api/chart/values.yaml
+          yq -i '.image.digest = strenv(API_DIGEST) | .domainData.refresh.image.digest = strenv(UPDATER_DIGEST) | .networkData.refresh.image.digest = strenv(NETWORK_UPDATER_DIGEST)' api/chart/values.yaml
           helm package api/chart --version "$VERSION" --app-version "$VERSION"
-          rendered="$(helm template openfingerprint "openfingerprint-$VERSION.tgz" --set existingSecret=x --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]')"
+          rendered="$(helm template openfingerprint "openfingerprint-$VERSION.tgz" --set existingSecret=x --set networkData.existingClaim=network-test --set networkData.refresh.enabled=true --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]')"
           grep -q "image: \"$IMAGE:$VERSION@$API_DIGEST\"" <<< "$rendered"
           grep -q "image: \"$UPDATER:$VERSION@$UPDATER_DIGEST\"" <<< "$rendered"
+          grep -q "image: \"$NETWORK_UPDATER:$VERSION@$NETWORK_UPDATER_DIGEST\"" <<< "$rendered"
           echo "$TOKEN" | helm registry login ghcr.io --username "$ACTOR" --password-stdin
           helm push "openfingerprint-$VERSION.tgz" oci://ghcr.io/mokto/charts
           echo "Published chart oci://ghcr.io/mokto/charts/openfingerprint $VERSION." >> "$GITHUB_STEP_SUMMARY"

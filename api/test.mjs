@@ -143,6 +143,9 @@ const args = container
 	: [];
 delete process.env.OPENFINGERPRINT_SIGNING_KEY;
 delete process.env.OPENFINGERPRINT_REDIS_PASSWORD;
+delete process.env.OPENFINGERPRINT_REDIS_URL;
+delete process.env.OPENFINGERPRINT_NETWORK_DATA;
+delete process.env.OPENFINGERPRINT_TRUSTED_PROXIES;
 const child = spawn(container ? 'docker' : values.binary, args, {
 	env: {
 		...process.env,
@@ -330,7 +333,7 @@ try {
     console.log('Canonical schema-4/5 profiles, repeat verification and unknown/core-only identities passed.');
 
     phase = 'independent requested checks and explicit unconfigured intelligence';
-    const unknown = { status: 'unknown', reason: 'not_configured' };
+    const unknown = { status: 'unknown', reason: 'not_configured', network: { status: 'unknown', reason: 'non_global_ip', source: 'backend_supplied' } };
     const checkedProfile = input => ({
         status: 'ok', schema_version: input.version, fingerprint: input.fingerprint,
         evidence: { included_components: 2, included_hints: 1, unavailable_probes: 3, excluded_probes: 3 }
@@ -491,7 +494,7 @@ try {
     for (const ip of ['', 'example.test', '192.0.2.1:80', '[2001:db8::1]', '192.0.2.0/24', 'fe80::1%eth0', [], true]) {
         const response = await request('/v1/check', authHeaders(sites[5]), { domain: 'example.test', ip });
         assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), { domain: domainExpected(), ip: { status: 'invalid_input', reason: 'invalid_ip' } });
+        assert.deepEqual(await response.json(), { domain: domainExpected(), ip: { status: 'invalid_input', reason: 'invalid_ip', network: { status: 'invalid_input', reason: 'invalid_ip', source: 'backend_supplied' } } });
     }
     for (const body of [{}, { signals: null, domain: null, ip: null }, { automation: null }, [], null, 'not-json',
         { mx: ['mx.mail.example'] }, { domain: 'example.test', mx: ['mx.mail.example'] },

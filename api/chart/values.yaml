@@ -72,6 +72,23 @@ countryData:
     limits:
       memory: 256Mi
 
+networkData:
+  existingClaim: ""
+  refresh:
+    enabled: false
+    schedule: "7 * * * *"
+    image:
+      repository: ghcr.io/mokto/openfingerprint-network-updater
+      tag: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+
 # Redis is required: it holds collection state and caches RDAP answers (keys are SHA-256 hashes
 # of registered domains, always with a TTL). The chart deploys redis-ha by default. To use your
 # own Redis or Valkey, set redis-ha.enabled=false and put OPENFINGERPRINT_REDIS_URL (and
