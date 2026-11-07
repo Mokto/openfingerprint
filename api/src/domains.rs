@@ -1089,7 +1089,8 @@ mod tests {
         }
         let d = DomainData::parse(include_bytes!("../data/domains.json")).unwrap();
         assert_eq!(d.sources.len(), 9);
-        let at = d.sources[0].fetched_at_unix;
+        let at = d.sources.iter().map(|s| s.fetched_at_unix).max().unwrap();
+        assert!(d.sources.iter().all(|s| s.expires_at_unix > at));
         let r = d.check_at("sharklasers.com", &[], at).facts.unwrap();
         assert_eq!(r.disposable.value, Some(true));
         let gmail = d.check_at("gmail.com", &[], at).facts.unwrap();
