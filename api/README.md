@@ -459,8 +459,8 @@ Email addresses are `local@domain` with an unquoted dot-atom local part of at mo
 characters, a domain as above and at most 254 characters in total; quoted local parts,
 comments and address literals are rejected rather than interpreted. An invalid address
 returns only `email` with `invalid_email` and runs no domain check. A valid one returns
-`email: {"status": "checked", "role_account": true|false}` and the `domain` section.
-`role_account` is true when the local part, lowercased, without a `+tag` and without
+`email: {"status": "checked", "roleAccount": true|false}` and the `domain` section.
+`roleAccount` is true when the local part, lowercased, without a `+tag` and without
 `.`, `-` and `_`, is a shared mailbox name: the RFC 2142 names (`postmaster`, `abuse`,
 `info`, `sales`, `support`...) or a common business or system mailbox (`admin`,
 `billing`, `hello`, `noreply`, `office`, `team`...). It describes the address, not the

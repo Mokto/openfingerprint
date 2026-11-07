@@ -70,6 +70,7 @@ const ROLES: &[&str] = &[
 ];
 
 #[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct EmailCheck {
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
