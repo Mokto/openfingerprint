@@ -1,6 +1,6 @@
 {
 	"name": "@openfingerprint/sdk",
-	"version": "0.7.0",
+	"version": "0.8.0",
 	"description": "A standalone browser signal collector for fraud-prevention experiments.",
 	"license": "MIT",
 	"author": "Théo Mathieu",

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.7.0...sdk-v0.8.0) (2026-11-07)
+
+
+### Features
+
+* add canvas and audio tampering indicators, separate from automation ([#54](https://github.com/Mokto/openfingerprint/issues/54)) ([a22c26f](https://github.com/Mokto/openfingerprint/commit/a22c26f10bd267e821beaaecdbf21316eb137ad2))
+
 ## [0.7.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.6.1...sdk-v0.7.0) (2026-11-07)
 
 
