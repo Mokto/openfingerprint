@@ -36,7 +36,7 @@ OpenFingerprint is an experimental browser-signal SDK and a self-hosted check AP
 ## Finish with a pull request
 
 - After completing changes and the applicable checks, create or update a pull request before handing off; do not leave completed work only in a local worktree.
-- For large or UI-affecting changes, let the user test locally and wait for their request before opening the PR. Skip PR creation for read-only tasks or when the user explicitly declines one.
+- Open the PR for large and UI-affecting changes too; do not wait for the user to test locally first. Skip PR creation only for read-only tasks or when the user explicitly declines one.
 - Include the change summary, checks run, skipped checks and remaining limitations in the PR. Return its link to the user.
 - Reference roadmap issues without closing them while their other milestones remain unfinished.
 - Keep each task on its own branch. Preserve unrelated changes and other worktrees; do not merge or deploy without the user's request.
