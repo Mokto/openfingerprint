@@ -11,7 +11,10 @@ own licenses.
 
 The SDK has zero runtime dependencies. It hashes signals locally, makes no network
 requests and has no telemetry, remote code, WASM or import-time collection. You
-choose whether and where to send results.
+choose whether and where to send results. An opt-in `collectAutomation()` collector
+reports bounded automation observations separately from fingerprint identity;
+the API evaluates them with versioned rules. These client-reported indicators
+are forgeable, not proof of malicious traffic.
 
 The API verifies submitted evidence without visitor storage or history. Open
 domain snapshots provide independent disposable, free-subdomain and scoped

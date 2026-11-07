@@ -299,8 +299,13 @@ try {
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { signals: checkedProfile(input) });
     }
-    const fields = { signals: signals(), domain: 'ExAmPlE.test.', ip: '2001:db8::1' };
-    for (let mask = 1; mask < 8; mask++) {
+    const automation = { version: 1, webdriver: true, headlessUserAgent: false, seleniumArtifacts: false, phantomArtifacts: false };
+    const automationExpected = {
+        status: 'detected', rule_version: 1, source: 'client_reported',
+        indicators: ['webdriver'], unavailable_probes: []
+    };
+    const fields = { signals: signals(), domain: 'ExAmPlE.test.', ip: '2001:db8::1', automation };
+    for (let mask = 1; mask < 16; mask++) {
         const selected = Object.fromEntries(Object.entries(fields).filter((_, i) => mask & (1 << i)));
         const response = await request('/v1/check', authHeaders(sites[4]), selected);
         assert.equal(response.status, 200);
@@ -311,8 +316,43 @@ try {
         if ('signals' in selected) expected.signals = checkedProfile(selected.signals);
         if ('domain' in selected) expected.domain = domainExpected();
         if ('ip' in selected) expected.ip = unknown;
+        if ('automation' in selected) expected.automation = automationExpected;
         assert.deepEqual(await response.json(), expected);
     }
+    phase = 'automation evidence, unknowns and independent failures';
+    for (const [observations, status, indicators, unavailable] of [
+        [{ ...automation, webdriver: false }, 'not_detected', [], []],
+        [{ version: 1 }, 'unknown', [], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts']],
+        [{ ...automation, webdriver: null }, 'unknown', [], ['webdriver']],
+        [{ ...automation, headlessUserAgent: null }, 'detected', ['webdriver'], ['headless_user_agent']],
+        [{ ...automation, webdriver: false, headlessUserAgent: true }, 'detected', ['headless_user_agent'], []]
+    ]) {
+        const response = await request('/v1/check', authHeaders(sites[4]), { automation: observations, signals: signals() });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            automation: { status, rule_version: 1, source: 'client_reported', indicators, unavailable_probes: unavailable },
+            signals: checkedProfile(signals())
+        });
+    }
+    for (const invalid of [false, [], 'browser', {}, { version: 2 }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
+        const response = await request('/v1/check', authHeaders(sites[4]), { ...fields, automation: invalid });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            automation: { ...automationExpected, status: 'invalid_input', indicators: [], reason: 'invalid_automation' },
+            signals: checkedProfile(signals()), domain: domainExpected(), ip: unknown
+        });
+    }
+    const invalidSignals = await request('/v1/check', authHeaders(sites[4]), { automation, signals: false });
+    assert.equal(invalidSignals.status, 200);
+    assert.deepEqual(await invalidSignals.json(), {
+        automation: automationExpected,
+        signals: { status: 'invalid_input', reason: 'invalid_signals', schema_version: null, fingerprint: null, evidence: null }
+    });
+    const omittedAutomation = await request('/v1/check', authHeaders(sites[4]), { automation: null, signals: signals() });
+    assert.deepEqual(await omittedAutomation.json(), { signals: checkedProfile(signals()) });
+    const legacyAutomation = await request('/v1/verify', authHeaders(sites[4]), { ...signals(), automation });
+    assert.equal(legacyAutomation.status, 400);
+    console.log('Automation rules, all 15 input combinations, unknowns, stable identities and independent failures passed.');
     const coreOnly = await request('/v1/check', authHeaders(sites[4]), {
         signals: { ...signals(), fingerprint: null }, domain: 'example.test'
     });
@@ -324,7 +364,7 @@ try {
         signals: null, domain: null, ip: '192.0.2.1'
     });
     assert.deepEqual(await nulls.json(), { ip: unknown });
-    console.log('All seven input combinations, requested-only results, evidence counts and domain data state passed.');
+    console.log('All 15 input combinations, requested-only results, evidence counts and domain data state passed.');
     phase = `domain classification and source scope (${mode})`;
     for (const [domain, expected] of [
         ['mail.example', { disposable: true }], ['Child.MAIL.example.', { disposable: true }],
@@ -384,7 +424,7 @@ try {
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { domain: domainExpected(), ip: { status: 'invalid_input', reason: 'invalid_ip' } });
     }
-    for (const body of [{}, { signals: null, domain: null, ip: null }, [], null, 'not-json',
+    for (const body of [{}, { signals: null, domain: null, ip: null }, { automation: null }, [], null, 'not-json',
         { mx: ['mx.mail.example'] }, { domain: 'example.test', mx: ['mx.mail.example'] },
         ...['email', 'visitor_token', 'account_id', 'userAgent', 'storageId'].map(k => ({ domain: 'example.test', [k]: 'unsolicited' }))]) {
         const response = await request('/v1/check', authHeaders(sites[5]), body);

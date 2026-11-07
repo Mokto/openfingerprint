@@ -3,8 +3,9 @@
 A standalone, MIT-licensed TypeScript browser-signal collector with **zero runtime dependencies**.
 
 The browser SDK makes no network requests and has no telemetry, remote code, WASM
-or import-time collection. Signals are hashed locally with Web Crypto. You choose
-whether and where to send results. The optional API verifies hashed results and
+or import-time collection. Identity signals are hashed locally with Web Crypto;
+optional automation observations are unhashed booleans/nulls. You choose whether
+and where to send results. The optional API verifies hashed results and
 provides independent browser/domain/IP result sections without visitor storage or
 history. Domain/IP intelligence sources are not implemented yet: valid inputs
 explicitly return unknown. It is self-hosted, not a managed identification service.
@@ -40,7 +41,7 @@ pnpm build
 Node 24+ and pnpm 12.11.2 are used for development. Build outputs:
 
 - `dist/index.js`: standalone ES module.
-- `dist/index.iife.js`: script exposing `OpenFingerprint.collect`.
+- `dist/index.iife.js`: script exposing `OpenFingerprint.collect` and `OpenFingerprint.collectAutomation`.
 - `dist/types/`: TypeScript declarations.
 
 The package exports resolve to the built ES module and declarations. Only
@@ -87,6 +88,43 @@ Options:
 
 No persistence is used by default. Explicitly enabling `storageKey` reads/writes
 only that marker, not arbitrary localStorage data. Blocked storage returns `null`.
+
+### Opt-in automation observations
+
+```js
+import { collect, collectAutomation } from '@openfingerprint/sdk';
+
+const signals = await collect();
+const automation = collectAutomation();
+const payload = { signals, automation };
+```
+
+Forward `payload` through your own backend to a compatible `POST /v1/check`.
+Never expose the API's server credential to browser code. Deploy the API update
+before sending `automation`; older versions reject the field.
+
+`collectAutomation()` is synchronous and browser-only. It returns separately
+versioned evidence; `collect()` never invokes it or includes it in identity hashes.
+
+| Field | Observation |
+| --- | --- |
+| `version` | Always `1`, independent of fingerprint schema 5. |
+| `webdriver` | The boolean `navigator.webdriver` value. |
+| `headlessUserAgent` | A `HeadlessChrome/` token in the user-agent string. |
+| `seleniumArtifacts` | Presence of `__webdriver_evaluate`, `__selenium_evaluate`, `__webdriver_script_fn` or `__selenium_unwrapped` on `document`. |
+| `phantomArtifacts` | Presence of `callPhantom` or `_phantom` on `window`. |
+
+Each observation is `boolean | null`. Missing/non-boolean WebDriver values,
+empty/non-string user agents and throwing reads return null independently.
+Artifact checks inspect property presence without invoking getters or functions.
+The collector makes no network requests, writes no storage and returns no raw UA
+or artifact values.
+
+These are client-reported, forgeable indicators, not a malicious-bot verdict.
+Hidden automation can evade them; applications can also define matching names.
+An observed false means only that this specific marker was absent. It does not
+prove human activity. The [API](../api/README.md#automation-indicators) evaluates
+the observations with versioned rules and preserves unknowns.
 
 ### Identity readiness and cooperative batching
 

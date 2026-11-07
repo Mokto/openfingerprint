@@ -232,6 +232,7 @@ struct Verified {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CheckRequest {
+    automation: Option<serde_json::Value>,
     signals: Option<serde_json::Value>,
     domain: Option<serde_json::Value>,
     ip: Option<serde_json::Value>,
@@ -239,6 +240,8 @@ struct CheckRequest {
 
 #[derive(Serialize)]
 struct CheckResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    automation: Option<crate::automation::Check>,
     #[serde(skip_serializing_if = "Option::is_none")]
     signals: Option<SignalCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -376,7 +379,11 @@ pub async fn check(
     let Json(input) = Json::<CheckRequest>::from_request(request, &())
         .await
         .map_err(json_error)?;
-    if input.signals.is_none() && input.domain.is_none() && input.ip.is_none() {
+    if input.automation.is_none()
+        && input.signals.is_none()
+        && input.domain.is_none()
+        && input.ip.is_none()
+    {
         return Err(ApiError::invalid());
     }
     let domain = match input.domain {
@@ -384,6 +391,7 @@ pub async fn check(
         None => None,
     };
     Ok(Json(CheckResponse {
+        automation: input.automation.map(crate::automation::check),
         signals: input.signals.map(check_signals),
         domain,
         ip: input.ip.map(check_ip),

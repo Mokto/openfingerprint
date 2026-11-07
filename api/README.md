@@ -2,7 +2,7 @@
 
 A self-hosted, MIT-licensed backend companion to the browser SDK. The next release
 provides `GET /health` and one primary business endpoint, `POST /v1/check`, with
-independent browser, domain and IP sections. `POST /v1/verify` is retained as a
+independent browser, automation, domain and IP sections. `POST /v1/verify` is retained as a
 compatibility adapter while existing callers migrate.
 
 Domain intelligence runs locally against openly licensed, versioned snapshots:
@@ -10,6 +10,7 @@ Domain intelligence runs locally against openly licensed, versioned snapshots:
 | Requested check | Available behavior |
 | --- | --- |
 | `signals` | Canonical schema-4/5 verification and bounded evidence counts. |
+| `automation` | Versioned rules for opt-in, client-reported automation observations. |
 | `domain` | Disposable-domain, free-subdomain and source-scoped referrer-spam evidence, with provenance and expiry. |
 | `ip` | IPv4/IPv6 literal validation; otherwise `unknown/not_configured`. |
 
@@ -52,8 +53,9 @@ check; use a resolver you trust, such as the cluster DNS, and allow only it on U
 RDAP and other live lookups are not implemented.
 There are no lookup retries, remote-provider waits or visitor-history fallbacks.
 
-The SDK is unchanged: it hashes signals locally, makes no network requests and
-writes no storage unless the caller opts into `storageKey`. Leave that option
+The SDK hashes identity signals locally; optional automation evidence contains
+only booleans/nulls and its version. It makes no network requests and writes no
+storage unless the caller opts into `storageKey`. Leave that option
 unset when sending results here. Hashes are pseudonymous, not anonymous. Your
 application and hosting proxy have their own logging, retention, disclosure and
 access-control responsibilities.
@@ -108,12 +110,13 @@ The JSON object accepts only these fields:
 | Field | Shape |
 | --- | --- |
 | `signals` | Optional SDK result object, as described below. |
+| `automation` | Optional version-1 SDK automation evidence, as described below. |
 | `domain` | Optional ASCII hostname, not a URL or complete email address. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
 
 At least one non-null field is required. Null is equivalent to omission. Results
 contain only requested non-null sections. Inputs can be combined in any order;
-there is no cross-input identity merging, and domain/IP never change the browser ID.
+there is no cross-input identity merging, and automation/domain/IP never change the browser ID.
 
 For example:
 
@@ -197,6 +200,49 @@ Malformed JSON, non-object envelopes, empty/all-null requests and unknown top-le
 fields return HTTP 400. Full email addresses, visitor tokens, account metadata and
 raw browser context are not additional inputs. All request bodies are limited to
 64 KiB, including nested evidence, before evaluation.
+
+#### Automation indicators
+
+Call the SDK's `collectAutomation()` separately and forward its result through
+your backend in `automation`, not inside `signals`. No fingerprint is required:
+
+```json
+{"automation":{"version":1,"webdriver":true,"headlessUserAgent":false,"seleniumArtifacts":false,"phantomArtifacts":null}}
+```
+
+The response contains:
+
+```json
+{
+  "automation": {
+    "status": "detected",
+    "rule_version": 1,
+    "source": "client_reported",
+    "indicators": ["webdriver"],
+    "unavailable_probes": ["phantom_artifacts"]
+  }
+}
+```
+
+Evidence accepts only `version: 1` and four optional booleans:
+`webdriver`, `headlessUserAgent`, `seleniumArtifacts`, `phantomArtifacts`.
+Null or omitted observations remain unknown. Names in `indicators` and
+`unavailable_probes` are respectively `webdriver`, `headless_user_agent`,
+`selenium_artifacts`, `phantom_artifacts`, in that order.
+
+Rule version 1 reports `detected` if any observation is true, `unknown` if none
+is true and any is unavailable, or `not_detected` only if all four are false.
+Malformed evidence, unknown keys, unsupported versions and non-boolean/non-null
+observations produce `invalid_input` with `reason: invalid_automation` and empty
+indicator/unavailable arrays. Other sections still run. Top-level
+`automation: null` omits the section, like other optional inputs.
+
+These rules interpret client reports, not attested browser execution. Evidence
+can be forged or hidden. `not_detected` is not proof of a human, and automation
+may be legitimate testing or assistive tooling, not malicious traffic. No
+good/bad bot classification, confidence, fraud score, retention or new outbound
+traffic is introduced. Deploy the compatible API before sending this field;
+older servers reject it. `/v1/verify` remains unchanged and rejects diagnostics.
 
 #### Domain and IP boundaries
 
@@ -304,7 +350,7 @@ pnpm api:check
 
 This runs formatting, Clippy, unit tests and a real loopback HTTP self-check. It
 generates credentials in RAM, boots without a signing key, checks both schemas,
-all seven input combinations, partial failures, scoped domain matches, public-suffix
+all 15 input combinations, automation rules, partial failures, scoped domain matches, public-suffix
 boundaries, fresh/stale/invalid/missing snapshots, strict metadata/body boundaries,
 compatibility and no request logging, then stops the
 server. Updater checks use local fixtures and verify license-change rejection and
