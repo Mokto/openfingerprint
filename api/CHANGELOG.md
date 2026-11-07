@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/Mokto/openfingerprint/compare/api-v0.10.0...api-v0.10.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **api:** return the role-account field as roleAccount, like other /v1/check keys ([#60](https://github.com/Mokto/openfingerprint/issues/60)) ([81d9f6a](https://github.com/Mokto/openfingerprint/commit/81d9f6af22a9697f1f40e0a755ab22e635437489))
+
 ## [0.10.0](https://github.com/Mokto/openfingerprint/compare/api-v0.9.0...api-v0.10.0) (2026-11-07)
 
 
