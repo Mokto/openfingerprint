@@ -39,7 +39,9 @@ sources, licensing and refresh without image rebuilds.
 can collide; settings, updates and missing signals can split repeat visits.
 Identification accuracy comparable to FingerprintJS has not been established.
 Hashes are pseudonymous, not anonymous. Review each component's privacy and
-security boundaries before use.
+security boundaries before use. The [identification study tools](evaluation/README.md)
+provide consented, externally labelled capture and offline evaluation; automated
+smoke tests do not establish real-device accuracy.
 
 ## Install the SDK
 

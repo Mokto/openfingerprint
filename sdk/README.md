@@ -287,6 +287,11 @@ Reports under `.test-results/` are ignored by git. Benchmarks rotate collectors 
 fresh documents, measuring collection rather than download/parse. Automation and
 Playwright WebKit are not physical-device ground truth or shipping Safari.
 
+For a consented, externally labelled repeat-visit study, use the repository's
+[offline identification measurement tools](../evaluation/README.md). They compare
+full/core identities separately and report collisions, missed returns and missing
+evidence without modifying the published SDK or uploading samples.
+
 ## Reference scheduling comparison
 
 Pinned development references are FingerprintJS 5.3.0 and ThumbmarkJS 1.12.0.
@@ -319,7 +324,9 @@ Hashes are **pseudonymous, not anonymous**; low-entropy values can be guessed.
 Browser values can be forged. Signing collected results on a server would not
 turn them into hardware attestation. Use only for legitimate security/fraud
 prevention, with appropriate disclosure, consent/legal basis, customer isolation
-and retention controls. Do not log raw probes, hashes or persistent identifiers.
+and retention controls. Do not put raw probes, hashes or persistent identifiers
+in application logs. Approved identification studies require separate restricted
+storage, consent, retention and withdrawal handling as described in the study guide.
 
 The client provides no cross-browser identity guarantee, server-side account
 linking, disposable-email checks, network intelligence, signed tokens or automatic
