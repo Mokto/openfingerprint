@@ -543,7 +543,7 @@ try {
         ['zq.person-7@relay.example', false, { relay: true }]
     ]) {
         const body = await (await request('/v1/check', authHeaders(sites[9]), { email })).json();
-        assert.deepEqual(body, { domain: domainExpected(expected), email: { status: 'checked', role_account: role } }, 'email case');
+        assert.deepEqual(body, { domain: domainExpected(expected), email: { status: 'checked', roleAccount: role } }, 'email case');
     }
     for (const email of ['publicmail.example', 'a@b@publicmail.example', 'a..b@publicmail.example', '"a b"@publicmail.example', 'a@localhost', 42, {}]) {
         const body = await (await request('/v1/check', authHeaders(sites[9]), { email, ip: '192.0.2.1' })).json();
