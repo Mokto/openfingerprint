@@ -46,7 +46,7 @@ return record
 "#;
 
 pub struct Store {
-    client: redis::Client,
+    link: crate::cache::Link,
     ttl_ms: u64,
     capacity: usize,
 }
@@ -62,7 +62,7 @@ impl Store {
             Err(_) => Err("Invalid collection limits"),
         };
         Ok(Self {
-            client,
+            link: crate::cache::Link::new(client),
             ttl_ms: number("OPENFINGERPRINT_COLLECTION_TTL_SECONDS", 120, 300)? * 1000,
             capacity: number("OPENFINGERPRINT_COLLECTION_CAPACITY", 1024, 100_000)? as usize,
         })
@@ -73,21 +73,20 @@ impl Store {
         keys: &[String],
         args: &[String],
     ) -> Result<T, ApiError> {
-        tokio::time::timeout(Duration::from_secs(2), async {
-            let mut connection = self.client.get_multiplexed_async_connection().await?;
-            let script = redis::Script::new(script);
-            let mut command = script.prepare_invoke();
-            for key in keys {
-                command.key(key);
-            }
-            for arg in args {
-                command.arg(arg);
-            }
-            command.invoke_async(&mut connection).await
-        })
-        .await
-        .map_err(|_| unavailable())?
-        .map_err(|_: redis::RedisError| unavailable())
+        self.link
+            .run(Duration::from_secs(2), |mut connection| async move {
+                let script = redis::Script::new(script);
+                let mut command = script.prepare_invoke();
+                for key in keys {
+                    command.key(key);
+                }
+                for arg in args {
+                    command.arg(arg);
+                }
+                command.invoke_async(&mut connection).await
+            })
+            .await
+            .map_err(|()| unavailable())
     }
 }
 
