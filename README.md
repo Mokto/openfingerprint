@@ -26,7 +26,8 @@ expiry and exact reviewed disputes. The API looks up each unlisted domain's MX h
 detect new domains whose mail is routed to a listed disposable provider, and the
 registration date of its registered domain over RDAP. Unlisted data stays
 unknown, not clean. IP
-intelligence is not implemented yet. The API does not collect browser signals,
+country estimates use an optional local DB-IP Country Lite database, with provenance,
+expiry and automatic refresh in the Helm chart; they do not establish a person's location. The API does not collect browser signals,
 and the SDK does not depend on it. See the [data guide](api/data/README.md) for
 sources, licensing and refresh without image rebuilds.
 

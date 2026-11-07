@@ -31,6 +31,7 @@ pub struct AppState {
     pub domains: crate::domains::DomainStore,
     pub dns: crate::mx::Resolver,
     pub rdap: crate::rdap::Rdap,
+    pub countries: crate::country::CountryStore,
 }
 impl AppState {
     pub fn from_env() -> Result<Self, &'static str> {
@@ -43,6 +44,7 @@ impl AppState {
             crate::rdap::Rdap::from_env(redis.clone())?,
         )?;
         state.domains = crate::domains::DomainStore::from_env();
+        state.countries = crate::country::CountryStore::from_env();
         state.collection = Some(crate::collection::Store::from_env(redis)?);
         Ok(state)
     }
@@ -90,6 +92,7 @@ impl AppState {
             )),
             dns,
             rdap,
+            countries: crate::country::CountryStore::new(None),
         })
     }
     async fn check_domain(&self, value: serde_json::Value) -> crate::domains::DomainCheck {
@@ -280,7 +283,7 @@ struct CheckResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     domain: Option<crate::domains::DomainCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ip: Option<IntelligenceCheck>,
+    ip: Option<crate::country::Check>,
 }
 
 #[derive(Serialize)]
@@ -300,12 +303,6 @@ struct Evidence {
     included_hints: usize,
     unavailable_probes: usize,
     excluded_probes: usize,
-}
-
-#[derive(Serialize)]
-struct IntelligenceCheck {
-    status: &'static str,
-    reason: &'static str,
 }
 
 pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
@@ -341,20 +338,6 @@ pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
         },
         reason: Some("invalid_signals"),
         evidence: None,
-    }
-}
-
-fn check_ip(value: serde_json::Value) -> IntelligenceCheck {
-    let valid = value
-        .as_str()
-        .is_some_and(|s| s.parse::<std::net::IpAddr>().is_ok());
-    IntelligenceCheck {
-        status: if valid { "unknown" } else { "invalid_input" },
-        reason: if valid {
-            "not_configured"
-        } else {
-            "invalid_ip"
-        },
     }
 }
 
@@ -431,7 +414,7 @@ pub async fn check(
         automation: input.automation.map(crate::automation::check),
         signals: input.signals.map(check_signals),
         domain,
-        ip: input.ip.map(check_ip),
+        ip: input.ip.map(|value| state.countries.check(value)),
     })
     .into_response())
 }
@@ -782,9 +765,9 @@ mod tests {
             "127.0.0.1",
             "::1",
         ] {
-            let result = check_ip(serde_json::json!(valid));
+            let result = state().countries.check(serde_json::json!(valid));
             assert_eq!(result.status, "unknown");
-            assert_eq!(result.reason, "not_configured");
+            assert_eq!(result.reason, Some("not_configured"));
         }
         for invalid in [
             "",
@@ -796,10 +779,13 @@ mod tests {
             "fe80::1%eth0",
             " 192.0.2.1",
         ] {
-            let result = check_ip(serde_json::json!(invalid));
+            let result = state().countries.check(serde_json::json!(invalid));
             assert_eq!(result.status, "invalid_input");
-            assert_eq!(result.reason, "invalid_ip");
+            assert_eq!(result.reason, Some("invalid_ip"));
         }
-        assert_eq!(check_ip(serde_json::json!(42)).status, "invalid_input");
+        assert_eq!(
+            state().countries.check(serde_json::json!(42)).status,
+            "invalid_input"
+        );
     }
 }

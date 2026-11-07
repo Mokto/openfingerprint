@@ -1,7 +1,11 @@
 # OpenFingerprint Helm chart
 
-Runs the check API and keeps its open domain data fresh, with the Redis it requires
-for collection state and the RDAP cache: the bundled `redis-ha` or one you already run.
+Runs the check API and keeps its open domain and country data fresh, with the Redis
+it requires for collection state and the RDAP cache: bundled `redis-ha` or your own.
+When enabled, NetworkPolicies permit DNS, Redis, registry HTTPS and public HTTPS
+for country downloads. Policies apply to the entire pod, not individual containers.
+Disable `countryData.enabled` to remove country refresh and its HTTPS allowance;
+the RDAP HTTPS allowance remains.
 
 ```sh
 helm install openfingerprint oci://ghcr.io/mokto/charts/openfingerprint \
@@ -24,11 +28,12 @@ API and updater image digests.
 | Resource | Purpose |
 | --- | --- |
 | Deployment and ClusterIP Service | The API on port 80 (container 8180) and, when enabled, metrics on 9180. No Ingress. |
-| NetworkPolicy `<release>-api` (with `networkPolicy.enabled`) | Ingress only from `networkPolicy.apiFrom` (and `metricsFrom` on the metrics port). Egress only UDP 53 to `networkPolicy.dnsTo` (default: `kube-dns` pods in `kube-system`) for MX and registry-host lookups, TCP 443 to `networkPolicy.rdapTo` (default: public IPv4/IPv6, no private, CGNAT, loopback or link-local ranges) for RDAP, and Redis: the bundled HAProxy pods on 6379, or `networkPolicy.redisTo` on `redisPort`. |
+| NetworkPolicy `<release>-api` (with `networkPolicy.enabled`) | Ingress only from `networkPolicy.apiFrom` (and `metricsFrom` on the metrics port). Egress UDP 53 (also TCP 53 with country refresh) to `networkPolicy.dnsTo` (default: `kube-dns` pods in `kube-system`) for MX and registry-host lookups, TCP 443 to `networkPolicy.rdapTo` (default: public IPv4/IPv6, no private, CGNAT, loopback or link-local ranges) for RDAP, public TCP 443 for country refresh when enabled, and Redis: the bundled HAProxy pods on 6379, or `networkPolicy.redisTo` on `redisPort`. |
 | CronJob `<release>-domain-data` | Every six hours, fetches the pinned public sources and publishes the snapshot to the `<release>-domain-data` ConfigMap. |
 | ServiceAccount, Role, RoleBinding | Only the updater gets a token: it may create ConfigMaps and get/patch its own. Kubernetes cannot scope `create` to a name. |
 | NetworkPolicy `<release>-domain-data` (with `networkPolicy.enabled`) | The updater accepts nothing; it may reach DNS, HTTPS and `kubeApiServerPorts`. |
-| ServiceMonitor, PrometheusRule | Optional dataset-health scraping and alerts. |
+| Sidecar `country-updater` and shared `emptyDir` | Downloads DB-IP Country Lite immediately, then daily; retries hourly after failures. Uses the pinned `domainData.refresh.image`, with no credentials or Kubernetes token. |
+| ServiceMonitor, PrometheusRule | Optional domain/country dataset-health scraping and alerts. |
 | `redis-ha` (default; `redis-ha.enabled`) | The [DandyDeveloper redis-ha](https://github.com/DandyDeveloper/charts/tree/master/charts/redis-ha) chart: three Redis pods with Sentinel and two HAProxy pods, 64 MB, `noeviction`, no persistence or snapshots. Disable it to use your own Redis. |
 
 The API mounts the ConfigMap read-only and reloads it within about two minutes of a
@@ -42,6 +47,21 @@ kubectl -n openfingerprint create job --from=cronjob/openfingerprint-domain-data
 A rejected snapshot leaves the last valid one serving until its sources expire.
 Set `domainData.refresh.enabled=false` to use only the data bundled in the image,
 which expires a week after that image's snapshot.
+
+## Country data
+
+`countryData.enabled=true` enables local country estimates and automatic refresh.
+The API mounts the shared MMDB read-only and checks for changes every minute.
+Invalid files and older builds leave the last valid database serving until its
+62-day expiry. Country results stay unknown until the first download completes;
+download failure never blocks API startup. The bounded `emptyDir` is per pod,
+not persistent: restarts download again and each replica refreshes independently.
+`countryData.resources` controls the sidecar resources. The API image contains no
+country database.
+
+[DB-IP attribution is required](../data/README.md#ip-country-data), including a
+link on web pages using the results. Country is a network-location estimate,
+not a physical-person location or fraud decision.
 
 ## MX lookups
 
@@ -114,6 +134,9 @@ With `prometheusRule.enabled`:
 | `OpenFingerprintDomainSourceExpired` | A source expired; checks report it as stale. |
 | `OpenFingerprintDomainSourceExpiring` | A source expires within `expiryWarningDays` (5). For feeds, refreshes have failed for days; reviewed sources need a person to re-review evidence. |
 | `OpenFingerprintDomainDataReloadFailing` | The API rejected a changed snapshot in the last hour. |
+| `OpenFingerprintCountryDataUnavailable` | No country database for 30 minutes, or the metric is missing. |
+| `OpenFingerprintCountryDataExpiring` | The database expires within `expiryWarningDays` or has expired. |
+| `OpenFingerprintCountryDataReloadFailing` | The API rejected a changed country file in the last hour. |
 
 ## Upgrading from a single-file deployment
 

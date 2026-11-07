@@ -5,21 +5,21 @@ provides stateless `POST /v1/check` with independent browser, automation, domain
 and IP sections, plus a Redis-backed collection flow for single-use server-owned
 events. `POST /v1/verify` remains a compatibility adapter.
 
-Domain intelligence runs locally against openly licensed, versioned snapshots:
+Domain and country intelligence run locally against openly licensed datasets:
 
 | Requested check | Available behavior |
 | --- | --- |
 | `signals` | Canonical schema-4/5 verification and bounded evidence counts. |
 | `automation` | Versioned rules for client-reported observations, now included automatically inside SDK `signals`. |
 | `domain` | Disposable-domain, free-subdomain and source-scoped referrer-spam evidence, with provenance and expiry. |
-| `ip` | IPv4/IPv6 literal validation; otherwise `unknown/not_configured`. |
+| `ip` | IPv4/IPv6 country estimate from an optional local DB-IP Country Lite MMDB, with provenance and expiry. |
 
 The domain snapshot is bundled and can be overridden with a refreshed local file.
 A valid input does not mean a domain is legitimate or an IP is clean. Unlisted or
 uncovered domains remain null, not false. The API looks up MX hosts to detect
 mail routed to a listed disposable provider, and reports when the registered
 domain was created, from its registry over RDAP.
-IP intelligence, RDAP and domain authority are not implemented. The spam scope is specifically **referrer spam**,
+IP reputation, VPN/proxy detection and domain authority are not implemented. The spam scope is specifically **referrer spam**,
 not email-sending reputation. See [sources, licenses and refresh](data/README.md). Older API releases, including 0.4.0, have a different
 `/v1/check` contract; this guide describes the next release, not a live upgrade.
 
@@ -37,11 +37,13 @@ answers keyed by SHA-256 hashes of registered domains. Raw collection user
 agents/platforms are discarded after evaluation; request evidence and credentials
 are not logged. Outbound traffic consists of MX DNS queries, at most one RDAP
 request to the domain's registry per uncached check, and Redis commands.
+The separate country updater downloads only the public database; it never
+receives checked IPs or application credentials.
 Responses have `Cache-Control: no-store` and set no cookies. Domain/IP inputs are
 not echoed in responses. No browser/server IP is inferred from the connection or
 forwarded headers. Signals-only calls do not run domain/IP checks.
 
-The process retains configured credential tags and a read-only domain snapshot;
+The process retains configured credential tags and read-only domain/country datasets;
 collection state and the RDAP cache are shared in Redis, not an in-memory fallback.
 There is no visitor history. Collection capacity limits are not rate limiting:
 apply quotas and request limits at your edge/gateway, including the public collector.
@@ -94,6 +96,8 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_COLLECTION_CAPACITY` | Maximum outstanding challenges plus events per server credential: 1–100000, default 1024. Issuance at capacity returns 429. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
 | `OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS` | Seconds between checks of the override file, 1–86400, default 60. A changed file that fails to read or parse is rejected and the last valid snapshot stays until its sources expire. |
+| `OPENFINGERPRINT_COUNTRY_DATA` | Optional read-only DB-IP Country Lite MMDB path. Without it, IP checks return `unknown/not_configured`. Missing/invalid files yield unknown country results without disabling other checks. |
+| `OPENFINGERPRINT_COUNTRY_DATA_RELOAD_SECONDS` | Seconds between country file checks, 1–86400, default 60. Invalid files or older database builds are rejected; the last valid database remains until it expires. |
 | `OPENFINGERPRINT_DNS` | Nameserver for MX lookups, default `system` (the first `nameserver` in `/etc/resolv.conf`). Also accepts an IP, `IP:port` or `host:port` (resolved once at startup). Startup fails without a usable nameserver. |
 | `OPENFINGERPRINT_RDAP_BOOTSTRAP` | Optional path to an IANA RDAP bootstrap file replacing the bundled one; read at startup. It may contain `http://` servers, for local test registries. |
 | `OPENFINGERPRINT_METRICS_ADDR` | Optional listener for Prometheus `GET /metrics`, for example `0.0.0.0:9180`. Keep it off the API port so network policy can expose it separately. |
@@ -151,7 +155,26 @@ For example:
 {"domain":"example.test","ip":"192.0.2.1"}
 ```
 
-The IP section returns `{"status":"unknown","reason":"not_configured"}`.
+Without a configured country database, the IP section returns
+`{"status":"unknown","reason":"not_configured"}`. With a fresh database and a
+covered public IP, it returns `status: ok`, `country_code` (for example `DK`) and
+`source`: dataset ID, license, attribution URL/text, database build/expiry timestamps
+and file SHA-256. No IP is echoed. The example documentation address above is
+reserved and therefore stays unknown even with a database.
+
+Country is an estimate of the network endpoint, not a person's physical location,
+nationality or a fraud verdict. VPNs, carrier routing and anycast can produce
+misleading countries. It never changes browser identity. IPv4-mapped IPv6 is
+normalized to IPv4; private, shared, loopback, documentation, multicast and other
+special-purpose addresses remain `unknown/non_public_ip`. Missing coverage or an
+unknown country code yields `unknown/not_found`. Missing/invalid configured data
+yields `unknown/unavailable`; a database older than 62 days yields
+`unknown/stale_data`. Unknown/error results omit `country_code`; results against a
+loaded database retain its provenance even when stale. `ok` means a country was
+found, not that the IP is safe. The API never infers IPs from connections or headers.
+
+See [country licensing and refresh](data/README.md#ip-country-data) before using
+these results: DB-IP requires attribution, including a link on web pages that use them.
 With fresh domain data, `domain` contains `disposable`, `free_subdomain` and `spam`
 facts. Disposable evidence combines the community list with recently monitored
 provider domains from an openly licensed feed; no vendor API results are imported. Each has a nullable `value`, evidence `status`, `scope` and `sources` with
@@ -485,6 +508,9 @@ requests, domains or credentials:
 | `openfingerprint_mx_lookups_total{result}` | MX lookups by `mx_lookup` outcome. |
 | `openfingerprint_rdap_lookups_total{result}` | Registry lookups by `registration.status` (not cache hits or `not_applicable`). |
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
+| `openfingerprint_country_data_loaded` | 1 when a valid country database is loaded (not necessarily fresh). |
+| `openfingerprint_country_data_expiry_timestamp_seconds` | When the country database stops being used, or 0 when unavailable. |
+| `openfingerprint_country_data_reload_failures_total` | Changed country files rejected, including rollbacks to older builds. |
 
 Alert on source expiry, not on `/health`: an expired source silently degrades
 domain checks to unknown while the process stays healthy.
@@ -492,9 +518,12 @@ domain checks to unknown while the process stays healthy.
 ## Kubernetes
 
 The [Helm chart](chart/README.md), published to `oci://ghcr.io/mokto/charts/openfingerprint`
-with each API release, runs the API with optional NetworkPolicies (cluster DNS, public HTTPS for RDAP and
-Redis only), a bundled `redis-ha` or your own Redis, refreshes the open snapshot
-into a ConfigMap with a CronJob and ships optional Prometheus alerts.
+with each API release, runs the API with optional NetworkPolicies, a bundled
+`redis-ha` or your own Redis, a domain-data ConfigMap CronJob, a daily country-data
+sidecar and optional Prometheus alerts. Policies permit DNS, Redis, registry HTTPS
+and public HTTPS for country downloads. Kubernetes cannot isolate sidecar egress
+from the API. Set `countryData.enabled=false` to remove the country sidecar, volume
+and its HTTPS rule; the separate RDAP HTTPS allowance remains.
 
 ## Checks and containers
 
@@ -510,7 +539,8 @@ all 15 input combinations, automatic/nested automation rules, partial failures, 
 boundaries, fresh/stale/invalid/missing snapshots, strict metadata/body boundaries,
 compatibility and no request logging, then stops the
 server. Updater checks use local fixtures and verify license-change rejection and
-atomic failure preservation; CI does not download feeds. It prints no credentials or visitor payloads.
+atomic failure preservation. Country checks exercise IPv4/IPv6, special-use ranges,
+provenance, expiry, invalid files and live reloads; CI does not download feeds. It prints no credentials or visitor payloads.
 
 With a disposable Redis database, run the cross-replica collection checks too:
 
@@ -535,7 +565,15 @@ node api/test.mjs --image openfingerprint-api:check
 ```
 
 For another architecture, add `--platform linux/amd64` or `--platform linux/arm64`
-to both commands. The image runs as UID/GID 65532, supports read-only operation,
+to both commands. To build the updater from a checkout, build the API image first
+and pass its same-architecture tag; the updater copies its native MMDB validator:
+
+```sh
+docker buildx build --load --provenance=false -f api/updater.Dockerfile \
+  --build-arg API_IMAGE=openfingerprint-api:check -t openfingerprint-updater:check .
+```
+
+The image runs as UID/GID 65532, supports read-only operation,
 retains application/dependency/Rust licenses, and handles SIGTERM/SIGINT gracefully.
 Pull-request CI runs SDK/browser and Rust/HTTP checks, without building Docker
 images or duplicating runs on branch pushes. Release Please explicitly dispatches

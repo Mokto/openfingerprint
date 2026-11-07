@@ -2,6 +2,7 @@ mod automation;
 mod cache;
 mod check;
 mod collection;
+mod country;
 mod domains;
 mod mx;
 mod rdap;
@@ -34,7 +35,10 @@ fn app(state: Arc<check::AppState>) -> Router {
 async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::response::IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        state.domains.metrics() + &state.dns.metrics() + &state.rdap.metrics(),
+        state.domains.metrics()
+            + &state.dns.metrics()
+            + &state.rdap.metrics()
+            + &state.countries.metrics(),
     )
 }
 
@@ -63,6 +67,19 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--validate-country") && (2..=3).contains(&args.len()) {
+        country::validate(
+            std::path::Path::new(&args[1]),
+            args.get(2).map(std::path::Path::new),
+        )?;
+        return Ok(());
+    }
+    if !args.is_empty() {
+        return Err(
+            "Usage: openfingerprint-api [--validate-country <candidate> [<previous>]]".into(),
+        );
+    }
     let state = Arc::new(check::AppState::from_env()?);
     if state.domains.reloads() {
         let seconds = match std::env::var("OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS") {
@@ -81,6 +98,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tick.tick().await;
                 let state = state.clone();
                 let _ = tokio::task::spawn_blocking(move || state.domains.reload()).await;
+            }
+        });
+    }
+    if state.countries.reloads() {
+        let seconds = match std::env::var("OPENFINGERPRINT_COUNTRY_DATA_RELOAD_SECONDS") {
+            Err(_) => 60,
+            Ok(s) => s
+                .parse()
+                .ok()
+                .filter(|s| (1..=86400).contains(s))
+                .ok_or("OPENFINGERPRINT_COUNTRY_DATA_RELOAD_SECONDS must be 1-86400")?,
+        };
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(seconds));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let state = state.clone();
+                let _ = tokio::task::spawn_blocking(move || state.countries.reload()).await;
             }
         });
     }

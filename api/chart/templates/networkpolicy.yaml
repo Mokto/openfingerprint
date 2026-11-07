@@ -38,13 +38,27 @@ spec:
   {{- if or (not (kindIs "slice" .Values.networkPolicy.rdapTo)) (empty .Values.networkPolicy.rdapTo) }}
   {{- fail "networkPolicy.rdapTo must list the RDAP registries the API may reach" }}
   {{- end }}
-  # MX and registry-host lookups through cluster DNS, RDAP over HTTPS, and Redis. Nothing else.
   egress:
     - to:
         {{- toYaml .Values.networkPolicy.dnsTo | nindent 8 }}
       ports:
         - protocol: UDP
           port: 53
+        {{- if .Values.countryData.enabled }}
+        - protocol: TCP
+          port: 53
+        {{- end }}
+    {{- if .Values.countryData.enabled }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4]
+        - ipBlock:
+            cidr: 2000::/3
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
     - to:
         {{- toYaml .Values.networkPolicy.rdapTo | nindent 8 }}
       ports:

@@ -40,9 +40,15 @@ check.call(api["securityContext"] == {"readOnlyRootFilesystem" => true, "allowPr
 check.call(api["image"].end_with?("@sha256:" + "a" * 64) && api["image"].start_with?("ghcr.io/mokto/openfingerprint-api:"), "Pinned API image")
 check.call(api["envFrom"] == [{"secretRef" => {"name" => "openfingerprint-config"}}], "Credentials only via the Secret")
 env = api["env"].to_h { |e| [e["name"], e["value"]] }
-check.call(env == {"OPENFINGERPRINT_LISTEN_ADDR" => "0.0.0.0:8180", "OPENFINGERPRINT_METRICS_ADDR" => "0.0.0.0:9180", "OPENFINGERPRINT_DOMAIN_DATA" => "/domain-data/domains.json", "OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS" => "60", "OPENFINGERPRINT_REDIS_URL" => "redis://openfingerprint-redis-ha-haproxy:6379/0"}, "API environment")
-check.call(pod["volumes"] == [{"name" => "domain-data", "configMap" => {"name" => "openfingerprint-domain-data", "optional" => true}}], "Optional snapshot ConfigMap volume")
-check.call(api["volumeMounts"] == [{"name" => "domain-data", "mountPath" => "/domain-data", "readOnly" => true}], "Read-only snapshot mount")
+check.call(env == {"OPENFINGERPRINT_LISTEN_ADDR" => "0.0.0.0:8180", "OPENFINGERPRINT_METRICS_ADDR" => "0.0.0.0:9180", "OPENFINGERPRINT_DOMAIN_DATA" => "/domain-data/domains.json", "OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS" => "60", "OPENFINGERPRINT_REDIS_URL" => "redis://openfingerprint-redis-ha-haproxy:6379/0", "OPENFINGERPRINT_COUNTRY_DATA" => "/country-data/country.mmdb"}, "API environment")
+check.call(pod["volumes"] == [{"name" => "country-data", "emptyDir" => {"sizeLimit" => "96Mi"}}, {"name" => "domain-data", "configMap" => {"name" => "openfingerprint-domain-data", "optional" => true}}], "Country emptyDir and optional domain ConfigMap")
+check.call(api["volumeMounts"] == [{"name" => "domain-data", "mountPath" => "/domain-data", "readOnly" => true}, {"name" => "country-data", "mountPath" => "/country-data", "readOnly" => true}], "Read-only data mounts")
+country = pod["containers"].find { |c| c["name"] == "country-updater" }
+check.call(country["command"] == ["/nodejs/bin/node", "/app/update-country-data.mjs"] && country["args"] == ["--output", "/country-data/country.mmdb", "--loop"], "Country refresh loop")
+check.call(country["image"].end_with?("@sha256:" + "a" * 64), "Pinned country updater")
+check.call(country["envFrom"].nil? && country["env"].nil?, "Country updater gets no credentials")
+check.call(country["volumeMounts"] == [{"name" => "country-data", "mountPath" => "/country-data"}] && pod["securityContext"]["fsGroup"] == 65532, "Country updater can write its own volume only")
+check.call(country["securityContext"] == api["securityContext"], "Country updater hardening")
 %w[startupProbe readinessProbe livenessProbe].each { |p| check.call(api[p]["httpGet"] == {"path" => "/health", "port" => "http"}, "#{p} uses /health") }
 service = get.call("Service")
 check.call(service["metadata"]["name"] == "openfingerprint" && service["spec"]["type"] == "ClusterIP", "Stable internal Service name")
@@ -55,7 +61,12 @@ dns_peer = [{"namespaceSelector" => {"matchLabels" => {"kubernetes.io/metadata.n
 public = [{"ipBlock" => {"cidr" => "0.0.0.0/0", "except" => %w[10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16]}}, {"ipBlock" => {"cidr" => "::/0", "except" => %w[fc00::/7 fe80::/10]}}]
 # Psych reads the unquoted "::/0" as a Symbol; Kubernetes reads a string.
 plain = ->(x) { x.is_a?(Hash) ? x.transform_values { |v| plain.(v) } : x.is_a?(Array) ? x.map { |v| plain.(v) } : x.is_a?(Symbol) ? ":#{x}" : x }
-check.call(plain.(policy["egress"]) == [{"to" => dns_peer, "ports" => [{"protocol" => "UDP", "port" => 53}]}, {"to" => public, "ports" => [{"protocol" => "TCP", "port" => 443}]}, {"to" => [{"podSelector" => {"matchLabels" => {"app" => "redis-ha-haproxy", "release" => "openfingerprint"}}}], "ports" => [{"protocol" => "TCP", "port" => 6379}]}], "API egress: cluster DNS on UDP 53, public HTTPS for RDAP and the cache, nothing else private")
+check.call(policy["egress"][0] == {"to" => dns_peer, "ports" => [{"protocol" => "UDP", "port" => 53}, {"protocol" => "TCP", "port" => 53}]}, "Country refresh DNS supports TCP fallback")
+https = policy["egress"][1]
+check.call(policy["egress"].size == 4 && https["ports"] == [{"protocol" => "TCP", "port" => 443}], "Country updater HTTPS only")
+check.call(https["to"] == [{"ipBlock" => {"cidr" => "0.0.0.0/0", "except" => %w[0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4]}}, {"ipBlock" => {"cidr" => "2000::/3"}}], "Country HTTPS excludes private, loopback and link-local targets")
+check.call(plain.(policy["egress"][2]) == {"to" => public, "ports" => [{"protocol" => "TCP", "port" => 443}]}, "RDAP HTTPS preserves its configured peers")
+check.call(policy["egress"][3] == {"to" => [{"podSelector" => {"matchLabels" => {"app" => "redis-ha-haproxy", "release" => "openfingerprint"}}}], "ports" => [{"protocol" => "TCP", "port" => 6379}]}, "Redis egress stays scoped to HAProxy")
 check.call(pod["dnsConfig"] == {"options" => [{"name" => "ndots", "value" => "1"}]}, "Registry hosts skip cluster search domains")
 check.call(policy["ingress"].map { |r| r["ports"] } == [[{"protocol" => "TCP", "port" => 8180}], [{"protocol" => "TCP", "port" => 9180}]], "API and metrics ports only")
 check.call(policy["ingress"][0]["from"][0]["podSelector"] == {"matchLabels" => {"app.kubernetes.io/name" => "users"}}, "Configured API callers")
@@ -78,7 +89,7 @@ check.call(updater_policy["podSelector"]["matchLabels"] == updater_labels && upd
 check.call(updater_policy["egress"].flat_map { |r| r["ports"].map { |p| [p["protocol"], p["port"]] } } == [["UDP", 53], ["TCP", 53], ["TCP", 443], ["TCP", 6443]], "Updater egress: DNS, HTTPS, Kubernetes API")
 check.call(get.call("ServiceMonitor")["spec"]["endpoints"] == [{"port" => "metrics", "interval" => "60s"}], "ServiceMonitor scrapes metrics")
 rules = get.call("PrometheusRule")["spec"]["groups"][0]["rules"]
-check.call(rules.map { |r| r["alert"] } == %w[OpenFingerprintDomainDataUnavailable OpenFingerprintDomainSourceExpired OpenFingerprintDomainSourceExpiring OpenFingerprintDomainDataReloadFailing], "Alert set")
+check.call(rules.map { |r| r["alert"] } == %w[OpenFingerprintDomainDataUnavailable OpenFingerprintDomainSourceExpired OpenFingerprintDomainSourceExpiring OpenFingerprintDomainDataReloadFailing OpenFingerprintCountryDataUnavailable OpenFingerprintCountryDataExpiring OpenFingerprintCountryDataReloadFailing], "Alert set")
 check.call(rules.all? { |r| r["expr"].include?(%q{namespace="openfingerprint",service="openfingerprint"}) }, "Alerts scoped to this release")
 check.call(rules[2]["annotations"]["summary"].include?("{{ $labels.source }}"), "Prometheus templates survive Helm")
 check.call(docs.all? { |d| d["metadata"]["namespace"].nil? || d["metadata"]["namespace"] == "openfingerprint" }, "No foreign namespaces")
@@ -113,14 +124,27 @@ env = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]["c
 abort("With your own Redis, its URL comes from existingSecret only") if env.any? { |n| n.start_with?("OPENFINGERPRINT_REDIS") }
 policy = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]
 expected = {"to" => [{"podSelector" => {"matchLabels" => {"app" => "redis"}}}], "ports" => [{"protocol" => "TCP", "port" => 6380}]}
-abort("Redis egress must be scoped to configured peers/port") unless policy["egress"].size == 3 && policy["egress"][2] == expected
+abort("Redis egress must be scoped to configured peers/port") unless policy["egress"].size == 4 && policy["egress"][3] == expected
 puts "Bundled and own Redis checks passed."
 ' <<< "$own"
 if output=$(render --set redis-ha.enabled=false 2>&1) || ! grep -qF "networkPolicy.redisTo must list" <<< "$output"; then
   echo "Policies without redis-ha must require redisTo" >&2; exit 1
 fi
-static=$(render --set domainData.refresh.enabled=false --set redis-ha.enabled=false --set-json 'networkPolicy.redisTo=[{"podSelector":{}}]')
-grep -q 'kind: CronJob\|OPENFINGERPRINT_DOMAIN_DATA\|kind: Role' <<< "$static" && { echo "Disabled refresh must render no updater or override" >&2; exit 1; }
+static=$(render --set countryData.enabled=false --set domainData.refresh.enabled=false --set redis-ha.enabled=false --set-json 'networkPolicy.redisTo=[{"podSelector":{}}]')
+grep -q 'kind: CronJob\|OPENFINGERPRINT_DOMAIN_DATA\|kind: Role\|country-updater\|OPENFINGERPRINT_COUNTRY_DATA' <<< "$static" && { echo "Disabled refresh must render no updater or override" >&2; exit 1; }
+render --set countryData.enabled=false > "$rendered"
+ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact
+policy = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]
+abort("Disabled country refresh must retain RDAP and Redis egress") unless policy["egress"].size == 3 && policy["egress"][0]["ports"] == [{"protocol" => "UDP", "port" => 53}]
+' "$rendered"
+render --set domainData.refresh.enabled=false --set redis-ha.enabled=false --set-json 'networkPolicy.redisTo=[{"podSelector":{}}]' > "$rendered"
+ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact
+pod = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]
+abort("Country refresh must work without domain refresh") unless pod["containers"].size == 2 && pod["volumes"].map { |v| v["name"] } == ["country-data"]
+abort("Country updater requires no Kubernetes RBAC") if docs.any? { |d| %w[CronJob Role RoleBinding ServiceAccount].include?(d["kind"]) }
+' "$rendered"
 for bad in "existingSecret=" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short" "networkPolicy.redisTo=bad" "networkPolicy.redisPort=0" "networkPolicy.redisPort=65536" "networkPolicy.redisPort=6379.5"; do
   if render --set "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi
 done
