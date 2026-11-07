@@ -12,6 +12,7 @@ Domain and country intelligence run locally against openly licensed datasets:
 | `signals` | Canonical schema-4/5 verification and bounded evidence counts. |
 | `automation` | Versioned rules for client-reported observations, now included automatically inside SDK `signals`. |
 | `domain` | Disposable, free-subdomain, public-mailbox, email-relay and source-scoped referrer-spam evidence with provenance and expiry, typo suggestions, MX providers, registration dates and SPF/DMARC status. |
+| `email` | Role-account detection for a full address, plus every `domain` check for the address's domain. |
 | `ip` | Local country estimate plus independent Tor-exit, ASN and published cloud-range evidence under `network`, with source provenance and expiry. Missing facts remain unknown. |
 
 The domain snapshot is bundled and can be overridden with a refreshed local file.
@@ -29,8 +30,9 @@ forged, and matching hashes can collide or change with settings and updates.
 
 ## Data minimization and networking
 
-Stateless checks have no visitor database, observation cache, email processing or
-account history. Their evidence, domains and IPs are dropped after processing.
+Stateless checks have no visitor database, observation cache or account history.
+Their evidence, email addresses, domains and IPs are dropped after processing; an
+email address is never logged, cached, echoed or used as a metric label.
 Redis temporarily holds random action bindings, origins, challenges and evaluated
 events for collection, subject to TTL and capacity limits below, and cached RDAP
 answers keyed by SHA-256 hashes of registered domains. Raw collection user
@@ -162,6 +164,7 @@ The JSON object accepts only these fields:
 | `signals` | Optional SDK result object, as described below. |
 | `automation` | Optional version-1 or version-2 SDK automation evidence, as described below. |
 | `domain` | Optional ASCII hostname, not a URL or complete email address. |
+| `email` | Optional full email address. Its domain gets the `domain` checks, so it cannot be combined with `domain`. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
 
 At least one non-null field is required. Null is equivalent to omission. Results
@@ -344,15 +347,15 @@ and fingerprint, and evidence counts. A core ID never substitutes for a full ID.
 Invalid evidence has `status: invalid_input`, `reason: invalid_signals`, and null
 schema, fingerprint and evidence. That does not discard another section's result.
 
-Domain/IP sections return `invalid_input` with `invalid_domain` or `invalid_ip`
+Domain/email/IP sections return `invalid_input` with `invalid_domain`, `invalid_email` or `invalid_ip`
 for invalid values, including wrong field types. The same field-level handling
 applies to malformed signal objects. HTTP 200 means the envelope was processed,
 not that every check succeeded: inspect each requested section. Valid sections
 survive failures in other sections; there is no combined clean/fraud verdict.
 
 Malformed JSON, non-object envelopes, empty/all-null requests and unknown top-level
-fields return HTTP 400. Full email addresses, visitor tokens, account metadata and
-raw browser context are not additional inputs. All request bodies are limited to
+fields, and `domain` together with `email`, return HTTP 400. Visitor tokens, account
+metadata and raw browser context are not additional inputs. All request bodies are limited to
 64 KiB, including nested evidence, before evaluation.
 
 #### Automation indicators
@@ -428,6 +431,17 @@ Internationalized names must be supplied as ASCII A-labels; no Unicode conversio
 IDNA decoding, address resolution or registrability check is performed. Dataset
 matching does use Mozilla's Public Suffix List to protect registry/private-suffix
 boundaries; this does not turn lexical input acceptance into domain validation. Lexical acceptance is not domain existence or mailbox validation.
+
+Email addresses are `local@domain` with an unquoted dot-atom local part of at most 64
+characters, a domain as above and at most 254 characters in total; quoted local parts,
+comments and address literals are rejected rather than interpreted. An invalid address
+returns only `email` with `invalid_email` and runs no domain check. A valid one returns
+`email: {"status": "checked", "role_account": true|false}` and the `domain` section.
+`role_account` is true when the local part, lowercased, without a `+tag` and without
+`.`, `-` and `_`, is a shared mailbox name: the RFC 2142 names (`postmaster`, `abuse`,
+`info`, `sales`, `support`...) or a common business or system mailbox (`admin`,
+`billing`, `hello`, `noreply`, `office`, `team`...). It describes the address, not the
+person: a role mailbox can belong to a real customer, so treat it as context, not a block.
 
 IPs must be literals, without ports, CIDR prefixes, brackets, zone IDs or surrounding
 whitespace. IPv4-mapped IPv6 is normalized to IPv4. Private, loopback, multicast,
