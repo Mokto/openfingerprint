@@ -10,6 +10,6 @@ COPY --from=api /usr/local/bin/openfingerprint-api /usr/local/bin/openfingerprin
 COPY --from=api /usr/share/licenses/openfingerprint-api /usr/share/licenses/openfingerprint-api
 COPY LICENSE /usr/share/licenses/openfingerprint-domain-updater/LICENSE
 COPY api/update-domain-data.mjs api/update-country-data.mjs /app/
-COPY api/data/reviewed-free-subdomains.json api/data/reviewed-domain-disputes.json /app/data/
+COPY api/data/reviewed-*.json /app/data/
 USER 65532:65532
 ENTRYPOINT ["/nodejs/bin/node", "/app/update-domain-data.mjs"]
