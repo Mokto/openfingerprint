@@ -9,6 +9,7 @@ mod mx;
 mod network;
 mod providers;
 mod rdap;
+mod tampering;
 mod whois;
 
 use std::{sync::Arc, time::Duration};

@@ -171,6 +171,7 @@ impl Site {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Signals {
     automation: Option<serde_json::Value>,
+    tampering: Option<serde_json::Value>,
     version: u16,
     fingerprint: Option<String>,
     core_fingerprint: Option<String>,
@@ -352,6 +353,8 @@ struct CheckResponse {
 pub(crate) struct SignalCheck {
     #[serde(skip_serializing_if = "Option::is_none")]
     automation: Option<crate::automation::Check>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tampering: Option<crate::tampering::Check>,
     #[serde(flatten)]
     profile: Verified,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -376,6 +379,7 @@ pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
         let identity_groups = signals.identity_groups();
         return SignalCheck {
             automation: signals.automation.map(crate::automation::check),
+            tampering: signals.tampering.map(crate::tampering::check),
             profile,
             reason: None,
             evidence: Some(Evidence {
@@ -397,6 +401,7 @@ pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
     }
     SignalCheck {
         automation: None,
+        tampering: None,
         profile: Verified {
             status: "invalid_input",
             schema_version: None,

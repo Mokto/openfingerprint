@@ -2,7 +2,8 @@ import { environment } from './environment';
 import { identityExclusions } from './policy';
 
 import { collectAutomation, isSoftwareRenderer, observeAsyncAutomation, type AutomationEvidence } from './automation';
-export { collectAutomation, type AutomationEvidence };
+import { observeTampering, unobservedTampering, type TamperingEvidence } from './tampering';
+export { collectAutomation, type AutomationEvidence, type TamperingEvidence };
 
 const unsupported = Symbol();
 const unstable = Symbol();
@@ -466,6 +467,7 @@ export interface Options {
 }
 export interface Result {
 	automation: AutomationEvidence;
+	tampering: TamperingEvidence;
 	version: 5;
 	excluded: Name[];
 	fingerprint: string | null;
@@ -515,6 +517,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 	};
 	const result: Result = {
 		automation: collectAutomation(),
+		tampering: unobservedTampering(),
 		version: 5,
 		excluded: identityExclusions(navigator.userAgent, navigator.vendor),
 		fingerprint: null,
@@ -528,6 +531,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 	};
 	const excluded = new Set(result.excluded);
 	const asyncAutomation = observeAsyncAutomation(controller.signal);
+	const tampering = observeTampering(controller.signal);
 	try {
 		const run = async (name: Name) => {
 			let began = performance.now(),
@@ -572,6 +576,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		await run('gpu');
 		await audioJob;
 		Object.assign(result.automation, await asyncAutomation);
+		result.tampering = await tampering;
 		const entries = Object.entries(result.components)
 			.filter(([name]) => !result.excluded.includes(name as Name))
 			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
@@ -600,6 +605,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 			const snapshot: Result = {
 				...result,
 				automation: { ...result.automation },
+				tampering: { ...result.tampering },
 				excluded: [...result.excluded],
 				components: { ...result.components },
 				hints: { ...result.hints },

@@ -446,6 +446,22 @@ try {
     assert.deepEqual(await nestedAutomation.json(), { signals: { ...checkedProfile(signals()), automation: automationExpected } });
     const invalidNested = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), automation: false } });
     assert.deepEqual(await invalidNested.json(), { signals: { ...checkedProfile(signals()), automation: { ...automationExpected, status: 'invalid_input', indicators: [], reason: 'invalid_automation' } } });
+    phase = 'tampering evidence stays separate from automation and identity';
+    const profile = checkedProfile(signals());
+    for (const [tampering, expected] of [
+        [{ version: 1, canvasReadbackAltered: false, audioRenderAltered: false }, { status: 'not_detected', indicators: [], unavailable_probes: [] }],
+        [{ version: 1, canvasReadbackAltered: true, audioRenderAltered: null }, { status: 'detected', indicators: ['canvas_readback_altered'], unavailable_probes: ['audio_render_altered'] }],
+        [{ version: 1 }, { status: 'unknown', indicators: [], unavailable_probes: ['canvas_readback_altered', 'audio_render_altered'] }]
+    ]) {
+        const response = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), automation, tampering } });
+        assert.deepEqual(await response.json(), { signals: { ...profile, automation: automationExpected, tampering: { rule_version: 1, source: 'client_reported', ...expected } } });
+    }
+    for (const invalid of [false, [], { version: 2 }, { version: 1, extra: true }, { version: 1, audioRenderAltered: 'true' }]) {
+        const response = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), tampering: invalid } });
+        assert.deepEqual(await response.json(), { signals: { ...profile, tampering: { status: 'invalid_input', rule_version: 1, source: 'client_reported', indicators: [], unavailable_probes: [], reason: 'invalid_tampering' } } });
+    }
+    const withTampering = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), tampering: { version: 1, canvasReadbackAltered: true, audioRenderAltered: true } } });
+    assert.equal((await withTampering.json()).signals.fingerprint, profile.fingerprint);
     console.log('Automation rules, all 15 input combinations, unknowns, stable identities and independent failures passed.');
     const coreOnly = await request('/v1/check', authHeaders(sites[4]), {
         signals: { ...signals(), fingerprint: null }, domain: 'example.test'
