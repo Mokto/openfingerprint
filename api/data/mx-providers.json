@@ -500,6 +500,22 @@
         "https://docs.aws.amazon.com/ses/latest/dg/receiving-email-mx-record.html",
         "https://docs.aws.amazon.com/general/latest/gr/ses.html"
       ]
+    },
+    {
+      "slug": "mailtwoworld",
+      "type": "mailbox",
+      "suffixes": [
+        "mail2world.com"
+      ],
+      "evidence_urls": [
+        "https://www.mail2world.com/"
+      ],
+      "consumer": [
+        "publicms1.mail2world.com",
+        "publicms2.mail2world.com",
+        "publicms3.mail2world.com"
+      ],
+      "consumer_evidence": "Mail2World's free email service offers addresses at about 2,000 @mail2... domains (mail2art.com, mail2cool.com, mail2world.com...); all of them, and the Mexican ISP consumer domains prodigy.net.mx, uninet.net.mx and infinitummail.com, route to publicms1/2/3.mail2world.com. Its business customers use per-customer hosts (mxN.<customer>.mail2world.com), which are not matched. Across the Tranco top 300,000 only these consumer domains used the public hosts."
     }
   ]
 }

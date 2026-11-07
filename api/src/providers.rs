@@ -216,12 +216,22 @@ mod tests {
             Some("mailcom")
         );
         assert_eq!(consumer(&hosts(&["mx00.emig.gmx.net"])), Some("gmx"));
+        assert_eq!(
+            consumer(&hosts(&[
+                "publicms1.mail2world.com",
+                "publicms2.mail2world.com",
+                "publicms3.mail2world.com"
+            ])),
+            Some("mailtwoworld")
+        );
         for not in [
             &["example-com.mail.protection.outlook.com"][..],
             &["mx-biz.mail.am0.yahoodns.net"],
             &["mta5.am0.yahoodns.net", "mx.example.com"],
             &["mx00.mail.com", "mta5.am0.yahoodns.net"],
             &["hotmail-nl.b-v1.mx.microsoft"],
+            &["mx1.spray.mail2world.com"],
+            &["publicms1.mail2world.com", "mx.example.com"],
             &[],
         ] {
             assert_eq!(consumer(&hosts(not)), None, "{not:?}");
