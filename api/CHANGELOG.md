@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/Mokto/openfingerprint/compare/api-v0.7.0...api-v0.8.0) (2026-11-07)
+
+
+### Features
+
+* **data:** add domains read directly from live temp-mail services as a disposable source ([#47](https://github.com/Mokto/openfingerprint/issues/47)) ([b95c922](https://github.com/Mokto/openfingerprint/commit/b95c922c8f2939ffe8e844730a9af60f97f6218a))
+
+
+### Bug Fixes
+
+* **api:** copy every reviewed data file into the updater image ([#49](https://github.com/Mokto/openfingerprint/issues/49)) ([5ee507a](https://github.com/Mokto/openfingerprint/commit/5ee507ac5f9771e91d250f72b20f1e9aa7dcb4eb))
+
 ## [0.7.0](https://github.com/Mokto/openfingerprint/compare/api-v0.6.0...api-v0.7.0) (2026-11-07)
 
 
