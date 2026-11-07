@@ -21,6 +21,14 @@ struct Entry {
     suffixes: Vec<String>,
     #[allow(dead_code)]
     evidence_urls: Vec<String>,
+    /// Hosts that serve only the provider's shared consumer mailboxes, minus `business` hosts.
+    #[serde(default)]
+    consumer: Vec<String>,
+    #[serde(default)]
+    business: Vec<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    consumer_evidence: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -48,17 +56,46 @@ static PROVIDERS: LazyLock<Vec<(&'static str, Provider)>> = LazyLock::new(|| {
         .collect()
 });
 
+static CONSUMER: LazyLock<Vec<Entry>> = LazyLock::new(|| {
+    let table: Table = serde_json::from_str(include_str!("../data/mx-providers.json"))
+        .expect("bundled MX provider table is validated by tests");
+    table
+        .providers
+        .into_iter()
+        .filter(|e| !e.consumer.is_empty())
+        .collect()
+});
+
+fn under(host: &str, suffix: &str) -> bool {
+    host == suffix
+        || host
+            .strip_suffix(suffix)
+            .is_some_and(|rest| rest.ends_with('.'))
+}
+
+/// The provider whose shared consumer mail infrastructure receives all of these MX hosts. Such a
+/// domain's addresses belong to unrelated people, like the provider's own consumer domains.
+pub fn consumer(hosts: &[String]) -> Option<&'static str> {
+    let slug_of = |host: &String| {
+        CONSUMER.iter().find_map(|e| {
+            (e.consumer.iter().any(|s| under(host, s))
+                && !e.business.iter().any(|s| under(host, s)))
+            .then_some(e.slug.as_str())
+        })
+    };
+    let first = slug_of(hosts.first()?)?;
+    hosts
+        .iter()
+        .all(|h| slug_of(h) == Some(first))
+        .then_some(first)
+}
+
 /// Services that run the domain's MX hosts, in MX preference order and without duplicates. An
 /// empty list means self-hosted or unrecognised mail routing, not a missing provider.
 pub fn detect(hosts: &[String]) -> Vec<Provider> {
     let mut found: Vec<Provider> = Vec::new();
     for host in hosts {
-        let hit = PROVIDERS.iter().find(|(suffix, _)| {
-            host == suffix
-                || host
-                    .strip_suffix(suffix)
-                    .is_some_and(|rest| rest.ends_with('.'))
-        });
+        let hit = PROVIDERS.iter().find(|(suffix, _)| under(host, suffix));
         if let Some((_, provider)) = hit
             && !found.contains(provider)
         {
@@ -103,6 +140,49 @@ mod tests {
             );
         }
         assert!(PROVIDERS.len() == suffixes.len());
+        for e in &table.providers {
+            for s in e.consumer.iter().chain(&e.business) {
+                assert!(
+                    e.suffixes.iter().any(|own| under(s, own)),
+                    "{s} is outside {}'s own suffixes",
+                    e.slug
+                );
+            }
+            assert_eq!(
+                e.consumer.is_empty(),
+                e.consumer_evidence.is_empty(),
+                "{}",
+                e.slug
+            );
+        }
+    }
+
+    #[test]
+    fn consumer_infrastructure_needs_every_mx_host_and_skips_business_hosts() {
+        let hosts = |h: &[&str]| h.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            consumer(&hosts(&["hotmail-com.olc.protection.outlook.com"])),
+            Some("microsoft")
+        );
+        assert_eq!(
+            consumer(&hosts(&["mx-rogers.mail.am0.yahoodns.net"])),
+            Some("yahoo")
+        );
+        assert_eq!(
+            consumer(&hosts(&["mx00.mail.com", "mx01.mail.com"])),
+            Some("mailcom")
+        );
+        assert_eq!(consumer(&hosts(&["mx00.emig.gmx.net"])), Some("gmx"));
+        for not in [
+            &["example-com.mail.protection.outlook.com"][..],
+            &["mx-biz.mail.am0.yahoodns.net"],
+            &["mta5.am0.yahoodns.net", "mx.example.com"],
+            &["mx00.mail.com", "mta5.am0.yahoodns.net"],
+            &["hotmail-nl.b-v1.mx.microsoft"],
+            &[],
+        ] {
+            assert_eq!(consumer(&hosts(not)), None, "{not:?}");
+        }
     }
 
     #[test]

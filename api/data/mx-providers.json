@@ -24,7 +24,11 @@
       "evidence_urls": [
         "https://learn.microsoft.com/en-us/microsoft-365/enterprise/external-domain-name-system-records",
         "https://learn.microsoft.com/en-us/purview/how-smtp-dane-works"
-      ]
+      ],
+      "consumer": [
+        "olc.protection.outlook.com"
+      ],
+      "consumer_evidence": "Microsoft's consumer domains (outlook.com, hotmail.com, live.com, msn.com, passport.com) route to *.olc.protection.outlook.com; organisation tenants use *.mail.protection.outlook.com. In the Tranco top 20,000 only those five domains routed all MX there."
     },
     {
       "slug": "apple",
@@ -76,6 +80,65 @@
       "evidence_urls": [
         "https://yandex.com/support/mail/"
       ]
+    },
+    {
+      "slug": "yahoo",
+      "type": "mailbox",
+      "suffixes": [
+        "yahoodns.net"
+      ],
+      "evidence_urls": [
+        "https://help.yahoo.com/kb/SLN2153.html"
+      ],
+      "consumer": [
+        "yahoodns.net"
+      ],
+      "business": [
+        "mx-biz.mail.am0.yahoodns.net"
+      ],
+      "consumer_evidence": "Yahoo runs consumer mail for itself, AOL and partner ISPs (AT&T, Verizon, Sky, Rogers, Frontier, Cox) on yahoodns.net; Yahoo Small Business uses mx-biz.mail.am0.yahoodns.net. In the Tranco top 20,000 the 15 domains routing all MX to yahoodns.net outside mx-biz were all shared consumer or ISP mail domains."
+    },
+    {
+      "slug": "gmx",
+      "type": "mailbox",
+      "suffixes": [
+        "gmx.net"
+      ],
+      "evidence_urls": [
+        "https://www.gmx.net/"
+      ],
+      "consumer": [
+        "gmx.net"
+      ],
+      "consumer_evidence": "GMX offers personal mailboxes only; gmx.net, gmx.de, gmx.at, gmx.ch, gmx.com, gmx.us and gmx.fr route to it. No other Tranco top-20,000 domain did."
+    },
+    {
+      "slug": "webde",
+      "type": "mailbox",
+      "suffixes": [
+        "web.de"
+      ],
+      "evidence_urls": [
+        "https://web.de/"
+      ],
+      "consumer": [
+        "web.de"
+      ],
+      "consumer_evidence": "WEB.DE offers personal mailboxes only. No other Tranco top-20,000 domain routed to it."
+    },
+    {
+      "slug": "mailcom",
+      "type": "mailbox",
+      "suffixes": [
+        "mail.com"
+      ],
+      "evidence_urls": [
+        "https://www.mail.com/"
+      ],
+      "consumer": [
+        "mail.com"
+      ],
+      "consumer_evidence": "mail.com offers personal mailboxes on mail.com and its catalogue of vanity domains (email.com, usa.com, post.com, consultant.com...), all routed to mx00/mx01.mail.com. No other Tranco top-20,000 domain routed there."
     },
     {
       "slug": "mailru",

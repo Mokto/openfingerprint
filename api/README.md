@@ -225,7 +225,15 @@ provider documents or owns, with evidence, and ships with each release.
 `public_mailbox` is true when the exact domain is a reviewed shared mailbox service
 (Gmail, Outlook.com, Yahoo, iCloud, GMX, regional providers and large ISPs): its
 addresses belong to unrelated people, not to one organisation. Subdomains do not
-match. `relay` is true for reviewed forwarding-alias domains (Apple Hide My Email,
+match. An otherwise unlisted domain whose MX hosts all belong to one provider's
+consumer-only infrastructure yields `value: true, status: mx_listed`: Microsoft's
+consumer Outlook.com servers (`*.olc.protection.outlook.com`, not the
+`*.mail.protection.outlook.com` organisation tenants), Yahoo's servers for itself,
+AOL and partner ISPs (`yahoodns.net` except Yahoo Small Business `mx-biz`), GMX,
+WEB.DE and mail.com, whose vanity catalogue (`email.com`, `usa.com`...) is covered this way.
+In the Tranco top 20,000 this matched 25 domains, all shared consumer or ISP mail.
+Patterns that also serve organisations (Microsoft `mx.microsoft`, Yandex, Mail.ru)
+are deliberately not used. `relay` is true for reviewed forwarding-alias domains (Apple Hide My Email,
 DuckDuckGo, Firefox Relay, SimpleLogin, addy.io) and their subdomains: a real mailbox
 hides behind the address. Neither is a risk verdict.
 

@@ -62,6 +62,8 @@ const mxAnswers = {
     'mxdisputed.example': [[10, 'mx.disputed.mail.example']],
     'mxallowed.example': [[10, 'mx1.mail.example'], [20, 'mx.good.mail.example']],
     'dnsdrop.example': [[10, 'mx.drop.example']],
+    'ispmail.example': [[10, 'mx-rogers.mail.am0.yahoodns.net']],
+    'yahoobiz.example': [[10, 'mx-biz.mail.am0.yahoodns.net']],
     'workspace.example': [[5, 'eu-smtp-inbound-1.mimecast.com'], [1, 'smtp.google.com'], [9, 'eu-smtp-inbound-2.mimecast.com']]
 };
 const dns = createSocket('udp4');
@@ -475,12 +477,19 @@ try {
         ['publicmail.example', { public_mailbox: true }], ['sub.publicmail.example', {}],
         ['relay.example', { relay: true }], ['user.relay.example', { relay: true }],
         ['publicmial.example', mode === 'fresh' ? { did_you_mean: 'publicmail.example' } : {}],
-        ['workspace.example', { mx_lookup: 'resolved', mx_providers: [{ slug: 'google', type: 'mailbox' }, { slug: 'mimecast', type: 'gateway' }] }]
+        ['workspace.example', { mx_lookup: 'resolved', mx_providers: [{ slug: 'google', type: 'mailbox' }, { slug: 'mimecast', type: 'gateway' }] }],
+        ['ispmail.example', { mx_lookup: 'resolved', mx_providers: [{ slug: 'yahoo', type: 'mailbox' }], ...(mode === 'fresh' ? { public_mailbox: true, consumer_mx: true } : {}) }],
+        ['yahoobiz.example', { mx_lookup: 'resolved', mx_providers: [{ slug: 'yahoo', type: 'mailbox' }] }]
     ]) {
         const response = await request('/v1/check', authHeaders(sites[9]), { domain });
-        assert.deepEqual(await response.json(), { domain: domainExpected(expected) }, domain);
+        const want = domainExpected(expected);
+        if (expected.consumer_mx) {
+            want.public_mailbox.status = 'mx_listed';
+            for (const source of want.public_mailbox.sources) source.status = 'not_listed';
+        }
+        assert.deepEqual(await response.json(), { domain: want }, domain);
     }
-    console.log(`Public mailboxes (exact), relays (with subdomains), typo suggestions and MX providers passed (${mode}).`);
+    console.log(`Public mailboxes (exact and consumer MX), relays (with subdomains), typo suggestions and MX providers passed (${mode}).`);
 
     phase = `RDAP registration dates (${mode})`;
     for (const [domain, registration] of [
@@ -602,7 +611,7 @@ try {
     assert.equal(await metric('openfingerprint_domain_data_reload_failures_total'), 1);
     assert.equal(await reloadedValue(), true);
     assert.equal(await metric('openfingerprint_domain_data_loaded'), 1);
-    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), 8);
+    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), 10);
     assert.equal(await metric('openfingerprint_whois_lookups_total{result="found"}'), 1);
     assert.equal(await metric('openfingerprint_rdap_lookups_total{result="found"}'), 1);
     assert(await metric('openfingerprint_rdap_cache_total{result="hit"}') >= 1);

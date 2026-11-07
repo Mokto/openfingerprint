@@ -285,7 +285,10 @@ impl DomainData {
                 "free_subdomain_namespace",
             ),
             spam: self.fact(domain, now, Category::ReferrerSpam, "referrer_spam"),
-            public_mailbox: self.fact(domain, now, Category::PublicMailbox, "public_mailbox"),
+            public_mailbox: self.consumer_fact(
+                self.fact(domain, now, Category::PublicMailbox, "public_mailbox"),
+                mx,
+            ),
             relay: self.fact(domain, now, Category::Relay, "email_relay"),
             did_you_mean: None,
         };
@@ -351,6 +354,18 @@ impl DomainData {
             });
         let hit = hits.next()?;
         hits.next().is_none().then(|| hit.clone())
+    }
+
+    /// An otherwise unlisted domain whose mail goes only to a provider's consumer infrastructure.
+    fn consumer_fact(&self, fact: Fact, mx: &[String]) -> Fact {
+        match crate::providers::consumer(mx) {
+            Some(_) if fact.status == "not_listed" => Fact {
+                value: Some(true),
+                status: "mx_listed",
+                ..fact
+            },
+            _ => fact,
+        }
     }
 
     fn mx_fact(&self, fact: Fact, domain: &str, mx: &[String], now: u64) -> Fact {
