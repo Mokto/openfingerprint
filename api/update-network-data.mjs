@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, open, rename, unlink } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { isIP } from 'node:net';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
 import { gunzipSync } from 'node:zlib';
@@ -225,13 +226,44 @@ export async function update(output, { fetchBytes = download, now = Math.floor(D
         await unlink(temporary).catch(() => {});
     }
 }
+// Removes content-addressed ASN files that the manifest no longer references. The grace period
+// covers a reader that loaded the previous manifest and has not opened its ASN file yet.
+export async function prune(output, now = Date.now(), grace = 3600000) {
+    const directory = dirname(output);
+    const keep = JSON.parse(await readFile(output, 'utf8')).asn?.revision;
+    for (const name of await readdir(directory)) {
+        if (!/^asn-[0-9a-f]{64}\.mmdb$/.test(name) || name === `asn-${keep}.mmdb`) continue;
+        const path = join(directory, name);
+        if (now - (await stat(path)).mtimeMs > grace) await unlink(path);
+    }
+}
+// Hourly like the CronJob; a failure with no manifest yet retries after a minute so a new pod
+// does not serve unknown network facts for an hour.
+export async function loop(output, signal, { run = update, interval = 3600000, retry = 60000 } = {}) {
+    output = resolve(output);
+    while (!signal.aborted) {
+        let delay = interval;
+        try {
+            const result = await run(output, { signal });
+            console.log(`Network snapshot published atomically; sources: ${result.sources.join(', ')}.`);
+            if (result.failures.length) console.warn(`Retrying sources that failed in ${Math.round(delay / 60000)} minutes.`);
+            await prune(output).catch(() => console.warn('Old ASN versions could not be pruned.'));
+        } catch {
+            if (signal.aborted) break;
+            console.error('Network update failed; the previous manifest was preserved. Check source availability, validator, volume permissions and active writers.');
+            if (!(await stat(output).then(() => true, () => false))) delay = retry;
+        }
+        await sleep(delay, undefined, { signal }).catch(() => {});
+    }
+}
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     try {
-        const { values } = parseArgs({ options: { output: { type: 'string' } } });
+        const { values } = parseArgs({ options: { output: { type: 'string' }, loop: { type: 'boolean' } } });
         assert(values.output, 'An --output path is required');
         const controller = new AbortController();
         process.once('SIGTERM', () => controller.abort());
         process.once('SIGINT', () => controller.abort());
+        if (values.loop) { await loop(values.output, controller.signal); process.exit(0); }
         const result = await update(values.output, { signal: controller.signal });
         console.log(`Network snapshot published atomically; sources: ${result.sources.join(', ')}.`);
         if (result.failures.length) process.exitCode = 1;

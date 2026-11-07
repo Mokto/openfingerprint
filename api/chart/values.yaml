@@ -75,7 +75,22 @@ countryData:
       memory: 256Mi
 
 networkData:
+  # Per-pod refresh: a network-updater sidecar writes a pod-local emptyDir that the API reads, so
+  # no shared volume is needed. Mutually exclusive with existingClaim/refresh below. Each pod
+  # fetches the sources itself, so every pod needs public HTTPS egress.
+  sidecar:
+    enabled: false
+    sizeLimit: 64Mi
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+  # Shared-volume mode, for clusters with ReadWriteMany storage: a CronJob writes the claim that
+  # every API pod mounts read-only.
   existingClaim: ""
+  # The image of both modes. Only the CronJob mode uses the rest.
   refresh:
     enabled: false
     schedule: "7 * * * *"

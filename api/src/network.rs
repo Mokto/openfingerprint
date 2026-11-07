@@ -472,6 +472,14 @@ impl Store {
     pub fn reload(&self) {
         let Some(path) = &self.path else { return };
         let bytes = read(path, MANIFEST_LIMIT);
+        if bytes.is_none() && !path.exists() {
+            // A pod's refresh sidecar has not published yet: unknown, not a rejected snapshot.
+            let mut data = self.data.write().unwrap();
+            if data.metadata.iter().all(Option::is_none) {
+                *data = Arc::new(Data::unavailable("data_unavailable"));
+            }
+            return;
+        }
         let digest = bytes.as_deref().map(sha256);
         let mut seen = self.seen.lock().unwrap();
         if digest.is_some() && *seen == digest {
@@ -894,6 +902,26 @@ mod tests {
         invalid["tor"]["metadata"]["expires_at_unix"] = json!(999999);
         assert!(Data::load(&path, &serde_json::to_vec(&invalid).unwrap()).is_err());
         std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn an_unpublished_manifest_is_unknown_without_counting_a_rejection() {
+        let path = std::env::temp_dir().join(format!(
+            "openfingerprint-network-missing-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut store = Store::empty();
+        store.path = Some(path.clone());
+        store.reload();
+        assert_eq!(store.current().reason, "data_unavailable");
+        assert_eq!(store.failures.load(Ordering::Relaxed), 0);
+        std::fs::write(&path, serde_json::to_vec(&snapshot()).unwrap()).unwrap();
+        store.reload();
+        assert!(store.current().metadata.iter().any(Option::is_some));
+        std::fs::remove_file(&path).unwrap();
+        store.reload();
+        assert!(store.current().metadata.iter().any(Option::is_some));
+        assert_eq!(store.failures.load(Ordering::Relaxed), 0);
     }
     #[test]
     fn only_trusted_peers_can_forward_and_untrusted_prefixes_are_ignored() {

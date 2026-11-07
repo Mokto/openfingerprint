@@ -496,6 +496,12 @@ An OS lock serializes writers and releases on process death; the empty `.lock`
 file remains intentionally. **Do not delete it while a writer may be running.**
 SIGTERM aborts downloads/validation and preserves the prior manifest.
 
+`--loop` keeps the updater running instead of exiting: it refreshes hourly, retries hourly after
+a failure (after one minute while no manifest exists yet), and removes ASN files older than an
+hour that the manifest no longer references. The Helm chart's per-pod sidecar uses it; one-shot
+runs (CI, the CronJob) are unchanged. A manifest that does not exist yet is unknown
+(`data_unavailable`), not a rejected snapshot, so it does not count as a reload failure.
+
 Tor snapshot entries are `{"ip":"8.8.8.8","observed_at_unix":<Unix seconds>}`;
 duplicate addresses keep their latest observation. Positive Tor facts carry
 `expires_at_unix`, bounded by both that observation's 24-hour window and the
