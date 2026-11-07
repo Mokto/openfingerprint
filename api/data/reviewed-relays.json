@@ -1,0 +1,42 @@
+{
+  "license": "CC0-1.0",
+  "reviewed_at_unix": 1794031960,
+  "expires_at_unix": 1796623960,
+  "entries": [
+    {
+      "domain": "privaterelay.appleid.com",
+      "evidence_url": "https://support.apple.com/en-us/105078",
+      "evidence": "Apple's Hide My Email addresses use this domain and forward to the owner's real address. At review, its MX routed to Apple's relay (smtp1.privaterelay.appleid.com)."
+    },
+    {
+      "domain": "duck.com",
+      "evidence_url": "https://spreadprivacy.com/protect-your-inbox-with-duckduckgo-email-protection/",
+      "evidence": "DuckDuckGo Email Protection hands out @duck.com addresses that forward to the owner's inbox. At review, its MX routed to DuckDuckGo (smtp-inbound1.duck.com)."
+    },
+    {
+      "domain": "mozmail.com",
+      "evidence_url": "https://relay.firefox.com/faq/",
+      "evidence": "Firefox Relay masks use this domain and, for premium users, subdomains of it; mail is forwarded to the owner. At review, its MX routed to inbound mail processing (inbound-smtp.us-west-2.amazonaws.com)."
+    },
+    {
+      "domain": "simplelogin.co",
+      "evidence_url": "https://simplelogin.io/faq/",
+      "evidence": "SimpleLogin hands out alias addresses on this domain that forward to the owner. At review, its MX routed to SimpleLogin (mx1.simplelogin.co)."
+    },
+    {
+      "domain": "aleeas.com",
+      "evidence_url": "https://simplelogin.io/faq/",
+      "evidence": "SimpleLogin hands out alias addresses on this domain and its subdomains that forward to the owner. At review, its MX routed to SimpleLogin (mx1.simplelogin.co)."
+    },
+    {
+      "domain": "anonaddy.com",
+      "evidence_url": "https://addy.io/faq/",
+      "evidence": "addy.io (AnonAddy) aliases use username subdomains of this domain and forward to the owner. At review, its MX routed to addy.io (mail.anonaddy.me)."
+    },
+    {
+      "domain": "anonaddy.me",
+      "evidence_url": "https://addy.io/faq/",
+      "evidence": "addy.io (AnonAddy) offers this as a shared alias domain that forwards to the owner. At review, its MX routed to addy.io (mail.anonaddy.me)."
+    }
+  ]
+}

@@ -1,0 +1,592 @@
+{
+  "license": "CC0-1.0",
+  "reviewed_at_unix": 1794031960,
+  "expires_at_unix": 1796623960,
+  "entries": [
+    {
+      "domain": "gmail.com",
+      "evidence_url": "https://support.google.com/mail/answer/10313",
+      "evidence": "Google (Gmail) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to google.com (alt1.gmail-smtp-in.l.google.com)."
+    },
+    {
+      "domain": "googlemail.com",
+      "evidence_url": "https://support.google.com/mail/answer/10313",
+      "evidence": "Google (Gmail) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to google.com (alt1.gmail-smtp-in.l.google.com)."
+    },
+    {
+      "domain": "outlook.com",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (outlook-com.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.com",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (hotmail-com.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "live.com",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (live-com.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "msn.com",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (msn-com.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "passport.com",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (outlook-com.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "windowslive.com",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (nam.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.co.uk",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.fr",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.de",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.it",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.es",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.nl",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (hotmail-nl.b-v1.mx.microsoft)."
+    },
+    {
+      "domain": "hotmail.be",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.ca",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (hotmail-com.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.com.au",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (apc.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.com.br",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (nam.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "hotmail.co.jp",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (apc.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "live.co.uk",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "live.fr",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "live.it",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "live.nl",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "live.de",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "live.be",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "live.ca",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (nam.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "live.com.au",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (apc.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "live.com.mx",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (nam.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "outlook.fr",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "outlook.de",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "outlook.es",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "outlook.it",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (eur.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "outlook.jp",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (apc.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "outlook.com.br",
+      "evidence_url": "https://support.microsoft.com/en-us/office/pop-imap-and-smtp-settings-for-outlook-com-d088b986-291d-42b8-9564-9c414e2aa040",
+      "evidence": "Microsoft (Outlook.com) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Outlook.com mail (nam.olc.protection.outlook.com)."
+    },
+    {
+      "domain": "yahoo.com",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mta5.am0.yahoodns.net)."
+    },
+    {
+      "domain": "ymail.com",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mta5.am0.yahoodns.net)."
+    },
+    {
+      "domain": "rocketmail.com",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mta5.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.co.uk",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mx-eu.mail.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.fr",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mx-eu.mail.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.de",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mx-eu.mail.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.it",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mx-eu.mail.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.es",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mx-eu.mail.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.ca",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mta5.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.com.br",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mta5.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.com.mx",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mta5.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.co.in",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mx-apac.mail.gm0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.in",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mx-apac.mail.gm0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.com.au",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mta5.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.com.ar",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mta5.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.gr",
+      "evidence_url": "https://help.yahoo.com/kb/SLN2153.html",
+      "evidence": "Yahoo Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo mail (yahoodns.net) (mx-eu.mail.am0.yahoodns.net)."
+    },
+    {
+      "domain": "aol.com",
+      "evidence_url": "https://help.aol.com/articles/how-do-i-use-other-email-applications-to-send-and-receive-my-aol-mail",
+      "evidence": "AOL Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo-operated AOL mail (yahoodns.net) (mx-aol.mail.gm0.yahoodns.net)."
+    },
+    {
+      "domain": "aim.com",
+      "evidence_url": "https://help.aol.com/articles/how-do-i-use-other-email-applications-to-send-and-receive-my-aol-mail",
+      "evidence": "AOL Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo-operated AOL mail (yahoodns.net) (mx-aol.mail.gm0.yahoodns.net)."
+    },
+    {
+      "domain": "verizon.net",
+      "evidence_url": "https://help.aol.com/articles/how-do-i-use-other-email-applications-to-send-and-receive-my-aol-mail",
+      "evidence": "AOL Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo-operated AOL mail (yahoodns.net) (mx-aol.mail.gm0.yahoodns.net)."
+    },
+    {
+      "domain": "att.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo-operated AT&T mail (yahoodns.net) (mx-att.mail.am0.yahoodns.net)."
+    },
+    {
+      "domain": "sbcglobal.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo-operated AT&T mail (yahoodns.net) (mx-att.mail.am0.yahoodns.net)."
+    },
+    {
+      "domain": "bellsouth.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo-operated AT&T mail (yahoodns.net) (mx-att.mail.am0.yahoodns.net)."
+    },
+    {
+      "domain": "yahoo.co.jp",
+      "evidence_url": "https://support.yahoo-net.jp/PccMail/s/",
+      "evidence": "Yahoo! JAPAN Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yahoo! JAPAN mail (mx1.mail.yahoo.co.jp)."
+    },
+    {
+      "domain": "icloud.com",
+      "evidence_url": "https://support.apple.com/en-us/102525",
+      "evidence": "Apple (iCloud Mail) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to iCloud Mail (mx01.mail.icloud.com)."
+    },
+    {
+      "domain": "me.com",
+      "evidence_url": "https://support.apple.com/en-us/102525",
+      "evidence": "Apple (iCloud Mail) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to iCloud Mail (mx01.mail.icloud.com)."
+    },
+    {
+      "domain": "mac.com",
+      "evidence_url": "https://support.apple.com/en-us/102525",
+      "evidence": "Apple (iCloud Mail) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to iCloud Mail (mx01.mail.icloud.com)."
+    },
+    {
+      "domain": "proton.me",
+      "evidence_url": "https://proton.me/support/addresses-and-aliases",
+      "evidence": "Proton Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Proton Mail (protonmail.ch) (mail.protonmail.ch)."
+    },
+    {
+      "domain": "protonmail.com",
+      "evidence_url": "https://proton.me/support/addresses-and-aliases",
+      "evidence": "Proton Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Proton Mail (protonmail.ch) (mail.protonmail.ch)."
+    },
+    {
+      "domain": "protonmail.ch",
+      "evidence_url": "https://proton.me/support/addresses-and-aliases",
+      "evidence": "Proton Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Proton Mail (protonmail.ch) (mail.protonmail.ch)."
+    },
+    {
+      "domain": "pm.me",
+      "evidence_url": "https://proton.me/support/addresses-and-aliases",
+      "evidence": "Proton Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Proton Mail (protonmail.ch) (mail.protonmail.ch)."
+    },
+    {
+      "domain": "tuta.com",
+      "evidence_url": "https://tuta.com/support",
+      "evidence": "Tuta offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Tuta mail (tutanota.de) (mail.tutanota.de)."
+    },
+    {
+      "domain": "tutanota.com",
+      "evidence_url": "https://tuta.com/support",
+      "evidence": "Tuta offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Tuta mail (tutanota.de) (mail.tutanota.de)."
+    },
+    {
+      "domain": "tutanota.de",
+      "evidence_url": "https://tuta.com/support",
+      "evidence": "Tuta offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Tuta mail (tutanota.de) (mail.tutanota.de)."
+    },
+    {
+      "domain": "tutamail.com",
+      "evidence_url": "https://tuta.com/support",
+      "evidence": "Tuta offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Tuta mail (tutanota.de) (mail.tutanota.de)."
+    },
+    {
+      "domain": "tuta.io",
+      "evidence_url": "https://tuta.com/support",
+      "evidence": "Tuta offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Tuta mail (tutanota.de) (mail.tutanota.de)."
+    },
+    {
+      "domain": "keemail.me",
+      "evidence_url": "https://tuta.com/support",
+      "evidence": "Tuta offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Tuta mail (tutanota.de) (mail.tutanota.de)."
+    },
+    {
+      "domain": "gmx.com",
+      "evidence_url": "https://www.gmx.net/",
+      "evidence": "GMX offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to GMX mail (mx00.gmx.net)."
+    },
+    {
+      "domain": "gmx.net",
+      "evidence_url": "https://www.gmx.net/",
+      "evidence": "GMX offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to GMX mail (mx00.emig.gmx.net)."
+    },
+    {
+      "domain": "gmx.de",
+      "evidence_url": "https://www.gmx.net/",
+      "evidence": "GMX offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to GMX mail (mx00.emig.gmx.net)."
+    },
+    {
+      "domain": "gmx.at",
+      "evidence_url": "https://www.gmx.net/",
+      "evidence": "GMX offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to GMX mail (mx00.emig.gmx.net)."
+    },
+    {
+      "domain": "gmx.ch",
+      "evidence_url": "https://www.gmx.net/",
+      "evidence": "GMX offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to GMX mail (mx00.emig.gmx.net)."
+    },
+    {
+      "domain": "gmx.fr",
+      "evidence_url": "https://www.gmx.net/",
+      "evidence": "GMX offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to GMX mail (mx00.gmx.net)."
+    },
+    {
+      "domain": "gmx.us",
+      "evidence_url": "https://www.gmx.net/",
+      "evidence": "GMX offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to GMX mail (mx00.gmx.net)."
+    },
+    {
+      "domain": "web.de",
+      "evidence_url": "https://web.de/",
+      "evidence": "WEB.DE offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to WEB.DE mail (mx-ha02.web.de)."
+    },
+    {
+      "domain": "mail.com",
+      "evidence_url": "https://www.mail.com/",
+      "evidence": "mail.com offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mail.com mail (mx00.mail.com)."
+    },
+    {
+      "domain": "yandex.ru",
+      "evidence_url": "https://yandex.com/support/mail/",
+      "evidence": "Yandex Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yandex mail (mx.yandex.ru)."
+    },
+    {
+      "domain": "yandex.com",
+      "evidence_url": "https://yandex.com/support/mail/",
+      "evidence": "Yandex Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yandex mail (mx.yandex.ru)."
+    },
+    {
+      "domain": "ya.ru",
+      "evidence_url": "https://yandex.com/support/mail/",
+      "evidence": "Yandex Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Yandex mail (mx.yandex.ru)."
+    },
+    {
+      "domain": "mail.ru",
+      "evidence_url": "https://help.mail.ru/mail/",
+      "evidence": "Mail.ru offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Mail.ru mail (mxs.mail.ru)."
+    },
+    {
+      "domain": "inbox.ru",
+      "evidence_url": "https://help.mail.ru/mail/",
+      "evidence": "Mail.ru offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Mail.ru mail (mxs.mail.ru)."
+    },
+    {
+      "domain": "list.ru",
+      "evidence_url": "https://help.mail.ru/mail/",
+      "evidence": "Mail.ru offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Mail.ru mail (mxs.mail.ru)."
+    },
+    {
+      "domain": "bk.ru",
+      "evidence_url": "https://help.mail.ru/mail/",
+      "evidence": "Mail.ru offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Mail.ru mail (mxs.mail.ru)."
+    },
+    {
+      "domain": "internet.ru",
+      "evidence_url": "https://help.mail.ru/mail/",
+      "evidence": "Mail.ru offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Mail.ru mail (mxs.mail.ru)."
+    },
+    {
+      "domain": "zohomail.com",
+      "evidence_url": "https://www.zoho.com/mail/",
+      "evidence": "Zoho Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Zoho mail (smtpin.zoho.com)."
+    },
+    {
+      "domain": "zoho.com",
+      "evidence_url": "https://www.zoho.com/mail/",
+      "evidence": "Zoho Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Zoho mail (smtpin.zoho.com)."
+    },
+    {
+      "domain": "fastmail.com",
+      "evidence_url": "https://www.fastmail.com/",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Fastmail (messagingengine.com) (in1-smtp.messagingengine.com)."
+    },
+    {
+      "domain": "fastmail.fm",
+      "evidence_url": "https://www.fastmail.com/",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Fastmail (messagingengine.com) (in1-smtp.messagingengine.com)."
+    },
+    {
+      "domain": "qq.com",
+      "evidence_url": "https://mail.qq.com/",
+      "evidence": "Tencent (QQ Mail) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Tencent mail (mx1.qq.com)."
+    },
+    {
+      "domain": "foxmail.com",
+      "evidence_url": "https://mail.qq.com/",
+      "evidence": "Tencent (QQ Mail) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Tencent mail (mx1.qq.com)."
+    },
+    {
+      "domain": "163.com",
+      "evidence_url": "https://mail.163.com/",
+      "evidence": "NetEase Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to NetEase mail (163mx00.mxmail.netease.com)."
+    },
+    {
+      "domain": "126.com",
+      "evidence_url": "https://mail.163.com/",
+      "evidence": "NetEase Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to NetEase mail (126mx00.mxmail.netease.com)."
+    },
+    {
+      "domain": "yeah.net",
+      "evidence_url": "https://mail.163.com/",
+      "evidence": "NetEase Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to NetEase mail (yeahmx00.mxmail.netease.com)."
+    },
+    {
+      "domain": "naver.com",
+      "evidence_url": "https://help.naver.com/",
+      "evidence": "Naver Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Naver mail (mx1.mail.naver.com)."
+    },
+    {
+      "domain": "daum.net",
+      "evidence_url": "https://cs.daum.net/",
+      "evidence": "Kakao (Daum Mail) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Kakao/Daum mail (hanmail.net) (mx1.hanmail.net)."
+    },
+    {
+      "domain": "hanmail.net",
+      "evidence_url": "https://cs.daum.net/",
+      "evidence": "Kakao (Daum Mail) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Kakao/Daum mail (hanmail.net) (mx1.hanmail.net)."
+    },
+    {
+      "domain": "seznam.cz",
+      "evidence_url": "https://napoveda.seznam.cz/cz/email/",
+      "evidence": "Seznam Email offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Seznam mail (mx1.seznam.cz)."
+    },
+    {
+      "domain": "email.cz",
+      "evidence_url": "https://napoveda.seznam.cz/cz/email/",
+      "evidence": "Seznam Email offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Seznam mail (mx1.seznam.cz)."
+    },
+    {
+      "domain": "wp.pl",
+      "evidence_url": "https://poczta.wp.pl/",
+      "evidence": "WP Poczta offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to WP mail (mx.wp.pl)."
+    },
+    {
+      "domain": "onet.pl",
+      "evidence_url": "https://poczta.onet.pl/",
+      "evidence": "Onet Poczta offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Onet mail (mx.poczta.onet.pl)."
+    },
+    {
+      "domain": "op.pl",
+      "evidence_url": "https://poczta.onet.pl/",
+      "evidence": "Onet Poczta offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Onet mail (mx.poczta.onet.pl)."
+    },
+    {
+      "domain": "interia.pl",
+      "evidence_url": "https://poczta.interia.pl/",
+      "evidence": "Interia Poczta offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Interia mail (mx.interia.pl)."
+    },
+    {
+      "domain": "libero.it",
+      "evidence_url": "https://aiuto.libero.it/",
+      "evidence": "Libero Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Libero mail (smtp-in.libero.it)."
+    },
+    {
+      "domain": "orange.fr",
+      "evidence_url": "https://assistance.orange.fr/",
+      "evidence": "Orange offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Orange mail (smtp-in.orange.fr)."
+    },
+    {
+      "domain": "wanadoo.fr",
+      "evidence_url": "https://assistance.orange.fr/",
+      "evidence": "Orange offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Orange mail (smtp-in.orange.fr)."
+    },
+    {
+      "domain": "free.fr",
+      "evidence_url": "https://assistance.free.fr/",
+      "evidence": "Free offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Free mail (mx1.free.fr)."
+    },
+    {
+      "domain": "laposte.net",
+      "evidence_url": "https://www.laposte.net/",
+      "evidence": "La Poste offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to La Poste mail (smtpz4.laposte.net)."
+    },
+    {
+      "domain": "t-online.de",
+      "evidence_url": "https://email.t-online.de/",
+      "evidence": "Telekom (t-online) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to t-online mail (mx00.t-online.de)."
+    },
+    {
+      "domain": "posteo.de",
+      "evidence_url": "https://posteo.de/en/help",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Posteo mail (mx01.posteo.de)."
+    },
+    {
+      "domain": "mailbox.org",
+      "evidence_url": "https://kb.mailbox.org/",
+      "evidence": "mailbox.org offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mailbox.org mail (mx-n.mailbox.org)."
+    },
+    {
+      "domain": "comcast.net",
+      "evidence_url": "https://www.xfinity.com/support/articles/email-client-programs-with-xfinity-email",
+      "evidence": "Comcast (Xfinity) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Comcast mail (mx1.mxge.comcast.net)."
+    },
+    {
+      "domain": "rediffmail.com",
+      "evidence_url": "https://www.rediff.com/",
+      "evidence": "Rediffmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to Rediff mail (mx.rediffmail.rediff.akadns.net)."
+    },
+    {
+      "domain": "uol.com.br",
+      "evidence_url": "https://email.uol.com.br/",
+      "evidence": "UOL offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to UOL mail (mx.uol.com.br)."
+    },
+    {
+      "domain": "bol.com.br",
+      "evidence_url": "https://email.uol.com.br/",
+      "evidence": "UOL offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to UOL mail (mx3.bol.com.br)."
+    }
+  ]
+}

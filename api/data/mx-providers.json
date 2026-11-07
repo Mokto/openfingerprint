@@ -1,0 +1,284 @@
+{
+  "license": "CC0-1.0",
+  "reviewed_at_unix": 1794032027,
+  "providers": [
+    {
+      "slug": "google",
+      "type": "mailbox",
+      "suffixes": [
+        "google.com",
+        "googlemail.com"
+      ],
+      "evidence_urls": [
+        "https://support.google.com/a/answer/174125",
+        "https://support.google.com/mail/answer/10313"
+      ]
+    },
+    {
+      "slug": "microsoft",
+      "type": "mailbox",
+      "suffixes": [
+        "protection.outlook.com",
+        "mx.microsoft"
+      ],
+      "evidence_urls": [
+        "https://learn.microsoft.com/en-us/microsoft-365/enterprise/external-domain-name-system-records",
+        "https://learn.microsoft.com/en-us/purview/how-smtp-dane-works"
+      ],
+      "consumer": [
+        "olc.protection.outlook.com"
+      ],
+      "consumer_evidence": "Microsoft's consumer domains (outlook.com, hotmail.com, live.com, msn.com, passport.com) route to *.olc.protection.outlook.com; organisation tenants use *.mail.protection.outlook.com. In the Tranco top 20,000 only those five domains routed all MX there."
+    },
+    {
+      "slug": "apple",
+      "type": "mailbox",
+      "suffixes": [
+        "mail.icloud.com"
+      ],
+      "evidence_urls": [
+        "https://support.apple.com/en-us/102374"
+      ]
+    },
+    {
+      "slug": "zoho",
+      "type": "mailbox",
+      "suffixes": [
+        "zoho.com"
+      ],
+      "evidence_urls": [
+        "https://www.zoho.com/mail/help/adminconsole/configure-email-delivery.html"
+      ]
+    },
+    {
+      "slug": "fastmail",
+      "type": "mailbox",
+      "suffixes": [
+        "messagingengine.com"
+      ],
+      "evidence_urls": [
+        "https://www.fastmail.help/hc/en-us/articles/360060591153"
+      ]
+    },
+    {
+      "slug": "proton",
+      "type": "mailbox",
+      "suffixes": [
+        "protonmail.ch"
+      ],
+      "evidence_urls": [
+        "https://proton.me/support/addresses-and-aliases"
+      ]
+    },
+    {
+      "slug": "yandex",
+      "type": "mailbox",
+      "suffixes": [
+        "mx.yandex.net",
+        "mx.yandex.ru"
+      ],
+      "evidence_urls": [
+        "https://yandex.com/support/mail/"
+      ]
+    },
+    {
+      "slug": "yahoo",
+      "type": "mailbox",
+      "suffixes": [
+        "yahoodns.net"
+      ],
+      "evidence_urls": [
+        "https://help.yahoo.com/kb/SLN2153.html"
+      ],
+      "consumer": [
+        "yahoodns.net"
+      ],
+      "business": [
+        "mx-biz.mail.am0.yahoodns.net"
+      ],
+      "consumer_evidence": "Yahoo runs consumer mail for itself, AOL and partner ISPs (AT&T, Verizon, Sky, Rogers, Frontier, Cox) on yahoodns.net; Yahoo Small Business uses mx-biz.mail.am0.yahoodns.net. In the Tranco top 20,000 the 15 domains routing all MX to yahoodns.net outside mx-biz were all shared consumer or ISP mail domains."
+    },
+    {
+      "slug": "gmx",
+      "type": "mailbox",
+      "suffixes": [
+        "gmx.net"
+      ],
+      "evidence_urls": [
+        "https://www.gmx.net/"
+      ],
+      "consumer": [
+        "gmx.net"
+      ],
+      "consumer_evidence": "GMX offers personal mailboxes only; gmx.net, gmx.de, gmx.at, gmx.ch, gmx.com, gmx.us and gmx.fr route to it. No other Tranco top-20,000 domain did."
+    },
+    {
+      "slug": "webde",
+      "type": "mailbox",
+      "suffixes": [
+        "web.de"
+      ],
+      "evidence_urls": [
+        "https://web.de/"
+      ],
+      "consumer": [
+        "web.de"
+      ],
+      "consumer_evidence": "WEB.DE offers personal mailboxes only. No other Tranco top-20,000 domain routed to it."
+    },
+    {
+      "slug": "mailcom",
+      "type": "mailbox",
+      "suffixes": [
+        "mail.com"
+      ],
+      "evidence_urls": [
+        "https://www.mail.com/"
+      ],
+      "consumer": [
+        "mail.com"
+      ],
+      "consumer_evidence": "mail.com offers personal mailboxes on mail.com and its catalogue of vanity domains (email.com, usa.com, post.com, consultant.com...), all routed to mx00/mx01.mail.com. No other Tranco top-20,000 domain routed there."
+    },
+    {
+      "slug": "mailru",
+      "type": "mailbox",
+      "suffixes": [
+        "mxs.mail.ru"
+      ],
+      "evidence_urls": [
+        "https://help.mail.ru/mail/"
+      ]
+    },
+    {
+      "slug": "tencent",
+      "type": "mailbox",
+      "suffixes": [
+        "qq.com"
+      ],
+      "evidence_urls": [
+        "https://service.exmail.qq.com/cgi-bin/help?subtype=1&id=20012&no=1000614"
+      ]
+    },
+    {
+      "slug": "netease",
+      "type": "mailbox",
+      "suffixes": [
+        "mxmail.netease.com"
+      ],
+      "evidence_urls": [
+        "https://mail.163.com/"
+      ]
+    },
+    {
+      "slug": "rackspace",
+      "type": "mailbox",
+      "suffixes": [
+        "emailsrvr.com"
+      ],
+      "evidence_urls": [
+        "https://docs.rackspace.com/docs/set-up-dns-records-for-cloud-office-email"
+      ]
+    },
+    {
+      "slug": "cloudflare",
+      "type": "forwarding",
+      "suffixes": [
+        "mx.cloudflare.net"
+      ],
+      "evidence_urls": [
+        "https://developers.cloudflare.com/email-routing/setup/email-routing-dns-records/"
+      ]
+    },
+    {
+      "slug": "forwardemail",
+      "type": "forwarding",
+      "suffixes": [
+        "forwardemail.net"
+      ],
+      "evidence_urls": [
+        "https://forwardemail.net/en/faq"
+      ]
+    },
+    {
+      "slug": "improvmx",
+      "type": "forwarding",
+      "suffixes": [
+        "improvmx.com"
+      ],
+      "evidence_urls": [
+        "https://improvmx.com/guides/"
+      ]
+    },
+    {
+      "slug": "simplelogin",
+      "type": "forwarding",
+      "suffixes": [
+        "simplelogin.co"
+      ],
+      "evidence_urls": [
+        "https://simplelogin.io/faq/"
+      ]
+    },
+    {
+      "slug": "addy",
+      "type": "forwarding",
+      "suffixes": [
+        "anonaddy.me"
+      ],
+      "evidence_urls": [
+        "https://addy.io/faq/"
+      ]
+    },
+    {
+      "slug": "mimecast",
+      "type": "gateway",
+      "suffixes": [
+        "mimecast.com"
+      ],
+      "evidence_urls": [
+        "https://www.mimecast.com/"
+      ]
+    },
+    {
+      "slug": "cisco",
+      "type": "gateway",
+      "suffixes": [
+        "iphmx.com"
+      ],
+      "evidence_urls": [
+        "https://docs.ces.cisco.com/docs/hostnames"
+      ]
+    },
+    {
+      "slug": "broadcom",
+      "type": "gateway",
+      "suffixes": [
+        "messagelabs.com"
+      ],
+      "evidence_urls": [
+        "https://knowledge.broadcom.com/external/article/161419/mail-exchanger-mx-record-setup-with-emai.html"
+      ]
+    },
+    {
+      "slug": "mailgun",
+      "type": "inbound",
+      "suffixes": [
+        "mailgun.org"
+      ],
+      "evidence_urls": [
+        "https://documentation.mailgun.com/docs/mailgun/user-manual/domains/domains-verify"
+      ]
+    },
+    {
+      "slug": "sendgrid",
+      "type": "inbound",
+      "suffixes": [
+        "sendgrid.net"
+      ],
+      "evidence_urls": [
+        "https://www.twilio.com/docs/sendgrid/for-developers/parsing-email/setting-up-the-inbound-parse-webhook"
+      ]
+    }
+  ]
+}

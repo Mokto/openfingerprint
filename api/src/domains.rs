@@ -21,6 +21,8 @@ enum Category {
     DisposableReview,
     FreeSubdomain,
     ReferrerSpam,
+    PublicMailbox,
+    Relay,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +64,8 @@ pub struct DomainCheck {
     #[serde(skip_serializing_if = "Option::is_none")]
     mx_lookup: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    mx_providers: Option<Vec<crate::providers::Provider>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     registration: Option<crate::rdap::Registration>,
 }
 
@@ -79,6 +83,9 @@ struct Facts {
     disposable: Fact,
     free_subdomain: Fact,
     spam: Fact,
+    public_mailbox: Fact,
+    relay: Fact,
+    did_you_mean: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -202,11 +209,13 @@ impl DomainData {
                     !crate::check::domain(d)
                         || d.ends_with('.')
                         || *d != d.to_ascii_lowercase()
-                        || (s.category == Category::FreeSubdomain
-                            && psl::suffix(d.as_bytes()).is_some_and(|suffix| {
-                                suffix.as_bytes() == d.as_bytes()
-                                    && suffix.typ() == Some(psl::Type::Icann)
-                            }))
+                        || (matches!(
+                            s.category,
+                            Category::FreeSubdomain | Category::PublicMailbox | Category::Relay
+                        ) && psl::suffix(d.as_bytes()).is_some_and(|suffix| {
+                            suffix.as_bytes() == d.as_bytes()
+                                && suffix.typ() == Some(psl::Type::Icann)
+                        }))
                 })
             {
                 return Err(());
@@ -235,16 +244,10 @@ impl DomainData {
                 reason: Some("invalid_domain"),
                 facts: None,
                 mx_lookup: None,
+                mx_providers: None,
                 registration: None,
             })),
         }
-    }
-
-    /// Whether MX hosts could change the result: only a fresh `not_listed` domain is inferred.
-    pub fn needs_mx(&self, domain: &str) -> bool {
-        self.fact(domain, now(), Category::Disposable, "disposable_domain")
-            .status
-            == "not_listed"
     }
 
     /// Tenants of a listed free-subdomain namespace: the registered domain belongs to its operator.
@@ -262,6 +265,7 @@ impl DomainData {
     pub fn check_with(&self, domain: &str, mx: &[String], mx_lookup: &'static str) -> DomainCheck {
         DomainCheck {
             mx_lookup: Some(mx_lookup),
+            mx_providers: (mx_lookup == "resolved").then(|| crate::providers::detect(mx)),
             ..self.check_at(domain, mx, now())
         }
     }
@@ -281,8 +285,26 @@ impl DomainData {
                 "free_subdomain_namespace",
             ),
             spam: self.fact(domain, now, Category::ReferrerSpam, "referrer_spam"),
+            public_mailbox: self.consumer_fact(
+                self.fact(domain, now, Category::PublicMailbox, "public_mailbox"),
+                mx,
+            ),
+            relay: self.fact(domain, now, Category::Relay, "email_relay"),
+            did_you_mean: None,
         };
-        let items = [&facts.disposable, &facts.free_subdomain, &facts.spam];
+        let facts = Facts {
+            did_you_mean: (facts.public_mailbox.status == "not_listed")
+                .then(|| self.suggestion(domain, now))
+                .flatten(),
+            ..facts
+        };
+        let items = [
+            &facts.disposable,
+            &facts.free_subdomain,
+            &facts.spam,
+            &facts.public_mailbox,
+            &facts.relay,
+        ];
         let status = if items.iter().all(|f| f.status == "unknown") {
             "unknown"
         } else if items.iter().any(|f| {
@@ -300,7 +322,49 @@ impl DomainData {
             reason: self.reason,
             facts: Some(facts),
             mx_lookup: None,
+            mx_providers: None,
             registration: None,
+        }
+    }
+
+    /// A likely-intended public mailbox domain one edit away, in the suffix or after the first
+    /// letter of the name, for names of five letters or more. Shorter names and first-letter edits
+    /// mostly hit real sites (web.dev, pcloud.com in the Tranco top 20k), and swapping one
+    /// two-letter country code for another usually names the same brand's regional domain
+    /// (posteo.dk, hotmail.pt). Ambiguity suggests nothing.
+    fn suggestion(&self, domain: &str, now: u64) -> Option<String> {
+        let (name, suffix) = split(domain)?;
+        let mut hits = self
+            .sources
+            .iter()
+            .filter(|s| {
+                s.category == Category::PublicMailbox
+                    && s.fetched_at_unix <= now.saturating_add(300)
+                    && s.expires_at_unix > now
+            })
+            .flat_map(|s| &s.domains)
+            .filter(|target| {
+                split(target).is_some_and(|(n, sfx)| {
+                    n.len() >= 5
+                        && ((n == name
+                            && one_edit(suffix, sfx)
+                            && !(suffix.len() == 2 && sfx.len() == 2))
+                            || (sfx == suffix && n[..1] == name[..1] && one_edit(name, n)))
+                })
+            });
+        let hit = hits.next()?;
+        hits.next().is_none().then(|| hit.clone())
+    }
+
+    /// An otherwise unlisted domain whose mail goes only to a provider's consumer infrastructure.
+    fn consumer_fact(&self, fact: Fact, mx: &[String]) -> Fact {
+        match crate::providers::consumer(mx) {
+            Some(_) if fact.status == "not_listed" => Fact {
+                value: Some(true),
+                status: "mx_listed",
+                ..fact
+            },
+            _ => fact,
         }
     }
 
@@ -513,6 +577,30 @@ impl DomainStore {
     }
 }
 
+/// A registered domain as (name, public suffix); None for subdomains and bare suffixes.
+fn split(d: &str) -> Option<(&str, &str)> {
+    let suffix = psl::suffix_str(d)?;
+    let name = d.strip_suffix(suffix)?.strip_suffix('.')?;
+    (!name.contains('.')).then_some((name, suffix))
+}
+
+/// Exactly one substitution, insertion, deletion or adjacent transposition apart.
+fn one_edit(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let prefix = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let (a, b) = (&a[prefix..], &b[prefix..]);
+    match a.len() as isize - b.len() as isize {
+        0 => {
+            !a.is_empty()
+                && (a[1..] == b[1..]
+                    || (a.len() >= 2 && a[0] == b[1] && a[1] == b[0] && a[2..] == b[2..]))
+        }
+        1 => a[1..] == *b,
+        -1 => b[1..] == *a,
+        _ => false,
+    }
+}
+
 fn sha256(bytes: &[u8]) -> Vec<u8> {
     ring::digest::digest(&ring::digest::SHA256, bytes)
         .as_ref()
@@ -521,6 +609,13 @@ fn sha256(bytes: &[u8]) -> Vec<u8> {
 
 impl Source {
     fn lookup(&self, domain: &str) -> &'static str {
+        if self.category == Category::PublicMailbox {
+            return if self.domains.contains(domain) {
+                "listed"
+            } else {
+                "not_listed"
+            };
+        }
         if self.category == Category::DisposableReview {
             return if self.domains.contains(domain) {
                 "disputed"
@@ -566,6 +661,117 @@ mod tests {
         )
         .unwrap()
     }
+    #[test]
+    fn one_edit_covers_typos_but_not_identity_or_two_edits() {
+        for (a, b) in [
+            ("gmial", "gmail"),
+            ("gmai", "gmail"),
+            ("gmaill", "gmail"),
+            ("gnail", "gmail"),
+            ("con", "com"),
+            ("co", "com"),
+            ("ocm", "com"),
+        ] {
+            assert!(one_edit(a, b) && one_edit(b, a), "{a} {b}");
+        }
+        for (a, b) in [
+            ("gmail", "gmail"),
+            ("gamli", "gmail"),
+            ("de", "com"),
+            ("", "ab"),
+            ("ab", "ba "),
+        ] {
+            assert!(!one_edit(a, b), "{a} {b}");
+        }
+    }
+
+    #[test]
+    fn public_mailboxes_are_exact_relays_cover_subdomains_and_typos_suggest_once() {
+        let d = data(vec![
+            source(
+                "public_mailbox",
+                &[
+                    "gmail.com",
+                    "hotmail.com",
+                    "hotmail.co.uk",
+                    "gmx.de",
+                    "gmx.net",
+                    "live.com",
+                    "me.com",
+                ],
+            ),
+            source("relay", &["mozmail.com"]),
+        ]);
+        let check = |name: &str| serde_json::to_value(d.check_at(name, &[], 1500)).unwrap();
+        assert_eq!(check("gmail.com")["public_mailbox"]["status"], "listed");
+        assert_eq!(
+            check("mail.gmail.com")["public_mailbox"]["status"],
+            "not_listed"
+        );
+        assert_eq!(check("x.mozmail.com")["relay"]["value"], true);
+        assert_eq!(check("gmail.com")["relay"]["status"], "not_listed");
+        for (typo, want) in [
+            ("gmial.com", Some("gmail.com")),
+            ("gmail.con", Some("gmail.com")),
+            ("gmail.co", Some("gmail.com")),
+            ("hotmial.co.uk", Some("hotmail.co.uk")),
+            ("live.co", None),
+            ("gmx.dk", None),
+            ("hotmail.pt", None),
+            ("fmail.com", None),
+            ("cloud.com", None),
+            ("gmail.com", None),
+            ("gmx.ne", None),
+            ("gnx.de", None),
+            ("mc.com", None),
+            ("mail.gmial.com", None),
+            ("co.uk", None),
+            ("hotmail.org.uk", None),
+        ] {
+            assert_eq!(check(typo)["did_you_mean"].as_str(), want, "{typo}");
+        }
+        assert_eq!(
+            serde_json::to_value(d.check_at("gmial.com", &[], 2500)).unwrap()["did_you_mean"],
+            serde_json::Value::Null,
+            "stale lists suggest nothing"
+        );
+    }
+
+    /// `OPENFINGERPRINT_TYPO_EVAL=<one domain per line> cargo test typo_eval -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn typo_eval() {
+        let list: Vec<String> = serde_json::from_str::<serde_json::Value>(include_str!(
+            "../data/reviewed-public-mailboxes.json"
+        ))
+        .unwrap()["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["domain"].as_str().unwrap().to_owned())
+            .collect();
+        let d = data(vec![source(
+            "public_mailbox",
+            &list.iter().map(String::as_str).collect::<Vec<_>>(),
+        )]);
+        let names =
+            std::fs::read_to_string(std::env::var("OPENFINGERPRINT_TYPO_EVAL").unwrap()).unwrap();
+        let mut total = 0;
+        for name in names
+            .lines()
+            .map(str::trim)
+            .filter(|n| crate::check::domain(n))
+        {
+            total += 1;
+            if let Some(hit) =
+                serde_json::to_value(d.check_at(name, &[], 1500)).unwrap()["did_you_mean"].as_str()
+            {
+                println!("SUGGEST {name} -> {hit}");
+            }
+        }
+        println!("checked {total}");
+    }
+
     #[test]
     fn classifications_are_independent_and_missing_is_not_false() {
         let d = data(vec![
@@ -882,10 +1088,35 @@ mod tests {
             );
         }
         let d = DomainData::parse(include_bytes!("../data/domains.json")).unwrap();
-        assert_eq!(d.sources.len(), 7);
+        assert_eq!(d.sources.len(), 9);
         let at = d.sources[0].fetched_at_unix;
         let r = d.check_at("sharklasers.com", &[], at).facts.unwrap();
         assert_eq!(r.disposable.value, Some(true));
+        let gmail = d.check_at("gmail.com", &[], at).facts.unwrap();
+        assert_eq!(
+            (
+                gmail.public_mailbox.value,
+                gmail.disposable.value,
+                gmail.relay.status
+            ),
+            (Some(true), None, "not_listed")
+        );
+        assert_eq!(
+            d.check_at("x.mozmail.com", &[], at)
+                .facts
+                .unwrap()
+                .relay
+                .value,
+            Some(true)
+        );
+        assert_eq!(
+            d.check_at("gmial.com", &[], at)
+                .facts
+                .unwrap()
+                .did_you_mean
+                .as_deref(),
+            Some("gmail.com")
+        );
         assert_eq!(r.spam.scope, "referrer_spam");
         assert_eq!(
             d.sources

@@ -11,7 +11,7 @@ Domain and country intelligence run locally against openly licensed datasets:
 | --- | --- |
 | `signals` | Canonical schema-4/5 verification and bounded evidence counts. |
 | `automation` | Versioned rules for client-reported observations, now included automatically inside SDK `signals`. |
-| `domain` | Disposable-domain, free-subdomain and source-scoped referrer-spam evidence, with provenance and expiry. |
+| `domain` | Disposable, free-subdomain, public-mailbox, email-relay and source-scoped referrer-spam evidence with provenance and expiry, typo suggestions, MX providers and registration dates. |
 | `ip` | Local country estimate plus independent Tor-exit, ASN and published cloud-range evidence under `network`, with source provenance and expiry. Missing facts remain unknown. |
 
 The domain snapshot is bundled and can be overridden with a refreshed local file.
@@ -52,11 +52,10 @@ A separate operator updater refreshes public snapshots without rebuilding the
 image; the API re-reads an override file every minute and swaps in a changed
 snapshot only if it is valid.
 
-A domain check whose result MX hosts could still change (a fresh `not_listed`
-domain) sends one UDP MX query to one nameserver: a random transaction ID, resent
-once after a second without an answer, a two-second limit (the registry lookup that
-runs alongside has the same budget), no TCP fallback and no cache in the API.
-Already-decided domains are never sent to DNS. The nameserver sees the domains you
+Every domain check except a bare public suffix (`co.uk`) sends one UDP MX query to
+one nameserver: a random transaction ID, resent once after a second without an
+answer, a two-second limit (the registry lookup that runs alongside has the same
+budget), no TCP fallback and no cache in the API. The nameserver sees the domains you
 check; use a resolver you trust, such as the cluster DNS, and allow only it on UDP
 53. Without DNS access, lookups report `unavailable` and everything else works.
 
@@ -191,8 +190,8 @@ found, not that the IP is safe. The API never infers IPs from connections or hea
 
 See [country licensing and refresh](data/README.md#ip-country-data) before using
 these results: DB-IP requires attribution, including a link on web pages that use them.
-With fresh domain data, `domain` contains `disposable`, `free_subdomain` and `spam`
-facts. Disposable evidence combines the community list with recently monitored
+With fresh domain data, `domain` contains `disposable`, `free_subdomain`, `spam`,
+`public_mailbox` and `relay` facts. Disposable evidence combines the community list with recently monitored
 provider domains from an openly licensed feed; no vendor API results are imported. Each has a nullable `value`, evidence `status`, `scope` and `sources` with
 license, revision, source-commit/retrieval/expiry times. For example, a confirmed
 list match yields `value: true, status: listed`; an ordinary non-match yields
@@ -215,7 +214,38 @@ Every valid domain section has `mx_lookup`:
 | `no_records` | The domain exists but publishes no usable MX, including null MX. |
 | `no_domain` | NXDOMAIN. Undeliverable now, which is not proof of abuse. |
 | `unavailable` | Timeout, SERVFAIL, truncated or malformed answer. Unknown, not clean. |
-| `not_needed` | MX hosts could not change the result (already listed, allowlisted, disputed, or no fresh data), so nothing was sent to DNS. |
+| `not_needed` | The domain is a public suffix such as `co.uk`, so nothing was sent to DNS. |
+
+With `mx_lookup: resolved`, `mx_providers` lists the services that run those MX
+hosts, in MX preference order, as `{"slug": "google", "type": "mailbox"}`. Types are
+`mailbox` (hosted mailboxes), `gateway` (filtering in front of another mailbox),
+`forwarding` (mail is passed on to another address) and `inbound` (delivered to an
+application). An empty list means self-hosted or unrecognised routing, not a missing
+provider. The table (`data/mx-providers.json`) holds only host suffixes that the
+provider documents or owns, with evidence, and ships with each release.
+
+`public_mailbox` is true when the exact domain is a reviewed shared mailbox service
+(Gmail, Outlook.com, Yahoo, iCloud, GMX, regional providers and large ISPs): its
+addresses belong to unrelated people, not to one organisation. Subdomains do not
+match. An otherwise unlisted domain whose MX hosts all belong to one provider's
+consumer-only infrastructure yields `value: true, status: mx_listed`: Microsoft's
+consumer Outlook.com servers (`*.olc.protection.outlook.com`, not the
+`*.mail.protection.outlook.com` organisation tenants), Yahoo's servers for itself,
+AOL and partner ISPs (`yahoodns.net` except Yahoo Small Business `mx-biz`), GMX,
+WEB.DE and mail.com, whose vanity catalogue (`email.com`, `usa.com`...) is covered this way.
+In the Tranco top 20,000 this matched 25 domains, all shared consumer or ISP mail.
+Patterns that also serve organisations (Microsoft `mx.microsoft`, Yandex, Mail.ru)
+are deliberately not used. `relay` is true for reviewed forwarding-alias domains (Apple Hide My Email,
+DuckDuckGo, Firefox Relay, SimpleLogin, addy.io) and their subdomains: a real mailbox
+hides behind the address. Neither is a risk verdict.
+
+`did_you_mean` suggests the public mailbox domain a registered domain was probably
+meant to be (`gmial.com` and `gmail.con` suggest `gmail.com`), or is null. It needs a
+fresh public-mailbox list, accepts one edit after the first letter of a provider
+name of five letters or more, or one edit in its suffix (not one two-letter country
+code for another: `posteo.dk` is Posteo's, not a typo of `posteo.de`), and stays null
+when two domains are equally close. Across the Tranco top 20,000 sites it suggested
+nothing.
 
 Every valid domain section also has `registration`:
 
