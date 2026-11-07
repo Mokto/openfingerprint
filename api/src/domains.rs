@@ -1104,7 +1104,7 @@ mod tests {
             );
         }
         let d = DomainData::parse(include_bytes!("../data/domains.json")).unwrap();
-        assert_eq!(d.sources.len(), 9);
+        assert_eq!(d.sources.len(), 10);
         let at = d.sources.iter().map(|s| s.fetched_at_unix).max().unwrap();
         assert!(d.sources.iter().all(|s| s.expires_at_unix > at));
         let r = d.check_at("sharklasers.com", &[], at).facts.unwrap();

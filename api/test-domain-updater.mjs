@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { domains, monitoredDomains, download, snapshot, update, unprotected, publish, kubernetes } from './update-domain-data.mjs';
+import { domains, liveServiceDomains, monitoredDomains, download, snapshot, update, unprotected, publish, kubernetes } from './update-domain-data.mjs';
 
 assert.deepEqual(domains('# note\nMAIL.example\nmail.example\nbücher.example\n'), ['mail.example', 'xn--bcher-kva.example']);
 for (const value of ['', 'https://example.test', 'bad..example', 'example.test/path', `example.test${String.fromCharCode(92)}evil`, String.fromCharCode(1) + 'example.test', 'example.test' + String.fromCharCode(0), '*.example.test', '192.0.2.1', 'x'.repeat(64) + '.example']) {
@@ -39,16 +39,31 @@ assert.throws(() => monitoredDomains(JSON.stringify(feed()), now + 15 * 86400));
 const allOld = feed();
 for (const observation of Object.values(allOld.domains)) observation.lastseen = now - 20 * 86400;
 assert.throws(() => monitoredDomains(JSON.stringify(allOld), now));
+const sourceMap = [
+    'https://raw.githubusercontent.com/FGRibreau/mailchecker/master/list.txt:copied.example',
+    'https://gist.githubusercontent.com/someone/raw/:gist.example',
+    'https://throwaway.cloud/list.txt:throwaway.example',
+    'MailFake:Live.Example', 'https://yopmail.com/domain?d=all:alt.example',
+    ...Array.from({ length: 500 }, (_, i) => `Tempm:t${i}.example`)
+].join('\n');
+const live = liveServiceDomains(sourceMap);
+assert(live.includes('live.example') && live.includes('alt.example') && live.length === 502, 'Live services kept, published lists skipped');
+assert(!live.some(d => /copied|gist|throwaway/.test(d)));
+assert.throws(() => liveServiceDomains('MailFake:only.example\n'), /Too few/);
+assert.throws(() => liveServiceDomains('no separator\n'), /Invalid source map line/);
 async function publicSource(url) {
     if (url.includes('api.github.com/')) return JSON.stringify({ sha: 'a'.repeat(40), commit: { committer: { date: new Date((now - 60) * 1000).toISOString() } } });
     if (url.includes('7c/fakefilter/')) return url.endsWith('LICENSE.md') ? bundled.sources.find(s => s.id === 'fakefilter_recent').license_text : JSON.stringify(feed());
+    if (url.includes('disposable/disposable-email-domains/')) return url.endsWith('LICENSE') ? bundled.sources.find(s => s.id === 'disposable_live_services').license_text : sourceMap;
     if (url.includes('disposable-email-domains/')) return url.endsWith('LICENSE.txt') ? bundled.sources.find(s => s.id === 'disposable_email_domains').license_text : 'mail.example\n';
     if (url.includes('matomo-org/')) return url.endsWith('README.md') ? '## License\nPublic Domain (no copyright).' : 'spam.example\n';
     const id = url.includes('is-a-dev/') ? 'is_a_dev' : 'is_a_bot';
     return url.endsWith('LICENSE') ? bundled.sources.find(s => s.id === id).license_text : (id === 'is_a_dev' ? 'is-a.dev' : 'is-a.bot');
 }
 const result = JSON.parse(await snapshot(publicSource, now));
-assert.equal(result.sources.length, 9);
+assert.equal(result.sources.length, 10);
+assert.equal(result.sources.find(s => s.id === 'disposable_live_services').domains.length, 502);
+await assert.rejects(snapshot(async url => url.includes('api.github.com/repos/disposable/') ? JSON.stringify({ sha: 'b'.repeat(40), commit: { committer: { date: new Date((now - 4 * 86400) * 1000).toISOString() } } }) : publicSource(url), now), /stale/);
 for (const s of result.sources) {
     assert.equal(createHash('sha256').update(s.license_text).digest('hex'), s.license_sha256);
     assert(s.expires_at_unix > s.fetched_at_unix);
