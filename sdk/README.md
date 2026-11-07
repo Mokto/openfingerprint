@@ -99,11 +99,28 @@ Deploy the compatible API first: older versions reject this additional SDK field
 
 | Field | Observation |
 | --- | --- |
-| `version` | Always `1`, independent of fingerprint schema 5. |
+| `version` | Always `2`, independent of fingerprint schema 5. |
 | `webdriver` | The boolean `navigator.webdriver` value. |
 | `headlessUserAgent` | A `HeadlessChrome/` token in the user-agent string. |
 | `seleniumArtifacts` | Presence of `__webdriver_evaluate`, `__selenium_evaluate`, `__webdriver_script_fn` or `__selenium_unwrapped` on `document`. |
 | `phantomArtifacts` | Presence of `callPhantom` or `_phantom` on `window`. |
+| `platformMismatch` | UA OS family differs from `navigator.platform` or `userAgentData.platform`. |
+| `missingChromeObject` | Chromium UA (not WebView) without `window.chrome`. |
+| `notificationPermissionQuirk` | `Notification.permission` is `denied` while `permissions.query` reports `prompt`. `collect()` only. |
+| `emptyPlugins` | Desktop Chromium with an empty `navigator.plugins`. |
+| `emptyLanguages` | Empty `navigator.languages`. |
+| `softwareRenderer` | Unmasked WebGL renderer matches SwiftShader, llvmpipe, softpipe, software rasterizer or Mesa offscreen. Taken from the GPU probe, so `collect()` only. |
+| `zeroDimensions` | Screen or outer-window width or height of 0. |
+| `cdpDetected` | A `stack` getter on an `Error` passed to `console.debug` was read, as CDP clients and open DevTools do. |
+| `nativeFunctionTampering` | `Function.prototype.toString`, the `navigator.webdriver` getter or `Permissions.prototype.query` is not native code, or `toString` accepts a non-function. |
+| `workerUserAgentMismatch` | A blob dedicated worker reports a different UA or platform than the main thread. `collect()` only. |
+
+The standalone `collectAutomation()` returns `null` for the three `collect()`-only
+observations, which need async or GPU-probe results. The worker probe needs
+`worker-src blob:` in a strict CSP; a blocked worker is `null` (unknown) and logs
+a CSP violation. `cdpDetected` also fires with DevTools open, and real users with
+user-agent switchers or unusual setups can trip several probes. Treat each as an
+indicator, not proof.
 
 Each observation is `boolean | null`. Missing/non-boolean WebDriver values,
 empty/non-string user agents and throwing reads return null independently.

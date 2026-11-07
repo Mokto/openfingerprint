@@ -389,16 +389,17 @@ try {
         [{ version: 1 }, 'unknown', [], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts']],
         [{ ...automation, webdriver: null }, 'unknown', [], ['webdriver']],
         [{ ...automation, headlessUserAgent: null }, 'detected', ['webdriver'], ['headless_user_agent']],
-        [{ ...automation, webdriver: false, headlessUserAgent: true }, 'detected', ['headless_user_agent'], []]
+        [{ ...automation, webdriver: false, headlessUserAgent: true }, 'detected', ['headless_user_agent'], []],
+        [{ version: 2, softwareRenderer: true, cdpDetected: false }, 'detected', ['software_renderer'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'zero_dimensions', 'native_function_tampering', 'worker_user_agent_mismatch']]
     ]) {
         const response = await request('/v1/check', authHeaders(sites[4]), { automation: observations, signals: signals() });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {
-            automation: { status, rule_version: 1, source: 'client_reported', indicators, unavailable_probes: unavailable },
+            automation: { status, rule_version: observations.version, source: 'client_reported', indicators, unavailable_probes: unavailable },
             signals: checkedProfile(signals())
         });
     }
-    for (const invalid of [false, [], 'browser', {}, { version: 2 }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
+    for (const invalid of [false, [], 'browser', {}, { version: 3 }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
         const response = await request('/v1/check', authHeaders(sites[4]), { ...fields, automation: invalid });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {

@@ -1,14 +1,27 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use serde_json::Value;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Evidence {
-    version: u8,
-    webdriver: Option<bool>,
-    headless_user_agent: Option<bool>,
-    selenium_artifacts: Option<bool>,
-    phantom_artifacts: Option<bool>,
-}
+const V1: [(&str, &str); 4] = [
+    ("webdriver", "webdriver"),
+    ("headlessUserAgent", "headless_user_agent"),
+    ("seleniumArtifacts", "selenium_artifacts"),
+    ("phantomArtifacts", "phantom_artifacts"),
+];
+const V2: [(&str, &str); 10] = [
+    ("platformMismatch", "platform_mismatch"),
+    ("missingChromeObject", "missing_chrome_object"),
+    (
+        "notificationPermissionQuirk",
+        "notification_permission_quirk",
+    ),
+    ("emptyPlugins", "empty_plugins"),
+    ("emptyLanguages", "empty_languages"),
+    ("softwareRenderer", "software_renderer"),
+    ("zeroDimensions", "zero_dimensions"),
+    ("cdpDetected", "cdp_detected"),
+    ("nativeFunctionTampering", "native_function_tampering"),
+    ("workerUserAgentMismatch", "worker_user_agent_mismatch"),
+];
 
 #[derive(Debug, Serialize)]
 pub struct Check {
@@ -21,7 +34,7 @@ pub struct Check {
     reason: Option<&'static str>,
 }
 
-pub fn check(value: serde_json::Value) -> Check {
+pub fn check(value: Value) -> Check {
     let mut result = Check {
         status: "invalid_input",
         rule_version: 1,
@@ -30,24 +43,33 @@ pub fn check(value: serde_json::Value) -> Check {
         unavailable_probes: Vec::new(),
         reason: Some("invalid_automation"),
     };
-    let Ok(evidence) = serde_json::from_value::<Evidence>(value) else {
+    let version = match value.get("version").and_then(Value::as_u64) {
+        Some(1) => 1,
+        Some(2) => 2,
+        _ => return result,
+    };
+    let probes: Vec<_> = V1
+        .iter()
+        .chain(if version == 2 { V2.iter() } else { [].iter() })
+        .collect();
+    let Some(fields) = value.as_object() else {
         return result;
     };
-    if evidence.version != 1 {
+    if fields.iter().any(|(key, observed)| {
+        key != "version"
+            && (!probes.iter().any(|(name, _)| name == key)
+                || !(observed.is_null() || observed.is_boolean()))
+    }) {
         return result;
     }
-    for (name, observed) in [
-        ("webdriver", evidence.webdriver),
-        ("headless_user_agent", evidence.headless_user_agent),
-        ("selenium_artifacts", evidence.selenium_artifacts),
-        ("phantom_artifacts", evidence.phantom_artifacts),
-    ] {
-        match observed {
-            Some(true) => result.indicators.push(name),
-            None => result.unavailable_probes.push(name),
+    for (name, indicator) in probes {
+        match fields.get(*name).and_then(Value::as_bool) {
+            Some(true) => result.indicators.push(indicator),
+            None => result.unavailable_probes.push(indicator),
             Some(false) => {}
         }
     }
+    result.rule_version = version;
     result.status = if !result.indicators.is_empty() {
         "detected"
     } else if !result.unavailable_probes.is_empty() {
@@ -125,7 +147,7 @@ mod tests {
             json!([]),
             json!("automation"),
             json!({}),
-            json!({"version": 2}),
+            json!({"version": 3}),
             json!({"version": -1}),
             json!({"version": 1.5}),
             json!({"version": "1"}),
@@ -134,6 +156,10 @@ mod tests {
             json!({"version": 1, "headlessUserAgent": 0}),
             json!({"version": 1, "seleniumArtifacts": []}),
             json!({"version": 1, "phantomArtifacts": {}}),
+            json!({"version": 1, "cdpDetected": true}),
+            json!({"version": 2, "extra": true}),
+            json!({"version": 2, "cdpDetected": "true"}),
+            json!({"version": 2, "softwareRenderer": 1}),
         ] {
             let result = check(value);
             assert_eq!(result.status, "invalid_input");
@@ -155,5 +181,27 @@ mod tests {
             assert_eq!(result.indicators, [reason]);
             assert_eq!(result.unavailable_probes.len(), 3);
         }
+    }
+
+    #[test]
+    fn version_two_reports_new_probes_in_order() {
+        let result = check(json!({"version": 2}));
+        assert_eq!(result.rule_version, 2);
+        assert_eq!(result.status, "unknown");
+        assert_eq!(result.unavailable_probes.len(), 14);
+        for (field, reason) in V2 {
+            let result = check(json!({"version": 2, (field): true}));
+            assert_eq!(result.status, "detected");
+            assert_eq!(result.indicators, [reason]);
+            assert_eq!(result.unavailable_probes.len(), 13);
+        }
+        let all_false: serde_json::Map<String, serde_json::Value> = [("version", json!(2))]
+            .into_iter()
+            .chain(V1.iter().chain(&V2).map(|(name, _)| (*name, json!(false))))
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        let result = check(serde_json::Value::Object(all_false));
+        assert_eq!(result.status, "not_detected");
+        assert!(result.indicators.is_empty() && result.unavailable_probes.is_empty());
     }
 }

@@ -1,7 +1,7 @@
 import { environment } from './environment';
 import { identityExclusions } from './policy';
 
-import { collectAutomation, type AutomationEvidence } from './automation';
+import { collectAutomation, isSoftwareRenderer, observeAsyncAutomation, type AutomationEvidence } from './automation';
 export { collectAutomation, type AutomationEvidence };
 
 const unsupported = Symbol();
@@ -527,6 +527,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		timings: {}
 	};
 	const excluded = new Set(result.excluded);
+	const asyncAutomation = observeAsyncAutomation(controller.signal);
 	try {
 		const run = async (name: Name) => {
 			let began = performance.now(),
@@ -543,6 +544,8 @@ export async function collect(options: Options = {}): Promise<Result> {
 					const pending = probes[name](controller.signal, deadline);
 					blockingMs = performance.now() - began;
 					const value = await pending;
+					if (name === 'gpu' && typeof value === 'string')
+						result.automation.softwareRenderer = isSoftwareRenderer(JSON.parse(value)[3]);
 					if (expired()) return { status: 'timeout' };
 					if (value === unsupported) return { status: 'unsupported' };
 					if (value === unstable) return { status: 'unstable' };
@@ -568,6 +571,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 			if (name !== 'audio' && name !== 'gpu' && !excluded.has(name)) await run(name);
 		await run('gpu');
 		await audioJob;
+		Object.assign(result.automation, await asyncAutomation);
 		const entries = Object.entries(result.components)
 			.filter(([name]) => !result.excluded.includes(name as Name))
 			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));

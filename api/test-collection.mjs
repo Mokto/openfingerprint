@@ -108,7 +108,7 @@ try {
         { ...body(issued.challenge), extra: true },
         { ...body(issued.challenge), signals: { ...signals, fingerprint: token() } },
         { ...body(issued.challenge), signals: { ...signals, automation: null } },
-        { ...body(issued.challenge), signals: { ...signals, automation: { version: 2 } } },
+        { ...body(issued.challenge), signals: { ...signals, automation: { version: 3 } } },
         { ...body(issued.challenge), context: { userAgent: 'x'.repeat(513) } },
         { ...body(issued.challenge), context: { platform: false } },
         { ...body(issued.challenge), challenge: 'bad' }
