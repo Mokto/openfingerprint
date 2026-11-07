@@ -232,8 +232,10 @@ hides behind the address. Neither is a risk verdict.
 `did_you_mean` suggests the public mailbox domain a registered domain was probably
 meant to be (`gmial.com` and `gmail.con` suggest `gmail.com`), or is null. It needs a
 fresh public-mailbox list, accepts one edit after the first letter of a provider
-name of five letters or more, or one edit in its suffix, and stays null when two
-domains are equally close. Across the Tranco top 20,000 sites it suggested nothing.
+name of five letters or more, or one edit in its suffix (not one two-letter country
+code for another: `posteo.dk` is Posteo's, not a typo of `posteo.de`), and stays null
+when two domains are equally close. Across the Tranco top 20,000 sites it suggested
+nothing.
 
 Every valid domain section also has `registration`:
 

@@ -194,7 +194,10 @@ fn answers(msg: &[u8], mut pos: usize) -> Option<Lookup> {
             if end != pos {
                 return None;
             }
-            if crate::check::domain(&host) && !hosts.iter().any(|(_, h)| *h == host) {
+            // Cloudflare publishes MX targets such as `_dc-mx.<hash>.<domain>` that accept mail.
+            if crate::check::domain(&host.replace('_', "u"))
+                && !hosts.iter().any(|(_, h)| *h == host)
+            {
                 hosts.push((preference, host));
             }
         }
@@ -329,6 +332,19 @@ mod tests {
             panic!("expected hosts");
         };
         assert_eq!((hosts.len(), hosts[0].as_str()), (10, "mx0.temp.example"));
+        assert_eq!(
+            parse(
+                &reply(&query, ok, &[(10, "_dc-mx.95642e8dce05.temp.example")]),
+                &query
+            ),
+            Some(Lookup::Hosts(vec![
+                "_dc-mx.95642e8dce05.temp.example".into()
+            ]))
+        );
+        assert_eq!(
+            parse(&reply(&query, ok, &[(10, "bad host.temp.example")]), &query),
+            Some(Lookup::NoRecords)
+        );
 
         let mut other_id = reply(&query, ok, &[(10, "mx.temp.example")]);
         other_id[1] ^= 1;

@@ -326,7 +326,9 @@ impl DomainData {
 
     /// A likely-intended public mailbox domain one edit away, in the suffix or after the first
     /// letter of the name, for names of five letters or more. Shorter names and first-letter edits
-    /// mostly hit real sites (web.dev, pcloud.com in the Tranco top 20k). Ambiguity suggests nothing.
+    /// mostly hit real sites (web.dev, pcloud.com in the Tranco top 20k), and swapping one
+    /// two-letter country code for another usually names the same brand's regional domain
+    /// (posteo.dk, hotmail.pt). Ambiguity suggests nothing.
     fn suggestion(&self, domain: &str, now: u64) -> Option<String> {
         let (name, suffix) = split(domain)?;
         let mut hits = self
@@ -341,7 +343,9 @@ impl DomainData {
             .filter(|target| {
                 split(target).is_some_and(|(n, sfx)| {
                     n.len() >= 5
-                        && ((n == name && one_edit(suffix, sfx))
+                        && ((n == name
+                            && one_edit(suffix, sfx)
+                            && !(suffix.len() == 2 && sfx.len() == 2))
                             || (sfx == suffix && n[..1] == name[..1] && one_edit(name, n)))
                 })
             });
@@ -697,6 +701,8 @@ mod tests {
             ("gmail.co", Some("gmail.com")),
             ("hotmial.co.uk", Some("hotmail.co.uk")),
             ("live.co", None),
+            ("gmx.dk", None),
+            ("hotmail.pt", None),
             ("fmail.com", None),
             ("cloud.com", None),
             ("gmail.com", None),
