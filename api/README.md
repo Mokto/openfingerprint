@@ -477,6 +477,16 @@ preserve the license/source attribution when redistributing data. Keep the cloud
 source's full MIT notice with redistributed manifests. Source licenses do not
 change this project's MIT license.
 
+**IPLocate and X4B attribution:** the VPN and datacenter lists come from
+[X4BNet lists_vpn](https://github.com/X4BNet/lists_vpn), which builds them from the
+IPLocate IP-to-ASN database ([CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)).
+Where these results are used, credit the data, for example
+`IP address data powered by <a href="https://www.iplocate.io">IPLocate.io</a>`, and
+keep the manifest's license and attribution text with any redistributed copy. ShareAlike
+applies if you redistribute the ranges themselves, so do not publish `network.json`:
+this project's repository and images contain no ranges, and the API returns only a scope
+label.
+
 Build the native validator, then refresh a directory outside the repository:
 
 ```sh

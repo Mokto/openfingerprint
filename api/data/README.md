@@ -139,6 +139,17 @@ The application's MIT license does not override any source's terms. The BSD
 copyright, redistribution conditions and no-endorsement clause are retained in
 the snapshot and release image.
 
+## VPN and datacenter ranges
+
+The `vpn_ranges` and `datacenter_ranges` network sources are
+[X4BNet lists_vpn](https://github.com/X4BNet/lists_vpn), declared MIT by X4B and built from
+the IPLocate IP-to-ASN database under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). IPLocate requires a credit
+link where the data is used, for example
+`IP address data powered by <a href="https://www.iplocate.io">IPLocate.io</a>`. Carry it
+through downstream consumers, and do not redistribute the ranges (`network.json`) without
+meeting ShareAlike. See the [attribution note](../README.md#local-network-intelligence).
+
 ## IP country data
 
 [DB-IP Country Lite](https://db-ip.com/db/download/ip-to-country-lite) provides
