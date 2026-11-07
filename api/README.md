@@ -756,8 +756,9 @@ the same customer and schema; never use a core-only or network-based fallback.
 
 ## Metrics
 
-`/metrics` on `OPENFINGERPRINT_METRICS_ADDR` reports dataset health only, never
-requests, domains or credentials:
+`/metrics` on `OPENFINGERPRINT_METRICS_ADDR` reports dataset health, lookup outcomes and
+aggregate latency. Labels are fixed names (route, status class, step), never request
+contents, domains, addresses or credentials:
 
 | Metric | Meaning |
 | --- | --- |
@@ -776,12 +777,21 @@ requests, domains or credentials:
 | `openfingerprint_rdap_lookups_total{result}` | RDAP lookups by `registration.status` (not cache hits or `not_applicable`); `unsupported_tld` counts TLDs with neither RDAP nor WHOIS. |
 | `openfingerprint_whois_lookups_total{result}` | WHOIS lookups for TLDs without RDAP, by `registration.status`. |
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
+| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `verify`, `challenges`, `collect`, `consume` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. Buckets run from 1 ms to 5 s. |
+| `openfingerprint_check_step_duration_seconds{step}` | Histogram of where a `/v1/check` spends time. Sections: `automation`, `signals`, `domain`, `ip_country`, `ip_network`. The `domain` section runs `domain_mx`, `domain_registration` and `domain_mail_auth` concurrently, so it lasts as long as the slowest, not their sum. Beneath them: `dns_lookup` (each MX or TXT query), `redis_get` and `redis_set` (RDAP cache), `rdap_fetch` and `whois_fetch` (registry calls on a cache miss, including the wait for a per-registry slot). A step cut short by its timeout is recorded at the time it was cut. |
 | `openfingerprint_country_data_loaded` | 1 when a valid country database is loaded (not necessarily fresh). |
 | `openfingerprint_country_data_expiry_timestamp_seconds` | When the country database stops being used, or 0 when unavailable. |
 | `openfingerprint_country_data_reload_failures_total` | Changed country files rejected, including rollbacks to older builds. |
 
 Alert on source expiry, not on `/health`: an expired source silently degrades
 domain checks to unknown while the process stays healthy.
+
+Useful queries: p95 of the endpoint,
+`histogram_quantile(0.95, sum by (le) (rate(openfingerprint_http_request_duration_seconds_bucket{route="check"}[5m])))`;
+and where the time goes, the same expression with
+`openfingerprint_check_step_duration_seconds_bucket` and `sum by (le, step)`. Lookups
+bounded by a 2 s timeout (DNS, registries) put slow checks in the 2 s bucket; a high
+`redis_get` p95 near its 250 ms timeout means the cache is hurting, not helping.
 
 ## Kubernetes
 

@@ -134,8 +134,11 @@ impl AppState {
                 crate::mailauth::check(&self.dns, &domain).await
             }
         };
-        let ((hosts, lookup), registration, (spf, dmarc)) =
-            tokio::join!(mx, registration, mail_auth);
+        let ((hosts, lookup), registration, (spf, dmarc)) = tokio::join!(
+            crate::metrics::timed(crate::metrics::Step::DomainMx, mx),
+            crate::metrics::timed(crate::metrics::Step::DomainRegistration, registration),
+            crate::metrics::timed(crate::metrics::Step::DomainMailAuth, mail_auth)
+        );
         data.check_with(&domain, &hosts, lookup)
             .with_registration(registration)
             .with_mail_auth(spf, dmarc)
@@ -472,17 +475,30 @@ pub async fn check(
     {
         return Err(ApiError::invalid());
     }
+    use crate::metrics::{Step, start, timed};
     let domain = match input.domain {
-        Some(value) => Some(state.check_domain(value).await),
+        Some(value) => Some(timed(Step::Domain, state.check_domain(value)).await),
         None => None,
     };
     Ok(Json(CheckResponse {
-        automation: input.automation.map(crate::automation::check),
-        signals: input.signals.map(check_signals),
+        automation: input.automation.map(|a| {
+            let _timer = start(Step::Automation);
+            crate::automation::check(a)
+        }),
+        signals: input.signals.map(|s| {
+            let _timer = start(Step::Signals);
+            check_signals(s)
+        }),
         domain,
         ip: input.ip.map(|ip| IpCheck {
-            country: state.countries.check(ip.clone()),
-            network: state.network.current().check(ip, "backend_supplied"),
+            country: {
+                let _timer = start(Step::IpCountry);
+                state.countries.check(ip.clone())
+            },
+            network: {
+                let _timer = start(Step::IpNetwork);
+                state.network.current().check(ip, "backend_supplied")
+            },
         }),
     })
     .into_response())

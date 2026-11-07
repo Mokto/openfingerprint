@@ -223,6 +223,10 @@ try {
     const text = await (await fetch('http://' + metrics + '/metrics')).text();
     assert(text.includes('openfingerprint_network_data_source_fresh{source="tor_exit"} 1'));
     assert(!text.includes('8.8.8.8'));
+    const series = name => Number(new RegExp(`^${name.replace(/[{}"]/g, '\\$&')} (\\d+)$`, 'm').exec(text)?.[1]);
+    assert(series('openfingerprint_http_request_duration_seconds_count{route="check",status="2xx"}') >= 1);
+    assert(series('openfingerprint_check_step_duration_seconds_count{step="ip_network"}') >= 1);
+    assert(series('openfingerprint_check_step_duration_seconds_count{step="ip_country"}') >= 1);
     console.log('IPv4/IPv6 facts, mapped addresses, invalid/non-global inputs, independent expiry and aggregate-only metrics passed.');
 
     if (process.env.OPENFINGERPRINT_TEST_NETWORK_DATA) {

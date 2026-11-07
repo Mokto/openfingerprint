@@ -56,7 +56,11 @@ impl Cache {
     }
 
     pub async fn get(&self, key: &str) -> Option<String> {
-        let reply: Result<Option<String>, ()> = self.run(redis::cmd("GET").arg(key)).await;
+        let reply: Result<Option<String>, ()> = crate::metrics::timed(
+            crate::metrics::Step::RedisGet,
+            self.run(redis::cmd("GET").arg(key)),
+        )
+        .await;
         let i = match &reply {
             Ok(Some(_)) => 0,
             Ok(None) => 1,
@@ -67,15 +71,17 @@ impl Cache {
     }
 
     pub async fn set(&self, key: &str, value: &str, ttl_seconds: u64) {
-        let reply: Result<(), ()> = self
-            .run(
+        let reply: Result<(), ()> = crate::metrics::timed(
+            crate::metrics::Step::RedisSet,
+            self.run(
                 redis::cmd("SET")
                     .arg(key)
                     .arg(value)
                     .arg("EX")
                     .arg(ttl_seconds),
-            )
-            .await;
+            ),
+        )
+        .await;
         if reply.is_err() {
             self.counts[2].fetch_add(1, Ordering::Relaxed);
         }
