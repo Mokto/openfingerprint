@@ -9,7 +9,7 @@ Domain and country intelligence run locally against openly licensed datasets:
 
 | Requested check | Available behavior |
 | --- | --- |
-| `signals` | Canonical schema-4/5 verification and bounded evidence counts. |
+| `signals` | Schema-1 verification of the SDK's opaque `token`, with a 21-character fingerprint. |
 | `automation` | Versioned rules for client-reported observations, now included automatically inside SDK `signals`. |
 | `domain` | Disposable, free-subdomain, public-mailbox, email-relay and source-scoped referrer-spam evidence with provenance and expiry, typo suggestions, MX providers, registration dates and SPF/DMARC status. |
 | `email` | Role-account detection for a full address, plus every `domain` check for the address's domain. |
@@ -161,11 +161,44 @@ The JSON object accepts only these fields:
 
 | Field | Shape |
 | --- | --- |
-| `signals` | Optional SDK result object, as described below. |
+| `signals` | Optional `token` string from the SDK result (`result.token`). Objects are rejected as `invalid_signals`. |
 | `automation` | Optional version-1 or version-2 SDK automation evidence, as described below. |
 | `domain` | Optional ASCII hostname, not a URL or complete email address. |
 | `email` | Optional full email address. Its domain gets the `domain` checks, so it cannot be combined with `domain`. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
+| `detail` | Optional boolean, default false. `true` returns the full response described in this guide, with evidence counts, rule metadata and per-source provenance. |
+
+By default the response is one flat object of verdicts:
+
+```json
+{"fingerprint":"_AJUXF4ttBmXt1N1es89S",
+ "automation":true,
+ "tampering":false,
+ "disposable":false,
+ "free":true,
+ "mx":true,
+ "country":"us",
+ "vpn":false,
+ "tor":false}
+```
+
+A key that is missing means unknown, so there are no `null` facts. Only the
+`fingerprint` can be `null`.
+
+| Key | Meaning |
+| --- | --- |
+| `fingerprint` | From `signals`; `null` when the token is invalid or has no full ID. |
+| `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
+| `disposable`, `free`, `spam`, `relay`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `mx` says the domain has mail servers. |
+| `country`, `vpn`, `tor`, `datacenter`, `proxy` | From `ip`. `country` is a lowercase ISO 3166-1 alpha-2 code. |
+| `invalid` | Only present when an input was rejected: a list of `signals`, `automation`, `tampering`, `domain`, `email` and/or `ip`. |
+
+`email` and `domain` give the same keys. Everything else (evidence counts, indicator
+lists, rule versions, role account, ASN and hosting provider, MX providers,
+SPF/DMARC, registration date, suggested domain, `mx_listed` provenance, uppercase
+`countryCode`, sources, and rejection reasons) is only in the `detail: true` response.
+
+The rest of this guide describes the `detail: true` shape.
 
 Response keys are camelCase; enumerated values such as `not_listed` or
 `invalid_input` stay snake_case. At least one non-null field is required. Null is equivalent to omission. Results
@@ -318,8 +351,8 @@ With valid full SDK evidence, the `signals` section is:
 ```json
 {
   "status":"ok",
-  "schema_version":5,
-  "fingerprint":"<full fingerprint>",
+  "schema_version":1,
+  "fingerprint":"<21-character ID>",
   "evidence":{
     "includedComponents":2,
     "includedHints":1,
@@ -342,6 +375,10 @@ Groups are derived from the same inputs as the fingerprint, with no new SDK data
 Counts describe the submitted, validated evidence, not entropy, probability,
 confidence, a risk score or honest probe execution. Included counts omit excluded
 probes. Unavailable and excluded counts are separate and may overlap.
+
+The returned fingerprint is the first 126 bits of the full SHA-256, as 21
+base64url characters (`A-Za-z0-9_-`, case-sensitive; do not lowercase it). The API
+verifies the full hash inside the token.
 
 Valid evidence without a full ID has `status: insufficient_signals`, null schema
 and fingerprint, and evidence counts. A core ID never substitutes for a full ID.
@@ -652,8 +689,8 @@ Authorization and other forwarded headers. Do not replace the browser's UA with
 the proxy's UA. Require HTTPS and appropriate CSP `connect-src`; cross-origin
 CORS and preflight are deliberately unsupported.
 
-The collection body accepts only `challenge`, a full SDK `signals` object with
-valid embedded `automation`, and `context`:
+The collection body accepts only `challenge`, the SDK's `signals` token (whose
+decoded result must contain valid `automation`), and `context`:
 `{"userAgent": "<up to 512 UTF-8 bytes or null>", "platform": "<up to 128 bytes or null>", "webrtc": {"addresses": ["<up to 8 IP literals>"]}}`.
 Context properties may be omitted; other metadata is rejected. The global 64 KiB
 body limit applies. Non-null `storageId` is still rejected. Origin must match
@@ -736,9 +773,14 @@ Combine evidence with application controls; `not_detected` never means trusted.
 
 ### SDK evidence
 
+`/v1/check` and `/v1/collect` take the SDK's opaque `token`, not the readable
+fields. The token is obfuscated, not encrypted: the scheme is public, so it hides
+evidence from casual inspection and makes repeat visits look different on the wire,
+nothing more. The decoded object is validated as follows:
+
 | Field | Shape |
 | --- | --- |
-| `version` | Integer `4` or `5`. |
+| `version` | Integer `1`. |
 | `fingerprint` | Full lowercase SHA-256 string, or null/omitted. |
 | `coreFingerprint` | Core lowercase SHA-256 string, or null/omitted. |
 | `components`, `hints` | Objects mapping bounded probe names to lowercase SHA-256 strings. |
@@ -757,10 +799,10 @@ translate an identity between schemas.
 
 ### `POST /v1/verify` (compatibility)
 
-Accepts the original, unwrapped SDK evidence object and retains the exact response:
+Accepts the decoded, unwrapped SDK evidence object (not a token) and returns:
 
 ```json
-{"status":"ok","schema_version":5,"fingerprint":"<full fingerprint>"}
+{"status":"ok","schema_version":1,"fingerprint":"<21-character ID>"}
 ```
 
 Without a full ID:
@@ -773,9 +815,9 @@ Invalid evidence still returns HTTP 400 here, unlike field-level failures inside
 `/v1/check`. No evidence counts or additional keys are added to this legacy response.
 Both routes use the same canonical verifier and server authentication.
 
-Deploy the compatible API first. Then update callers to wrap evidence in `signals`
-and read `response.signals` (which also contains evidence counts), not merely change
-the URL. Keep strict schema/ID matching and fail-closed identity writes. Retire
+Deploy the compatible API first. Then update callers to send `result.token` as
+`signals` and read `response.fingerprint` (or `response.signals` with `detail: true`),
+not merely change the URL. Keep strict schema/ID matching and fail-closed identity writes. Retire
 `/v1/verify` only in a later coordinated release once all callers have migrated.
 This source change does not migrate or deploy any existing caller.
 

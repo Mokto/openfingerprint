@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { seal } from '../sdk/src/token.ts';
 
 const redis = process.env.OPENFINGERPRINT_TEST_REDIS_URL;
 if (!redis) {
@@ -45,21 +46,25 @@ async function start(redisUrl = redis) {
     return server;
 }
 const auth = site => ({ Authorization: `Bearer ${site.secret_key}` });
+const sealed = (path, body) =>
+    ['/v1/collect', '/v1/check'].includes(path) && body?.signals && typeof body.signals === 'object'
+        ? { ...body, signals: seal(body.signals) } : body;
 async function post(server, path, body, headers = {}) {
     const response = await fetch(server.base + path, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify(body), signal: AbortSignal.timeout(5000)
+        body: JSON.stringify(sealed(path, body)), signal: AbortSignal.timeout(5000)
     });
     assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.equal(response.headers.get('set-cookie'), null);
     assert.equal(response.headers.get('access-control-allow-origin'), null);
     return response;
 }
+const shortId = hex => Buffer.from(hex, 'hex').subarray(0, 16).toString('base64url').slice(0, 21);
 const sha = value => createHash('sha256').update(value).digest('hex');
 const components = { fontPreferences: sha('collection-fixture') };
 const signals = {
-    version: 5,
-    fingerprint: sha('stealth-agent:5\0' + JSON.stringify({ components: Object.entries(components), hints: [] })),
+    version: 1,
+    fingerprint: sha('stealth-agent:1\0' + JSON.stringify({ components: Object.entries(components), hints: [] })),
     coreFingerprint: null, components, hints: {}, unavailable: {}, excluded: [], durationMs: 1,
     automation: { version: 1, webdriver: false, headlessUserAgent: false, seleniumArtifacts: false, phantomArtifacts: false }
 };
@@ -129,7 +134,7 @@ try {
     assert.equal(consumed.filter(r => r.status === 409).length, 11);
     const event = await consumed.find(r => r.status === 200).json();
     assert.equal(event.event_id, eventId);
-    assert.equal(event.signals.fingerprint, signals.fingerprint);
+    assert.equal(event.signals.fingerprint, shortId(signals.fingerprint));
     assert.equal(event.signals.automation.status, 'detected');
     assert.deepEqual(event.signals.automation.indicators, ['headless_user_agent']);
     assert.deepEqual(event.signals.automation.unavailableProbes, []);
@@ -170,9 +175,9 @@ try {
     assert.equal((await post(unavailable, '/v1/challenges', { binding: token(), origin }, auth(sites[0]))).status, 503);
     const check = await post(unavailable, '/v1/check', { signals }, auth(sites[0]));
     assert.equal(check.status, 200);
-    assert.equal((await check.json()).signals.fingerprint, signals.fingerprint);
+    assert.equal((await check.json()).fingerprint, shortId(signals.fingerprint));
     for (const server of servers) {
-        for (const secret of ['secret:private', privateUa, signals.fingerprint, ...sites.map(s => s.secret_key), issued.challenge, issued.binding, eventId]) {
+        for (const secret of ['secret:private', privateUa, signals.fingerprint, shortId(signals.fingerprint), ...sites.map(s => s.secret_key), issued.challenge, issued.binding, eventId]) {
             assert(!server.output.includes(secret));
         }
     }

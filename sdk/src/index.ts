@@ -1,3 +1,4 @@
+import { seal } from './token';
 import { environment } from './environment';
 import { identityExclusions } from './policy';
 
@@ -468,7 +469,7 @@ export interface Options {
 export interface Result {
 	automation: AutomationEvidence;
 	tampering: TamperingEvidence;
-	version: 5;
+	version: 1;
 	excluded: Name[];
 	fingerprint: string | null;
 	coreFingerprint: string | null;
@@ -478,7 +479,11 @@ export interface Result {
 	storageId: string | null;
 	durationMs: number;
 	timings: Partial<Record<Name, { durationMs: number; blockingMs: number }>>;
+	/** Opaque string to send to the backend instead of the fields above. */
+	token: string;
 }
+
+const tokenOf = ({ token: _, ...rest }: Result) => seal(rest);
 
 function storageId(key: string | undefined): string | null {
 	if (!key) return null;
@@ -518,7 +523,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 	const result: Result = {
 		automation: collectAutomation(),
 		tampering: unobservedTampering(),
-		version: 5,
+		version: 1,
 		excluded: identityExclusions(navigator.userAgent, navigator.vendor),
 		fingerprint: null,
 		coreFingerprint: null,
@@ -527,7 +532,8 @@ export async function collect(options: Options = {}): Promise<Result> {
 		unavailable: {},
 		storageId: null,
 		durationMs: 0,
-		timings: {}
+		timings: {},
+		token: ''
 	};
 	const excluded = new Set(result.excluded);
 	const asyncAutomation = observeAsyncAutomation(controller.signal);
@@ -591,10 +597,10 @@ export async function collect(options: Options = {}): Promise<Result> {
 				.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 			[result.fingerprint, result.coreFingerprint] = await Promise.race([
 				Promise.all([
-					hash(`stealth-agent:5\0${JSON.stringify({ components: entries, hints })}`).catch(
+					hash(`stealth-agent:1\0${JSON.stringify({ components: entries, hints })}`).catch(
 						() => null
 					),
-					hash(`stealth-core:5\0${JSON.stringify(entries)}`).catch(() => null)
+					hash(`stealth-core:1\0${JSON.stringify(entries)}`).catch(() => null)
 				]),
 				timeout
 			]);
@@ -615,6 +621,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 				),
 				durationMs: Math.round((performance.now() - start) * 10) / 10
 			};
+			snapshot.token = tokenOf(snapshot);
 			try {
 				void Promise.resolve(onIdentity(snapshot)).catch(() => {});
 			} catch {}
@@ -623,6 +630,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		for (const name of result.excluded) if (name !== 'audio') await run(name);
 		if (excluded.has('audio')) await run('audio');
 		result.durationMs = Math.round((performance.now() - start) * 10) / 10;
+		result.token = tokenOf(result);
 		return result;
 	} finally {
 		controller.abort();
@@ -720,7 +728,7 @@ export async function identify(options: IdentifyOptions): Promise<{ eventId: str
 	const response = await fetch(url, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ challenge, signals, context }),
+		body: JSON.stringify({ challenge, signals: signals.token, context }),
 		credentials: 'omit',
 		cache: 'no-store',
 		redirect: 'error',

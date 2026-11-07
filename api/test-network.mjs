@@ -1,3 +1,4 @@
+import { seal } from '../sdk/src/token.ts';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -50,7 +51,7 @@ async function post(server, route, body, headers = auth) {
     return fetch(server.base + route, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json', ...headers }, signal: AbortSignal.timeout(5000) });
 }
 async function check(server, ip) {
-    const response = await post(server, '/v1/check', { ip });
+    const response = await post(server, '/v1/check', { ip, detail: true });
     assert.equal(response.status, 200);
     return (await response.json()).ip.network;
 }
@@ -261,13 +262,13 @@ try {
         const trusted = await start({ ...redis, OPENFINGERPRINT_TRUSTED_PROXIES: '["127.0.0.1/32"]' });
         const sha = v => createHash('sha256').update(v).digest('hex');
         const components = { example: sha('network-check') };
-        const signals = { version: 5, fingerprint: sha('stealth-agent:5\0' + JSON.stringify({ components: Object.entries(components), hints: [] })), coreFingerprint: null, components, hints: {}, unavailable: {}, excluded: [], durationMs: 1, automation: { version: 1 } };
+        const signals = { version: 1, fingerprint: sha('stealth-agent:1\0' + JSON.stringify({ components: Object.entries(components), hints: [] })), coreFingerprint: null, components, hints: {}, unavailable: {}, excluded: [], durationMs: 1, automation: { version: 1 } };
         const origin = 'https://network-test.example';
         async function collect(server, forwarded, delayMs = 0) {
             const binding = randomBytes(32).toString('hex');
             const issued = await post(server, '/v1/challenges', { binding, origin });
             const { challenge } = await issued.json();
-            const input = { challenge, signals, context: {} };
+            const input = { challenge, signals: seal(signals), context: {} };
             const headers = { Origin: origin, ...(forwarded === null ? {} : { 'X-Forwarded-For': forwarded }) };
             assert.equal((await post(server, '/v1/collect', { ...input, ip: '8.8.8.8' }, headers)).status, 400);
             const response = await post(server, '/v1/collect', input, headers);

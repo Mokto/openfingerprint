@@ -257,13 +257,13 @@ impl Signals {
                 "insufficient_signals"
             },
             schema_version: available.then_some(self.version),
-            fingerprint: self.fingerprint.clone(),
+            fingerprint: self.fingerprint.as_deref().map(short_id),
         })
     }
 
     fn valid(&self) -> bool {
         let hashes = [&self.components, &self.hints];
-        if !(4..=5).contains(&self.version)
+        if self.version != 1
             || self.storage_id.is_some()
             || !ms(self.duration_ms)
             || hashes
@@ -332,6 +332,7 @@ struct CheckRequest {
     domain: Option<serde_json::Value>,
     email: Option<serde_json::Value>,
     ip: Option<serde_json::Value>,
+    detail: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -377,6 +378,163 @@ struct Evidence {
     included_hints: usize,
     unavailable_probes: usize,
     excluded_probes: usize,
+}
+
+/// First 126 bits of the full SHA-256 as 21 base64url characters (NanoID-sized).
+fn short_id(hex: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let (mut acc, mut bits, mut out) = (0u32, 0, String::new());
+    for pair in hex.as_bytes()[..32].chunks(2) {
+        let byte = u8::from_str_radix(std::str::from_utf8(pair).unwrap_or("0"), 16).unwrap_or(0);
+        acc = (acc << 8) | u32::from(byte);
+        bits += 8;
+        while bits >= 6 {
+            bits -= 6;
+            out.push(ALPHABET[(acc >> bits & 63) as usize] as char);
+        }
+        acc &= (1 << bits) - 1;
+    }
+    out.truncate(21);
+    out
+}
+
+const TOKEN_SEED: u32 = 0x6f66_7031;
+
+/// Reverses the SDK's token obfuscation (see sdk/src/token.ts). This is not
+/// encryption: it only hides evidence from casual inspection. Anything that is
+/// not a valid token becomes null.
+pub(crate) fn open(token: &serde_json::Value) -> serde_json::Value {
+    let decode = |text: &str| -> Option<Vec<u8>> {
+        let (mut bits, mut acc, mut out) = (0u32, 0u32, Vec::new());
+        for c in text.bytes() {
+            let v = match c {
+                b'A'..=b'Z' => c - b'A',
+                b'a'..=b'z' => c - b'a' + 26,
+                b'0'..=b'9' => c - b'0' + 52,
+                b'-' => 62,
+                b'_' => 63,
+                _ => return None,
+            };
+            acc = (acc << 6) | u32::from(v);
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits) as u8);
+                acc &= (1 << bits) - 1;
+            }
+        }
+        Some(out)
+    };
+    token
+        .as_str()
+        .and_then(decode)
+        .filter(|bytes| bytes.len() > 4)
+        .and_then(|bytes| {
+            let (nonce, body) = bytes.split_at(4);
+            let mut state = u32::from_be_bytes(nonce.try_into().ok()?) ^ TOKEN_SEED;
+            let plain: Vec<u8> = body
+                .iter()
+                .map(|b| {
+                    state = state.wrapping_add(0x6d2b_79f5);
+                    let mut t = state;
+                    t = (t ^ (t >> 15)).wrapping_mul(t | 1);
+                    t ^= t.wrapping_add((t ^ (t >> 7)).wrapping_mul(t | 61));
+                    b ^ ((t ^ (t >> 14)) & 255) as u8
+                })
+                .collect();
+            serde_json::from_slice(&plain).ok()
+        })
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// A fact object (`value` plus `status`) reduced to its bare value.
+fn bare(fact: &serde_json::Value) -> Option<serde_json::Value> {
+    let fact = fact.as_object()?;
+    fact.contains_key("status")
+        .then(|| fact.get("value").cloned())?
+}
+
+/// Default response: one flat object of verdicts. `signals` becomes a bare
+/// `fingerprint` (null unless fully verified); every other section contributes
+/// only the facts to act on. Unknown facts are omitted, so a missing key means
+/// unknown, and rejected inputs are listed under `invalid`.
+fn compact(response: &mut serde_json::Value) {
+    use serde_json::{Map, Value, json};
+    let Some(map) = response.as_object_mut() else {
+        return;
+    };
+    let mut out = Map::new();
+    let mut invalid = Vec::new();
+    let put = |out: &mut Map<String, Value>, key: &str, fact: &Value| {
+        if let Some(fact) = bare(fact)
+            .or_else(|| Some(fact.clone()))
+            .filter(|f| !f.is_null())
+        {
+            out.insert(key.into(), fact);
+        }
+    };
+    if let Some(signals) = map.remove("signals") {
+        out.insert("fingerprint".into(), signals["fingerprint"].clone());
+        if signals["status"] == "invalid_input" {
+            invalid.push("signals");
+        }
+        for key in ["automation", "tampering"] {
+            if let Some(check) = signals.get(key) {
+                map.entry(key).or_insert_with(|| check.clone());
+            }
+        }
+    }
+    for key in ["automation", "tampering"] {
+        if let Some(check) = map.remove(key) {
+            match check["status"].as_str() {
+                Some("detected") => out.insert(key.into(), json!(true)),
+                Some("not_detected") => out.insert(key.into(), json!(false)),
+                Some("invalid_input") => {
+                    invalid.push(key);
+                    None
+                }
+                _ => None,
+            };
+        }
+    }
+    let email = map.remove("email");
+    if let Some(domain) = map.remove("domain") {
+        if domain["status"] == "invalid_input" {
+            invalid.push("domain");
+        }
+        for (name, key) in [
+            ("disposable", "disposable"),
+            ("free", "publicMailbox"),
+            ("spam", "spam"),
+            ("relay", "relay"),
+        ] {
+            put(&mut out, name, &domain[key]);
+        }
+        match domain["mxLookup"].as_str() {
+            Some("resolved") => out.insert("mx".into(), json!(true)),
+            Some("no_records" | "no_domain") => out.insert("mx".into(), json!(false)),
+            _ => None,
+        };
+    }
+    if email.is_some_and(|e| e["status"] == "invalid_input") {
+        invalid.push("email");
+    }
+    if let Some(ip) = map.remove("ip") {
+        if ip["status"] == "invalid_input" {
+            invalid.push("ip");
+        } else {
+            if let Some(code) = ip["countryCode"].as_str() {
+                out.insert("country".into(), code.to_ascii_lowercase().into());
+            }
+            for key in ["vpn", "tor", "datacenter", "proxy"] {
+                put(&mut out, key, &ip["network"][key]);
+            }
+        }
+    }
+    if !invalid.is_empty() {
+        out.insert("invalid".into(), json!(invalid));
+    }
+    *response = Value::Object(out);
 }
 
 pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
@@ -498,14 +656,14 @@ pub async fn check(
         Some(value) => Some(timed(Step::Domain, state.check_domain(value)).await),
         None => None,
     };
-    Ok(Json(CheckResponse {
+    let mut response = serde_json::to_value(CheckResponse {
         automation: input.automation.map(|a| {
             let _timer = start(Step::Automation);
             crate::automation::check(a)
         }),
         signals: input.signals.map(|s| {
             let _timer = start(Step::Signals);
-            check_signals(s)
+            check_signals(open(&s))
         }),
         domain,
         email,
@@ -520,7 +678,11 @@ pub async fn check(
             },
         }),
     })
-    .into_response())
+    .map_err(|_| ApiError::invalid())?;
+    if input.detail != Some(true) {
+        compact(&mut response);
+    }
+    Ok(Json(response).into_response())
 }
 
 pub(crate) fn json_error(error: axum::extract::rejection::JsonRejection) -> ApiError {
@@ -587,14 +749,14 @@ mod tests {
         AppState::configure(&config(), dns(), rdap()).unwrap()
     }
     fn signals() -> Signals {
-        let mut s: Signals = serde_json::from_value(serde_json::json!({"version":4,"fingerprint":null,"coreFingerprint":null,"components":{"fontPreferences":sha256("fixture")},"hints":{},"unavailable":{},"excluded":[],"durationMs":1})).unwrap();
+        let mut s: Signals = serde_json::from_value(serde_json::json!({"version":1,"fingerprint":null,"coreFingerprint":null,"components":{"fontPreferences":sha256("fixture")},"hints":{},"unavailable":{},"excluded":[],"durationMs":1})).unwrap();
         let entries: Vec<_> = s.components.iter().collect();
         s.core_fingerprint = Some(sha256(&format!(
-            "stealth-core:4\0{}",
+            "stealth-core:1\0{}",
             serde_json::to_string(&entries).unwrap()
         )));
         s.fingerprint = Some(sha256(&format!(
-            "stealth-agent:4\0{}",
+            "stealth-agent:1\0{}",
             serde_json::json!({"components":entries,"hints":[]})
         )));
         s
@@ -694,21 +856,8 @@ mod tests {
         s.version = 2;
         assert!(!s.valid());
         let mut s = signals();
-        s.version = 6;
+        s.version = 0;
         assert!(!s.valid());
-        let mut s = signals();
-        s.version = 5;
-        assert!(!s.valid(), "schema-4 hashes must not verify as schema 5");
-        let entries: Vec<_> = s.components.iter().collect();
-        s.core_fingerprint = Some(sha256(&format!(
-            "stealth-core:5\0{}",
-            serde_json::to_string(&entries).unwrap()
-        )));
-        s.fingerprint = Some(sha256(&format!(
-            "stealth-agent:5\0{}",
-            serde_json::json!({"components":entries,"hints":[]})
-        )));
-        assert!(s.valid());
         let mut s = signals();
         s.fingerprint = Some("b".repeat(64));
         assert!(!s.valid());
@@ -784,9 +933,71 @@ mod tests {
 
         s.excluded = vec!["canvas".into()];
         assert!(s.identity_groups().is_empty());
-        s.version = 5;
+        s.version = 2;
         s.excluded.clear();
         assert_ne!(s.identity_groups()["rendering"], baseline);
+    }
+
+    #[test]
+    fn short_id_is_21_url_safe_characters_from_the_hash_prefix() {
+        // Reference: Buffer.from(hex, 'hex').subarray(0, 16).toString('base64url').slice(0, 21)
+        let id = short_id(&format!("00ff10{}", "ab".repeat(29)));
+        assert_eq!(id, "AP8Qq6urq6urq6urq6urq");
+    }
+
+    #[test]
+    fn opens_sdk_tokens_and_rejects_everything_else() {
+        assert_eq!(
+            open(&serde_json::json!("OKR_2CEL-DnVEGq_-LZU_x_gYVU")),
+            serde_json::json!({"a":1,"b":"é"})
+        );
+        for bad in [
+            serde_json::json!({"a":1}),
+            serde_json::json!("not a token!"),
+            serde_json::json!("AAAA"),
+            serde_json::Value::Null,
+        ] {
+            assert!(open(&bad).is_null());
+        }
+    }
+
+    #[test]
+    fn compact_responses_are_flat_verdicts() {
+        let mut response = serde_json::json!({
+            "signals": {"status":"ok","fingerprint":"abc","evidence":{},
+                "automation":{"status":"detected","ruleVersion":2,"source":"client_reported","indicators":["webdriver"],"unavailableProbes":[]},
+                "tampering":{"status":"not_detected","rule_version":1,"source":"client_reported","indicators":[],"unavailable_probes":[]}},
+            "email": {"status":"checked","roleAccount":true},
+            "domain": {"status":"ok","disposable":{"value":true,"status":"listed","scope":"s","sources":[]},
+                "spam":{"value":null,"status":"unknown"},
+                "publicMailbox":{"value":false,"status":"not_listed"},
+                "mxLookup":"resolved","registration":{"status":"found"}},
+            "ip": {"status":"ok","countryCode":"DK","source":{},
+                "network":{"status":"ok","source":"x","tor":{"value":false,"status":"ok","source":null},
+                    "vpn":{"value":null,"status":"unknown"},"asn":{"value":{"number":1},"status":"ok"}}}
+        });
+        compact(&mut response);
+        assert_eq!(
+            response,
+            serde_json::json!({
+                "fingerprint":"abc","automation":true,"tampering":false,
+                "disposable":true,"free":false,"mx":true,
+                "country":"dk","tor":false
+            })
+        );
+        let mut domain = serde_json::json!({"domain":{"status":"ok","mxLookup":"no_domain"}});
+        compact(&mut domain);
+        assert_eq!(domain, serde_json::json!({"mx":false}));
+        let mut invalid = serde_json::json!({
+            "signals":{"status":"invalid_input","fingerprint":null},
+            "automation":{"status":"invalid_input"},
+            "email":{"status":"invalid_input","reason":"invalid_email"},
+            "ip":{"status":"invalid_input","reason":"invalid_ip","network":{}}});
+        compact(&mut invalid);
+        assert_eq!(
+            invalid,
+            serde_json::json!({"fingerprint":null,"invalid":["signals","automation","email","ip"]})
+        );
     }
 
     #[test]

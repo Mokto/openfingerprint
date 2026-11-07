@@ -110,7 +110,7 @@ async function replace(bytes) {
 async function check(server, ip, extra = {}) {
     const response = await fetch(`${server.api}/v1/check`, { method: 'POST',
         headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', 'x-forwarded-for': '8.8.8.8' },
-        body: JSON.stringify({ ip, ...extra }) });
+        body: JSON.stringify({ ip, detail: true, ...extra }) });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');
     const body = await response.json();
@@ -176,6 +176,9 @@ try {
     assert.equal(expected.source.sha256, createHash('sha256').update(bytes).digest('hex'));
     assert.deepEqual((await check(server, '::ffff:8.8.8.8')).ip, expected);
     assert.equal((await check(server, '2001:4860::8888')).ip.countryCode, 'SE');
+    const compact = await check(server, '2001:4860::8888', { detail: false });
+    assert.equal(compact.country, 'se');
+    assert(!('ip' in compact) && !('countryCode' in compact) && !('source' in compact));
     assert.equal((await check(server, '2606:4700::1111')).ip.reason, 'not_found');
     for (const ip of ['127.0.0.1', '192.0.2.1', '10.0.0.1', '100.64.0.1', '::1', 'fe80::1', '2001:db8::1', '::ffff:10.0.0.1']) {
         const result = (await check(server, ip)).ip;

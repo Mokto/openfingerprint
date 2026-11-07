@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, chmodSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { seal } from '../sdk/src/token.ts';
 
 const { values } = parseArgs({
 	options: {
@@ -233,8 +234,9 @@ const base = new Promise((resolve, reject) => {
 	timer = setTimeout(() => reject(new Error('Startup timed out')), container ? 30000 : 10000);
 });
 child.stderr.on('data', data => { serverOutput += data.toString(); });
+const shortId = (hex) => Buffer.from(hex, 'hex').subarray(0, 16).toString('base64url').slice(0, 21);
 const digest = (s) => createHash('sha256').update(s).digest('hex');
-function signals(locale = 'same', font = 'same', version = 4) {
+function signals(locale = 'same', font = 'same', version = 1) {
 	const components = { fontFallbacks: digest('fallback'), fontPreferences: digest(font) };
 	const hints = { locale: digest(locale) };
 	const entries = (object) =>
@@ -256,11 +258,16 @@ function signals(locale = 'same', font = 'same', version = 4) {
 	};
 }
 let origin;
+const plain = (value) => value && typeof value === 'object' && !Array.isArray(value);
+const prepared = (path, body) =>
+	path === '/v1/check' && plain(body)
+		? { detail: true, ...body, ...(plain(body.signals) ? { signals: seal(body.signals) } : {}) }
+		: body;
 async function request(path, headers, body, method = 'POST') {
 	return fetch(origin + path, {
 		method,
 		headers: { 'content-type': 'application/json', ...headers },
-		...(body === undefined ? {} : { body: typeof body === 'string' ? body : JSON.stringify(body) }),
+		...(body === undefined ? {} : { body: typeof body === 'string' ? body : JSON.stringify(prepared(path, body)) }),
 		signal: AbortSignal.timeout(10000)
 	});
 }
@@ -340,7 +347,7 @@ try {
     console.log('Server-key compatibility, public-key rejection and browser-origin boundaries passed.');
 
     phase = 'canonical profiles for both supported schemas';
-    for (const version of [4, 5]) {
+    for (const version of [1]) {
         const input = signals('same', 'same', version);
         delete input.timings;
         delete input.storageId;
@@ -351,7 +358,7 @@ try {
             assert.equal(response.headers.get('set-cookie'), null);
             assert.equal(response.headers.get('access-control-allow-origin'), null);
             assert.deepEqual(await response.json(), {
-                status: 'ok', schema_version: version, fingerprint: input.fingerprint
+                status: 'ok', schema_version: version, fingerprint: shortId(input.fingerprint)
             });
         }
         assert.equal((await request('/v1/verify', authHeaders(sites[0]), {
@@ -361,10 +368,10 @@ try {
         await request('/v1/verify', authHeaders(sites[0]), different);
         const repeated = await request('/v1/verify', authHeaders(sites[0]), input);
         assert.deepEqual(await repeated.json(), {
-            status: 'ok', schema_version: version, fingerprint: input.fingerprint
+            status: 'ok', schema_version: version, fingerprint: shortId(input.fingerprint)
         });
     }
-    assert.notEqual(signals('same', 'same', 4).fingerprint, signals('same', 'same', 5).fingerprint);
+    assert.notEqual(signals('same', 'same', 1).fingerprint, signals('same', 'same', 2).fingerprint);
     for (const insufficient of [
         { ...signals(), fingerprint: null },
         { ...signals(), fingerprint: null, coreFingerprint: null, components: {}, hints: {} }
@@ -375,15 +382,15 @@ try {
             status: 'insufficient_signals', schema_version: null, fingerprint: null
         });
     }
-    console.log('Canonical schema-4/5 profiles, repeat verification and unknown/core-only identities passed.');
+    console.log('Canonical schema-1 profiles, repeat verification and unknown/core-only identities passed.');
 
     phase = 'independent requested checks and explicit unconfigured intelligence';
     const unknown = { status: 'unknown', reason: 'not_configured', network: { status: 'unknown', reason: 'non_global_ip', source: 'backend_supplied' } };
     const checkedProfile = input => ({
-        status: 'ok', schema_version: input.version, fingerprint: input.fingerprint,
+        status: 'ok', schema_version: input.version, fingerprint: shortId(input.fingerprint),
         evidence: { includedComponents: 2, includedHints: 1, unavailableProbes: 3, excludedProbes: 3 }
     });
-    for (const version of [4, 5]) {
+    for (const version of [1]) {
         const input = signals('same', 'same', version);
         const response = await request('/v1/check', authHeaders(sites[4]), { signals: input });
         assert.equal(response.status, 200);
@@ -443,7 +450,7 @@ try {
     assert.deepEqual(await omittedAutomation.json(), { signals: checkedProfile(signals()) });
     const legacyAutomation = await request('/v1/verify', authHeaders(sites[4]), { ...signals(), automation });
     assert.equal(legacyAutomation.status, 200);
-    assert.deepEqual(await legacyAutomation.json(), { status: 'ok', schema_version: 4, fingerprint: signals().fingerprint });
+    assert.deepEqual(await legacyAutomation.json(), { status: 'ok', schema_version: 1, fingerprint: shortId(signals().fingerprint) });
     const nestedAutomation = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), automation } });
     assert.deepEqual(await nestedAutomation.json(), { signals: { ...checkedProfile(signals()), automation: automationExpected } });
     const invalidNested = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), automation: false } });
@@ -476,6 +483,26 @@ try {
         signals: null, domain: null, ip: '192.0.2.1'
     });
     assert.deepEqual(await nulls.json(), { ip: unknown });
+    const compactCall = async (body) => (await fetch(origin + '/v1/check', {
+        method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders(sites[4]) }, body: JSON.stringify(body)
+    })).json();
+    const compactResult = await compactCall({
+        signals: seal({ ...signals(), automation: { version: 1, webdriver: true } }),
+        domain: 'mail.example', ip: '192.0.2.1'
+    });
+    assert.deepEqual(Object.keys(compactResult).filter(k => ['signals', 'domain', 'ip', 'email'].includes(k)), []);
+    assert.equal(compactResult.fingerprint, shortId(signals().fingerprint));
+    assert.match(compactResult.fingerprint, /^[A-Za-z0-9_-]{21}$/);
+    assert.equal(compactResult.automation, true);
+    assert.equal(compactResult.disposable, mode === 'fresh' ? true : undefined);
+    assert.equal(compactResult.mx, false);
+    const compactEmail = await compactCall({ email: 'Admin@mail.example' });
+    assert.deepEqual(compactEmail, mode === 'fresh' ? { disposable: true, mx: false } : { mx: false });
+    assert.deepEqual(await compactCall({ email: 'nope' }), { invalid: ['email'] });
+    assert.deepEqual(await compactCall({ signals: 'not-a-token', ip: 'nope' }), {
+        fingerprint: null, invalid: ['signals', 'ip']
+    });
+    assert.deepEqual(await compactCall({ signals: signals(), domain: 'mail.example' }), { fingerprint: null, invalid: ['signals'], ...await compactCall({ domain: 'mail.example' }) });
     console.log('All 15 input combinations, requested-only results, evidence counts and domain data state passed.');
     phase = `domain classification and source scope (${mode})`;
     for (const [domain, expected] of [
@@ -625,7 +652,7 @@ try {
         { ...input, fingerprint: digest('tampered') },
         { ...input, coreFingerprint: digest('tampered') },
         { ...input, version: 2 },
-        { ...input, version: 5 },
+        { ...input, version: 0 },
         { ...input, version: 6 },
         { ...input, storageId: 'unsolicited' },
         { ...input, excluded: ['canvas', 'canvas'] },
@@ -701,7 +728,7 @@ try {
     phase = 'no request or credential logging';
     for (const sensitive of [
         ...sites.flatMap(site => [site.secret_key, site.site_key].filter(Boolean)),
-        signals().fingerprint, signals('same', 'same', 5).fingerprint,
+        signals().fingerprint, shortId(signals().fingerprint), signals('same', 'same', 5).fingerprint,
         signals().components.fontPreferences, 'unsolicited', 'ExAmPlE.test.', 'Support+EU', 'zq.person-7', '2001:db8::1', '192.0.2.1',
         'mail.example', 'disputed.mail.example', 'child.disputed.mail.example', 'dnsmx.example', 'mx.other.example', 'rdapfound.example'
     ]) assert(!serverOutput.includes(sensitive));
