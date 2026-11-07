@@ -34,6 +34,9 @@ spec:
       terminationGracePeriodSeconds: 10
       securityContext:
         {{- include "of.podSecurity" . | nindent 8 }}
+        {{- if .Values.countryData.enabled }}
+        fsGroup: 65532
+        {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -74,6 +77,10 @@ spec:
             - name: OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS
               value: {{ .Values.domainData.reloadSeconds | quote }}
             {{- end }}
+            {{- if .Values.countryData.enabled }}
+            - name: OPENFINGERPRINT_COUNTRY_DATA
+              value: /country-data/country.mmdb
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.existingSecret | quote }}
@@ -97,19 +104,47 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if .Values.domainData.refresh.enabled }}
+          {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled }}
           volumeMounts:
+            {{- if .Values.domainData.refresh.enabled }}
             - name: domain-data
               mountPath: /domain-data
               readOnly: true
+            {{- end }}
+            {{- if .Values.countryData.enabled }}
+            - name: country-data
+              mountPath: /country-data
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if .Values.domainData.refresh.enabled }}
+        {{- if .Values.countryData.enabled }}
+        - name: country-updater
+          image: {{ include "of.image" (dict "image" .Values.domainData.refresh.image "appVersion" .Chart.AppVersion) | quote }}
+          imagePullPolicy: {{ .Values.domainData.refresh.image.pullPolicy }}
+          command: ["/nodejs/bin/node", "/app/update-country-data.mjs"]
+          args: ["--output", "/country-data/country.mmdb", "--loop"]
+          securityContext:
+            {{- include "of.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.countryData.resources | nindent 12 }}
+          volumeMounts:
+            - name: country-data
+              mountPath: /country-data
+        {{- end }}
+      {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled }}
       volumes:
+        {{- if .Values.countryData.enabled }}
+        - name: country-data
+          emptyDir:
+            sizeLimit: 96Mi
+        {{- end }}
+        {{- if .Values.domainData.refresh.enabled }}
         # Optional: until the first refresh creates it, domain facts are unknown, not bundled.
         - name: domain-data
           configMap:
             name: {{ include "of.dataName" . }}
             optional: true
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

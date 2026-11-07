@@ -1,4 +1,4 @@
-# Open domain data
+# Open domain and country data
 
 `domains.json` is a versioned public-data snapshot, not visitor history. It includes
 source revisions, retrieval/expiry times, license texts and license SHA-256 values.
@@ -28,7 +28,7 @@ Suffix List establishes boundaries, not whether a provider is free.
 
 StopForumSpam, Spamhaus and UserCheck data are not imported. Their access or
 redistribution restrictions do not meet this snapshot's open-data requirement.
-No scraping, API-key enrichment or bulk vendor-result copying is performed.
+No per-domain result scraping, API-key enrichment or bulk vendor-result copying is performed.
 
 ## Matching and corrections
 
@@ -133,6 +133,63 @@ in the release image at `/usr/share/licenses/openfingerprint-api/domain-data.jso
 The application's MIT license does not override any source's terms. The BSD
 copyright, redistribution conditions and no-endorsement clause are retained in
 the snapshot and release image.
+
+## IP country data
+
+[DB-IP Country Lite](https://db-ip.com/db/download/ip-to-country-lite) provides
+monthly IPv4/IPv6 country estimates in MMDB format under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). It has reduced coverage
+and accuracy compared with DB-IP's commercial database. Country estimates do not
+establish a person's location or whether an IP is safe. No per-IP vendor API is called.
+
+DB-IP requires attribution. Its stated web-use terms require a link to
+<https://db-ip.com/> on pages displaying **or using** the results, for example
+`<a href="https://db-ip.com/">IP Geolocation by DB-IP</a>`. Carry that attribution
+through downstream consumers; the API's source metadata is not a substitute for
+the page link. The application's MIT license does not override these data terms.
+The API returns unmodified country codes, along with database build/expiry times
+and SHA-256 provenance; it does not redistribute a transformed country dataset.
+
+Build the API first when running from a checkout; the updater reuses its native
+MMDB validator instead of maintaining a second parser. Installed binaries can be
+found on `PATH` as `openfingerprint-api`, or selected with
+`OPENFINGERPRINT_COUNTRY_VALIDATOR`.
+
+```sh
+cargo build --manifest-path api/Cargo.toml --locked
+OPENFINGERPRINT_COUNTRY_VALIDATOR="$PWD/api/target/debug/openfingerprint-api" \
+  node api/update-country-data.mjs --output /srv/openfingerprint/country.mmdb
+# Add --loop for daily refresh, with hourly retry after a failure.
+```
+
+Set `OPENFINGERPRINT_COUNTRY_DATA` to the read-only in-container MMDB path. No
+country database is bundled in Git or the API image. The updater discovers the
+latest published MMDB on DB-IP's download page, downloads only from the fixed
+HTTPS DB-IP hosts, rejects redirects, bounds time/size and decompression, checks
+the upstream SHA-1 against the uncompressed file, and atomically replaces the
+output only after the API binary verifies its structure, type, timestamps and
+nondecreasing build date against the existing file. Invalid, expired, future-dated
+or older downloads cannot overwrite the last-good file, including across API
+restarts. SHA-1 is an integrity check, not an independent signature: authenticity
+relies on HTTPS and the upstream publisher. A failed refresh leaves the previous
+file. The API also verifies the MMDB structure/type and build timestamp
+before swapping it in, rejects older builds, and retains the last valid database
+when a changed file is rejected. It reloads every minute by default; no restart is
+needed. A build older than 62 days stops producing country results even if downloads
+keep failing. Refreshing an unchanged database never advances its expiry.
+
+The chart enables a daily country-updater sidecar using the existing updater
+image, without credentials or Kubernetes tokens. An MMDB exceeds the ConfigMap
+size limit, so it uses a bounded shared `emptyDir` instead; the API mounts it
+read-only. New pods return unknown until their first successful download. The
+volume is not durable and every replica downloads independently. The sidecar's
+public-HTTPS NetworkPolicy allowance also applies to the API container because policy is
+pod-scoped. To remove country-download egress, set `countryData.enabled=false` and
+supply an externally refreshed, read-only database through your own deployment.
+The separate RDAP HTTPS allowance remains; restrict `networkPolicy.rdapTo`
+independently if registry access must also be limited.
+
+Run `node api/test-country.mjs` after building the API for offline fixture checks.
 
 ## Evaluating quality
 

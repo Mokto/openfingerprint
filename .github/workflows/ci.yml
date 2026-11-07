@@ -40,6 +40,7 @@ jobs:
       - run: cargo +stable test --manifest-path api/Cargo.toml --locked
       - run: cargo +stable build --manifest-path api/Cargo.toml --locked
       - run: node api/test.mjs
+      - run: node api/test-country.mjs
       - run: node api/test-collection.mjs
         env:
           OPENFINGERPRINT_TEST_REDIS_URL: redis://127.0.0.1:6379/15

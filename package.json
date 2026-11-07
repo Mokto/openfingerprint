@@ -10,6 +10,6 @@
 		"check": "node scripts/test-release.mjs && pnpm --dir sdk check",
 		"build": "pnpm --dir sdk build",
 		"test": "pnpm --dir sdk test",
-		"api:check": "cargo fmt --manifest-path api/Cargo.toml --check && cargo clippy --manifest-path api/Cargo.toml --locked --all-targets -- -D warnings && cargo test --manifest-path api/Cargo.toml --locked && cargo build --manifest-path api/Cargo.toml --locked && node api/test.mjs && node api/test-collection.mjs"
+		"api:check": "cargo fmt --manifest-path api/Cargo.toml --check && cargo clippy --manifest-path api/Cargo.toml --locked --all-targets -- -D warnings && cargo test --manifest-path api/Cargo.toml --locked && cargo build --manifest-path api/Cargo.toml --locked && node api/test.mjs && node api/test-country.mjs && node api/test-collection.mjs"
 	}
 }
