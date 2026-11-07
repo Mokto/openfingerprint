@@ -21,17 +21,23 @@ const DAY: u64 = 86400;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[serde(rename_all(serialize = "camelCase"))]
+// Snapshot files use snake_case; responses and stored collection events use camelCase.
 struct Metadata {
     id: String,
     license: String,
+    #[serde(alias = "licenseUrl")]
     license_url: String,
     attribution: String,
     #[serde(default, skip_serializing)]
     license_text: String,
     url: String,
     revision: String,
+    #[serde(alias = "updatedAtUnix")]
     updated_at_unix: u64,
+    #[serde(alias = "fetchedAtUnix")]
     fetched_at_unix: u64,
+    #[serde(alias = "expiresAtUnix")]
     expires_at_unix: u64,
 }
 impl Metadata {
@@ -350,7 +356,7 @@ impl Data {
             "not_listed",
         );
         if let (Some(Some(observed)), Some(meta)) = (self.tor.get(&ip), &self.metadata[0]) {
-            tor["expires_at_unix"] = json!(meta.expires_at_unix.min(observed.saturating_add(DAY)));
+            tor["expiresAtUnix"] = json!(meta.expires_at_unix.min(observed.saturating_add(DAY)));
         }
         let mut providers = BTreeSet::new();
         for prefix in 1..=if ip.is_ipv4() { 32 } else { 128 } {
@@ -614,7 +620,7 @@ fn expire_at(check: &mut Value, now: u64) {
         }
     }
     if check["tor"]["value"] == true {
-        let status = match check["tor"]["expires_at_unix"].as_u64() {
+        let status = match check["tor"]["expiresAtUnix"].as_u64() {
             Some(expiry) if now >= expiry => "stale_data",
             Some(_) => "matched",
             None => "observation_time_unavailable",
@@ -824,7 +830,7 @@ mod tests {
         let ip = "8.8.8.8".parse().unwrap();
         let mut event = data.check_at(ip, "trusted_proxy", DAY + 2);
         assert_eq!(event["tor"]["value"], true);
-        assert_eq!(event["tor"]["expires_at_unix"], DAY + 3);
+        assert_eq!(event["tor"]["expiresAtUnix"], DAY + 3);
         expire_at(&mut event, DAY + 3);
         let current = data.check_at(ip, "backend_supplied", DAY + 3);
         for result in [&event, &current] {
@@ -859,7 +865,7 @@ mod tests {
         event["tor"]
             .as_object_mut()
             .unwrap()
-            .remove("expires_at_unix");
+            .remove("expiresAtUnix");
         expire_at(&mut event, 1501);
         assert_eq!(event["tor"], legacy["tor"]);
         assert!(!event["hosting"]["value"].is_null());

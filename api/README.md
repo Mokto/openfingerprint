@@ -167,7 +167,8 @@ The JSON object accepts only these fields:
 | `email` | Optional full email address. Its domain gets the `domain` checks, so it cannot be combined with `domain`. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
 
-At least one non-null field is required. Null is equivalent to omission. Results
+Response keys are camelCase; enumerated values such as `not_listed` or
+`invalid_input` stay snake_case. At least one non-null field is required. Null is equivalent to omission. Results
 contain only requested non-null sections. Inputs can be combined in any order;
 there is no cross-input identity merging, and automation/domain/IP never change the browser ID.
 
@@ -179,7 +180,7 @@ For example:
 
 Without a configured country database, the IP section returns
 `{"status":"unknown","reason":"not_configured"}`. With a fresh database and a
-covered public IP, it returns `status: ok`, `country_code` (for example `DK`) and
+covered public IP, it returns `status: ok`, `countryCode` (for example `DK`) and
 `source`: dataset ID, license, attribution URL/text, database build/expiry timestamps
 and file SHA-256. No IP is echoed. The example documentation address above is
 reserved and therefore stays unknown even with a database.
@@ -191,14 +192,14 @@ normalized to IPv4; private, shared, loopback, documentation, multicast and othe
 special-purpose addresses remain `unknown/non_public_ip`. Missing coverage or an
 unknown country code yields `unknown/not_found`. Missing/invalid configured data
 yields `unknown/unavailable`; a database older than 62 days yields
-`unknown/stale_data`. Unknown/error results omit `country_code`; results against a
+`unknown/stale_data`. Unknown/error results omit `countryCode`; results against a
 loaded database retain its provenance even when stale. `ok` means a country was
 found, not that the IP is safe. The API never infers IPs from connections or headers.
 
 See [country licensing and refresh](data/README.md#ip-country-data) before using
 these results: DB-IP requires attribution, including a link on web pages that use them.
-With fresh domain data, `domain` contains `disposable`, `free_subdomain`, `spam`,
-`public_mailbox` and `relay` facts. Disposable evidence combines the community list with recently monitored
+With fresh domain data, `domain` contains `disposable`, `freeSubdomain`, `spam`,
+`publicMailbox` and `relay` facts. Disposable evidence combines the community list with recently monitored
 provider domains and domains read directly from live temporary-mail services, each from an openly licensed feed; no vendor API results are imported. Each has a nullable `value`, evidence `status`, `scope` and `sources` with
 license, revision, source-commit/retrieval/expiry times. For example, a confirmed
 list match yields `value: true, status: listed`; an ordinary non-match yields
@@ -213,9 +214,9 @@ MX host or parent domain blocks the inference; direct listings, allowlists and
 disputes always take precedence. MX hosts are never echoed. They describe mail
 routing at check time, not mailbox validation.
 
-Every valid domain section has `mx_lookup`:
+Every valid domain section has `mxLookup`:
 
-| `mx_lookup` | Meaning |
+| `mxLookup` | Meaning |
 | --- | --- |
 | `resolved` | The API found MX hosts (up to 10, by preference). |
 | `no_records` | The domain exists but publishes no usable MX, including null MX. |
@@ -223,7 +224,7 @@ Every valid domain section has `mx_lookup`:
 | `unavailable` | Timeout, SERVFAIL, truncated or malformed answer. Unknown, not clean. |
 | `not_needed` | The domain is a public suffix such as `co.uk`, so nothing was sent to DNS. |
 
-With `mx_lookup: resolved`, `mx_providers` lists the services that run those MX
+With `mxLookup: resolved`, `mxProviders` lists the services that run those MX
 hosts, in MX preference order, as `{"slug": "google", "type": "mailbox"}`. Types are
 `mailbox` (hosted mailboxes), `gateway` (filtering in front of another mailbox),
 `forwarding` (mail is passed on to another address) and `inbound` (delivered to an
@@ -237,7 +238,7 @@ cloud domains are never used: Amazon SES is matched by its documented regional
 `inbound-smtp` hosts only, not by self-hosted mail on `amazonaws.com`. In the Tranco
 top 20,000, the table names a provider for 72% of domains with MX.
 
-`public_mailbox` is true when the exact domain is a reviewed shared mailbox service
+`publicMailbox` is true when the exact domain is a reviewed shared mailbox service
 (Gmail, Outlook.com, Yahoo, iCloud, GMX, regional providers and large ISPs): its
 addresses belong to unrelated people, not to one organisation. Subdomains do not
 match. An otherwise unlisted domain whose MX hosts all belong to one provider's
@@ -252,7 +253,7 @@ are deliberately not used. `relay` is true for reviewed forwarding-alias domains
 DuckDuckGo, Firefox Relay, SimpleLogin, Proton Pass, addy.io, StartMail, AliasVault) and their subdomains: a real mailbox
 hides behind the address. Neither is a risk verdict.
 
-`did_you_mean` suggests the public mailbox domain a registered domain was probably
+`suggestedDomain` suggests the public mailbox domain a registered domain was probably
 meant to be (`gmial.com` and `gmail.con` suggest `gmail.com`), or is null. It needs a
 fresh public-mailbox list, accepts one edit after the first letter of a provider
 name of five letters or more, or one edit in its suffix (not one two-letter country
@@ -264,7 +265,7 @@ Every valid domain section also has `registration`:
 
 | `registration.status` | Meaning |
 | --- | --- |
-| `found` | `registered_at_unix` is the registry's `registration` event for the registered domain. |
+| `found` | `registeredAtUnix` is the registry's `registration` event for the registered domain. |
 | `no_date` | The registry answered without a usable registration date (some redact it). |
 | `not_found` | The registry does not know the domain: unregistered or recently deleted. |
 | `unsupported_tld` | The TLD has neither an RDAP service nor a reachable WHOIS server that accepts automated queries (for example `.ch`). |
@@ -320,15 +321,15 @@ With valid full SDK evidence, the `signals` section is:
   "schema_version":5,
   "fingerprint":"<full fingerprint>",
   "evidence":{
-    "included_components":2,
-    "included_hints":1,
-    "unavailable_probes":3,
-    "excluded_probes":3
+    "includedComponents":2,
+    "includedHints":1,
+    "unavailableProbes":3,
+    "excludedProbes":3
   }
 }
 ```
 
-`evidence.identity_groups` (omitted when empty) holds partial identity hashes
+`evidence.identityGroups` (omitted when empty) holds partial identity hashes
 for repeat-visit matching: `fonts`, `hardware`, `rendering` and `software`. Each
 is a domain-separated SHA-256 (`stealth-group:<name>:<schema>`) over the
 verified hashes of that group's probes, and appears only when every probe in
@@ -375,19 +376,19 @@ The response contains:
 {
   "automation": {
     "status": "detected",
-    "rule_version": 2,
+    "ruleVersion": 2,
     "source": "client_reported",
     "indicators": ["webdriver"],
-    "unavailable_probes": ["phantom_artifacts", "platform_mismatch"]
+    "unavailableProbes": ["phantom_artifacts", "platform_mismatch"]
   }
 }
 ```
 
 Evidence accepts `version: 1` with four optional booleans, or `version: 2` with
 those four plus ten more. Each version rejects any field it does not define, so a
-version-1 document cannot carry version-2 probes. `rule_version` echoes the
+version-1 document cannot carry version-2 probes. `ruleVersion` echoes the
 evidence version. Null or omitted observations remain unknown. `indicators` and
-`unavailable_probes` list snake_case names in this order:
+`unavailableProbes` list snake_case names in this order:
 
 | Evidence field | Name | Since | `true` means |
 | --- | --- | --- | --- |
@@ -474,7 +475,7 @@ blocks rather than handling every IANA global exception.
 #### Local network intelligence
 
 `/v1/check` accepts `{"ip":"8.8.8.8"}` from an authenticated backend. Existing
-country fields (`ip.status`, `ip.reason`, `ip.country_code`, `ip.source`) retain
+country fields (`ip.status`, `ip.reason`, `ip.countryCode`, `ip.source`) retain
 their country-only meaning. Independent network evidence is returned under
 `ip.network`, with `source: "backend_supplied"`: the server credential authenticates the caller,
 not the IP's origin. Never pass a browser-provided IP or the application's own IP.
@@ -550,7 +551,7 @@ runs (CI, the CronJob) are unchanged. A manifest that does not exist yet is unkn
 
 Tor snapshot entries are `{"ip":"8.8.8.8","observed_at_unix":<Unix seconds>}`;
 duplicate addresses keep their latest observation. Positive Tor facts carry
-`expires_at_unix`, bounded by both that observation's 24-hour window and the
+`expiresAtUnix`, bounded by both that observation's 24-hour window and the
 snapshot expiry. The API rechecks both limits on lookup and event consumption,
 without retaining the checked address in the event.
 
@@ -807,7 +808,7 @@ contents, domains, addresses or credentials:
 | `openfingerprint_network_data_source_fresh{source}` | Whether each network source is loaded, not future-dated and unexpired. |
 | `openfingerprint_network_data_source_expiry_timestamp_seconds{source}` | When each network source expires; 0 when absent. |
 | `openfingerprint_network_data_reload_failures_total` | Rejected reload attempts, retried so repaired sidecars can recover without editing the manifest. |
-| `openfingerprint_mx_lookups_total{result}` | MX lookups by `mx_lookup` outcome. |
+| `openfingerprint_mx_lookups_total{result}` | MX lookups by `mxLookup` outcome. |
 | `openfingerprint_txt_lookups_total{result}` | SPF and DMARC TXT lookups by outcome (`resolved`, `no_records`, `no_domain`, `unavailable`). |
 | `openfingerprint_dns_tcp_queries_total` | Truncated answers repeated over TCP. |
 | `openfingerprint_rdap_lookups_total{result}` | RDAP lookups by `registration.status` (not cache hits or `not_applicable`); `unsupported_tld` counts TLDs with neither RDAP nor WHOIS. |

@@ -266,6 +266,8 @@ async function request(path, headers, body, method = 'POST') {
 }
 
 const authHeaders = (site) => ({ Authorization: `Bearer ${site.secret_key}` });
+const camelKey = k => k.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+const camel = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [camelKey(k), v]));
 function domainExpected(overrides = {}) {
     const hasReview = overrides.disputed && ['fresh', 'stale'].includes(mode);
     const result = { status: hasReview ? 'partial' : mode === 'fresh' ? 'ok' : 'unknown' };
@@ -280,13 +282,13 @@ function domainExpected(overrides = {}) {
         fact.sources = ['invalid', 'missing'].includes(mode) ? [] : sources.filter(s => s.category === category || (category === 'disposable' && s.category === 'disposable_review')).map(s => {
             const { category: _, license_text, domains, allowlist, ...meta } = s;
             const sourceStatus = mode === 'stale' ? 'stale' : s.category === 'disposable_review' ? (hasReview ? 'disputed' : 'not_listed') : field === 'spam' && overrides.public_suffix_excluded ? 'public_suffix_excluded' : status;
-            return { ...meta, status: sourceStatus };
+            return { ...camel(meta), status: sourceStatus };
         });
-        result[field] = fact;
+        result[camelKey(field)] = fact;
     }
-    result.did_you_mean = overrides.did_you_mean ?? null;
-    result.mx_lookup = overrides.mx_lookup ?? 'no_records';
-    if (overrides.mx_providers) result.mx_providers = overrides.mx_providers;
+    result.suggestedDomain = overrides.did_you_mean ?? null;
+    result.mxLookup = overrides.mx_lookup ?? 'no_records';
+    if (overrides.mx_providers) result.mxProviders = overrides.mx_providers;
     result.registration = overrides.registration ?? { status: 'not_found' };
     result.spf = overrides.spf ?? { status: overrides.mx_lookup === 'not_needed' ? 'not_needed' : 'none' };
     result.dmarc = overrides.dmarc ?? { status: overrides.mx_lookup === 'not_needed' ? 'not_needed' : 'none' };
@@ -379,7 +381,7 @@ try {
     const unknown = { status: 'unknown', reason: 'not_configured', network: { status: 'unknown', reason: 'non_global_ip', source: 'backend_supplied' } };
     const checkedProfile = input => ({
         status: 'ok', schema_version: input.version, fingerprint: input.fingerprint,
-        evidence: { included_components: 2, included_hints: 1, unavailable_probes: 3, excluded_probes: 3 }
+        evidence: { includedComponents: 2, includedHints: 1, unavailableProbes: 3, excludedProbes: 3 }
     });
     for (const version of [4, 5]) {
         const input = signals('same', 'same', version);
@@ -389,8 +391,8 @@ try {
     }
     const automation = { version: 1, webdriver: true, headlessUserAgent: false, seleniumArtifacts: false, phantomArtifacts: false };
     const automationExpected = {
-        status: 'detected', rule_version: 1, source: 'client_reported',
-        indicators: ['webdriver'], unavailable_probes: []
+        status: 'detected', ruleVersion: 1, source: 'client_reported',
+        indicators: ['webdriver'], unavailableProbes: []
     };
     const fields = { signals: signals(), domain: 'ExAmPlE.test.', ip: '2001:db8::1', automation };
     for (let mask = 1; mask < 16; mask++) {
@@ -419,7 +421,7 @@ try {
         const response = await request('/v1/check', authHeaders(sites[4]), { automation: observations, signals: signals() });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {
-            automation: { status, rule_version: observations.version, source: 'client_reported', indicators, unavailable_probes: unavailable },
+            automation: { status, ruleVersion: observations.version, source: 'client_reported', indicators, unavailableProbes: unavailable },
             signals: checkedProfile(signals())
         });
     }
@@ -527,8 +529,8 @@ try {
         const response = await request('/v1/check', authHeaders(sites[9]), { domain });
         const want = domainExpected(expected);
         if (expected.consumer_mx) {
-            want.public_mailbox.status = 'mx_listed';
-            for (const source of want.public_mailbox.sources) source.status = 'not_listed';
+            want.publicMailbox.status = 'mx_listed';
+            for (const source of want.publicMailbox.sources) source.status = 'not_listed';
         }
         assert.deepEqual(await response.json(), { domain: want }, domain);
     }
@@ -568,13 +570,13 @@ try {
 
     phase = `RDAP registration dates (${mode})`;
     for (const [domain, registration] of [
-        ['rdapfound.example', { status: 'found', registered_at_unix: Date.parse(registered) / 1000 }],
-        ['mail.rdapfound.example', { status: 'found', registered_at_unix: Date.parse(registered) / 1000 }],
+        ['rdapfound.example', { status: 'found', registeredAtUnix: Date.parse(registered) / 1000 }],
+        ['mail.rdapfound.example', { status: 'found', registeredAtUnix: Date.parse(registered) / 1000 }],
         ['rdapnodate.example', { status: 'no_date' }], ['rdapwrong.example', { status: 'unavailable' }],
         ['rdapbadcalendar.example', { status: 'no_date' }], ['rdapbadoffset.example', { status: 'no_date' }],
         ['rdapbroken.example', { status: 'unavailable' }], ['rdapmoved.example', { status: 'unavailable' }],
         ['rdapslow.example', { status: 'unavailable' }], ['example.zz', { status: 'unsupported_tld' }],
-        ['mail.old.wtest', { status: 'found', registered_at_unix: Date.parse('2001-02-03T00:00:00Z') / 1000 }],
+        ['mail.old.wtest', { status: 'found', registeredAtUnix: Date.parse('2001-02-03T00:00:00Z') / 1000 }],
         ['new.wtest', { status: 'not_found' }], ['busy.wtest', { status: 'unavailable' }]
     ]) {
         const started = Date.now();

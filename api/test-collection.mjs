@@ -132,7 +132,7 @@ try {
     assert.equal(event.signals.fingerprint, signals.fingerprint);
     assert.equal(event.signals.automation.status, 'detected');
     assert.deepEqual(event.signals.automation.indicators, ['headless_user_agent']);
-    assert.deepEqual(event.signals.automation.unavailable_probes, []);
+    assert.deepEqual(event.signals.automation.unavailableProbes, []);
     assert.deepEqual(event.consistency.indicators, ['user_agent_mismatch', 'platform_mismatch']);
     assert.deepEqual(event.consistency.unavailable_checks, []);
     assert.equal(event.request.headless_user_agent, true);

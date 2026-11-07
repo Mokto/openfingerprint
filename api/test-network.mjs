@@ -301,7 +301,7 @@ try {
             assert.equal(expired.ip.tor.value, null);
             assert.equal(expired.ip.tor.status, 'stale_data');
             assert.deepEqual(expired.ip.hosting.value.providers, ['Test Cloud']);
-            if (observationExpiry) assert(expired.ip.tor.source.expires_at_unix > Math.floor(Date.now() / 1000));
+            if (observationExpiry) assert(expired.ip.tor.source.expiresAtUnix > Math.floor(Date.now() / 1000));
         }
         console.log('Collection ignores untrusted forwarding, walks trusted chains, rejects browser IP claims and returns single-use events without raw IP retention.');
     } else console.log('Network collection integration skipped: set OPENFINGERPRINT_TEST_REDIS_URL.');
