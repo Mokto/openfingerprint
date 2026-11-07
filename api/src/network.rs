@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     io::Read,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -89,26 +89,72 @@ struct HostingRange {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct Range {
+    network: IpNet,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProxyEntry {
+    ip: IpAddr,
+    protocols: Vec<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Snapshot {
     version: u8,
     tor: Option<Source<Vec<TorEntry>>>,
     hosting: Option<Source<Vec<HostingRange>>>,
     asn: Option<Metadata>,
+    vpn: Option<Source<Vec<Range>>>,
+    datacenter: Option<Source<Vec<Range>>>,
+    proxy: Option<Source<Vec<ProxyEntry>>>,
+}
+
+const SOURCES: usize = 6;
+const PROXY_LIFETIME: u64 = 6 * 3600;
+
+fn ranges(source: Source<Vec<Range>>, id: &str) -> Result<(HashSet<IpNet>, Metadata), ()> {
+    if !source.metadata.valid(id, "MIT", 7 * DAY)
+        || source.metadata.license_text.is_empty()
+        || source.entries.is_empty()
+        || source.entries.len() > 200000
+    {
+        return Err(());
+    }
+    let mut set = HashSet::new();
+    for entry in source.entries {
+        if entry.network.ip() != entry.network.network() || entry.network.prefix() == 0 {
+            return Err(());
+        }
+        set.insert(entry.network);
+    }
+    Ok((set, source.metadata))
+}
+fn listed(set: &HashSet<IpNet>, ip: IpAddr) -> bool {
+    (1..=if ip.is_ipv4() { 32 } else { 128 }).any(|prefix| {
+        set.contains(&IpNet::new(IpNet::new(ip, prefix).unwrap().network(), prefix).unwrap())
+    })
 }
 
 pub struct Data {
-    metadata: [Option<Metadata>; 3],
+    metadata: [Option<Metadata>; SOURCES],
     tor: HashMap<IpAddr, Option<u64>>,
     hosting: HashMap<IpNet, BTreeSet<String>>,
+    vpn: HashSet<IpNet>,
+    datacenter: HashSet<IpNet>,
+    proxy: HashMap<IpAddr, BTreeSet<String>>,
     asn: Option<maxminddb::Reader<Vec<u8>>>,
     reason: &'static str,
 }
 impl Data {
     fn unavailable(reason: &'static str) -> Self {
         Self {
-            metadata: [None, None, None],
+            metadata: [None, None, None, None, None, None],
             tor: HashMap::new(),
             hosting: HashMap::new(),
+            vpn: HashSet::new(),
+            datacenter: HashSet::new(),
+            proxy: HashMap::new(),
             asn: None,
             reason,
         }
@@ -119,7 +165,12 @@ impl Data {
         }
         let snapshot: Snapshot = serde_json::from_slice(bytes).map_err(|_| ())?;
         if snapshot.version != 1
-            || (snapshot.tor.is_none() && snapshot.hosting.is_none() && snapshot.asn.is_none())
+            || (snapshot.tor.is_none()
+                && snapshot.hosting.is_none()
+                && snapshot.asn.is_none()
+                && snapshot.vpn.is_none()
+                && snapshot.datacenter.is_none()
+                && snapshot.proxy.is_none())
         {
             return Err(());
         }
@@ -230,6 +281,41 @@ impl Data {
             data.metadata[2] = Some(metadata);
             data.asn = Some(reader);
         }
+        if let Some(source) = snapshot.vpn {
+            let (set, metadata) = ranges(source, "vpn_ranges")?;
+            data.vpn = set;
+            data.metadata[3] = Some(metadata);
+        }
+        if let Some(source) = snapshot.datacenter {
+            let (set, metadata) = ranges(source, "datacenter_ranges")?;
+            data.datacenter = set;
+            data.metadata[4] = Some(metadata);
+        }
+        if let Some(source) = snapshot.proxy {
+            if !source.metadata.valid("open_proxies", "MIT", PROXY_LIFETIME)
+                || source.metadata.license_text.is_empty()
+                || source.entries.is_empty()
+                || source.entries.len() > 100000
+            {
+                return Err(());
+            }
+            for entry in source.entries {
+                if entry.protocols.is_empty()
+                    || entry.protocols.len() > 3
+                    || entry
+                        .protocols
+                        .iter()
+                        .any(|p| !["http", "socks4", "socks5"].contains(&p.as_str()))
+                {
+                    return Err(());
+                }
+                data.proxy
+                    .entry(entry.ip.to_canonical())
+                    .or_default()
+                    .extend(entry.protocols);
+            }
+            data.metadata[5] = Some(source.metadata);
+        }
         Ok(data)
     }
     pub fn check(&self, value: Value, source: &'static str) -> Value {
@@ -302,8 +388,31 @@ impl Data {
                     .any(char::is_control)
         });
         let asn = self.fact(2, asn.map_or(Value::Null, |a| json!({"number":a.autonomous_system_number,"organization":a.autonomous_system_organization})), now, missing);
+        let scoped = |set: &HashSet<IpNet>, scope| {
+            if listed(set, ip) {
+                json!({ "scope": scope })
+            } else {
+                Value::Null
+            }
+        };
+        let vpn = self.fact(3, scoped(&self.vpn, "listed_vpn_range"), now, "not_listed");
+        let datacenter = self.fact(
+            4,
+            scoped(&self.datacenter, "listed_datacenter_range"),
+            now,
+            "not_listed",
+        );
+        let proxy = self.fact(
+            5,
+            self.proxy.get(&ip).map_or(
+                Value::Null,
+                |protocols| json!({"protocols": protocols, "scope": "listed_open_proxy"}),
+            ),
+            now,
+            "not_listed",
+        );
         let mut check = json!({"source":source,"tor":tor,"hosting":hosting,"asn":asn,
-            "vpn":{"value":null,"status":"not_configured"},"proxy":{"value":null,"status":"not_configured"}});
+            "vpn":vpn,"datacenter":datacenter,"proxy":proxy});
         expire_at(&mut check, now);
         check
     }
@@ -451,7 +560,17 @@ impl Store {
             self.failures.load(Ordering::Relaxed)
         );
         out += "# TYPE openfingerprint_network_data_source_expiry_timestamp_seconds gauge\n# TYPE openfingerprint_network_data_source_fresh gauge\n";
-        for (i, id) in ["tor_exit", "cloud_ranges", "dbip_asn"].iter().enumerate() {
+        for (i, id) in [
+            "tor_exit",
+            "cloud_ranges",
+            "dbip_asn",
+            "vpn_ranges",
+            "datacenter_ranges",
+            "open_proxies",
+        ]
+        .iter()
+        .enumerate()
+        {
             let meta = data.metadata[i].as_ref();
             out += &format!(
                 "openfingerprint_network_data_source_expiry_timestamp_seconds{{source=\"{id}\"}} {}\nopenfingerprint_network_data_source_fresh{{source=\"{id}\"}} {}\n",
@@ -472,11 +591,12 @@ pub fn validate(path: &Path) -> Result<(), &'static str> {
 pub fn expire_event(check: &mut Value) {
     expire_at(check, now());
 }
+const NAMES: [&str; 6] = ["tor", "hosting", "asn", "vpn", "datacenter", "proxy"];
 fn expire_at(check: &mut Value, now: u64) {
     if check.get("tor").is_none() {
         return;
     }
-    for name in ["tor", "hosting", "asn"] {
+    for name in NAMES {
         if let Ok(meta) = serde_json::from_value::<Metadata>(check[name]["source"].clone()) {
             let status = meta.status(now);
             if status != "fresh" {
@@ -496,14 +616,13 @@ fn expire_at(check: &mut Value, now: u64) {
             check["tor"]["status"] = json!(status);
         }
     }
-    check["status"] = json!(if ["tor", "hosting", "asn"]
-        .iter()
-        .any(|name| !check[name]["value"].is_null())
-    {
-        "ok"
-    } else {
-        "unknown"
-    });
+    check["status"] = json!(
+        if NAMES.iter().any(|name| !check[name]["value"].is_null()) {
+            "ok"
+        } else {
+            "unknown"
+        }
+    );
 }
 // ponytail: conservative special-use exclusions; use IANA's live registries if exact global exceptions become necessary.
 fn public(ip: IpAddr) -> bool {
@@ -566,7 +685,10 @@ mod tests {
         let meta = |id, license, expiry| json!({"id":id,"license":license,"license_url":"https://example.test/license","license_text":"test license","attribution":"fixture","url":"https://example.test/source","revision":"a".repeat(64),"updated_at_unix":1000,"fetched_at_unix":1000,"expires_at_unix":expiry});
         json!({"version":1,
             "tor":{"metadata":meta("tor_exit","CC0-1.0",2000),"entries":[{"ip":"8.8.8.8","observed_at_unix":1000},{"ip":"2606:4700:4700::1111","observed_at_unix":1000}]},
-            "hosting":{"metadata":meta("cloud_ranges","MIT",3000),"entries":[{"network":"8.8.8.0/24","provider":"Example Cloud"},{"network":"2606:4700::/32","provider":"IPv6 Cloud"}]}
+            "hosting":{"metadata":meta("cloud_ranges","MIT",3000),"entries":[{"network":"8.8.8.0/24","provider":"Example Cloud"},{"network":"2606:4700::/32","provider":"IPv6 Cloud"}]},
+            "vpn":{"metadata":meta("vpn_ranges","MIT",3000),"entries":[{"network":"9.9.9.0/24"},{"network":"2606:4700:4700::/48"}]},
+            "datacenter":{"metadata":meta("datacenter_ranges","MIT",3000),"entries":[{"network":"9.9.0.0/16"}]},
+            "proxy":{"metadata":meta("open_proxies","MIT",1000 + PROXY_LIFETIME),"entries":[{"ip":"9.9.9.9","protocols":["socks5","http"]},{"ip":"::ffff:9.9.9.10","protocols":["http"]}]}
         })
     }
     fn fixture() -> Data {
@@ -609,6 +731,72 @@ mod tests {
         ] {
             assert_eq!(c(ip, 1500)["reason"], "non_global_ip", "{ip}");
         }
+    }
+    #[test]
+    fn vpn_datacenter_and_proxy_facts_are_independent_and_expire() {
+        let d = fixture();
+        let c = |ip: &str, time| d.check_at(ip.parse().unwrap(), "backend_supplied", time);
+        let hit = c("9.9.9.9", 1500);
+        assert_eq!(hit["vpn"]["value"], json!({"scope":"listed_vpn_range"}));
+        assert_eq!(
+            hit["datacenter"]["value"],
+            json!({"scope":"listed_datacenter_range"})
+        );
+        assert_eq!(
+            hit["proxy"]["value"],
+            json!({"protocols":["http","socks5"],"scope":"listed_open_proxy"})
+        );
+        assert_eq!(hit["status"], "ok");
+        assert_eq!(
+            c("9.9.9.10", 1500)["proxy"]["value"]["protocols"],
+            json!(["http"])
+        );
+        let neighbour = c("9.9.8.1", 1500);
+        assert!(neighbour["vpn"]["value"].is_null());
+        assert_eq!(neighbour["vpn"]["status"], "not_listed");
+        assert_eq!(neighbour["proxy"]["status"], "not_listed");
+        assert!(!neighbour["datacenter"]["value"].is_null());
+        assert_eq!(
+            c("2606:4700:4700::1", 1500)["vpn"]["value"],
+            json!({"scope":"listed_vpn_range"})
+        );
+        assert!(c("8.8.8.8", 1500)["proxy"]["value"].is_null());
+        let mut stale = c("9.9.9.9", 1500);
+        expire_at(&mut stale, 3000);
+        for name in ["vpn", "datacenter"] {
+            assert!(stale[name]["value"].is_null());
+            assert_eq!(stale[name]["status"], "stale_data");
+        }
+        let stale = c("9.9.9.9", 1000 + PROXY_LIFETIME);
+        assert_eq!(stale["proxy"]["status"], "stale_data");
+
+        let mut bad = snapshot();
+        bad["proxy"]["entries"][0]["protocols"] = json!(["ftp"]);
+        assert!(
+            Data::load(
+                Path::new("/tmp/network.json"),
+                &serde_json::to_vec(&bad).unwrap()
+            )
+            .is_err()
+        );
+        let mut bad = snapshot();
+        bad["vpn"]["entries"][0]["network"] = json!("9.9.9.1/24");
+        assert!(
+            Data::load(
+                Path::new("/tmp/network.json"),
+                &serde_json::to_vec(&bad).unwrap()
+            )
+            .is_err()
+        );
+        let mut bad = snapshot();
+        bad["vpn"]["metadata"]["license"] = json!("GPL-3.0");
+        assert!(
+            Data::load(
+                Path::new("/tmp/network.json"),
+                &serde_json::to_vec(&bad).unwrap()
+            )
+            .is_err()
+        );
     }
     #[test]
     fn tor_observations_expire_individually_and_keep_the_latest_canonical_address() {
