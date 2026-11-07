@@ -172,6 +172,37 @@ groups = docs.find { |d| d["kind"] == "PrometheusRule" }["spec"]["groups"]
 abort("Network alerts missing") unless groups.any? { |g| g["name"] == "openfingerprint-network-data" && g["rules"].size == 2 }
 puts "Shared network volume, isolated refresh and freshness alerts passed."
 ' "$rendered"
+for conflict in "networkData.existingClaim=network-data" "networkData.refresh.enabled=true"; do
+  if render --set networkData.sidecar.enabled=true --set "$conflict" >/dev/null 2>&1; then echo "Network sidecar must reject $conflict" >&2; exit 1; fi
+done
+for variant in "" "countryData.enabled=false"; do
+  render --set networkData.sidecar.enabled=true --set "networkData.refresh.image.digest=$digest" ${variant:+--set "$variant"} > "$rendered"
+  VARIANT="$variant" ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact.reject { |d| d["metadata"]["name"].start_with?("openfingerprint-redis-ha") }
+pod = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]
+api = pod["containers"][0]
+sidecar = pod["containers"].find { |c| c["name"] == "network-updater" } || abort("Network sidecar missing")
+abort("API reads the manifest") unless api["env"].include?({"name"=>"OPENFINGERPRINT_NETWORK_DATA","value"=>"/network-data/network.json"})
+abort("API must mount network data read-only") unless api["volumeMounts"].include?({"name"=>"network-data","mountPath"=>"/network-data","readOnly"=>true})
+abort("Sidecar must write only its own volume") unless sidecar["volumeMounts"] == [{"name"=>"network-data","mountPath"=>"/network-data"}]
+abort("Per-pod emptyDir only, no PVC") unless pod["volumes"].select { |v| v["name"] == "network-data" } == [{"name"=>"network-data","emptyDir"=>{"sizeLimit"=>"64Mi"}}] && pod["volumes"].none? { |v| v["persistentVolumeClaim"] }
+abort("Sidecar loop") unless sidecar["args"] == ["--output","/network-data/network.json","--loop"] && sidecar["command"].nil?
+abort("Pinned network updater image") unless sidecar["image"].start_with?("ghcr.io/mokto/openfingerprint-network-updater:") && sidecar["image"].end_with?("@sha256:" + "a"*64)
+abort("Sidecar hardening") unless sidecar["securityContext"] == {"readOnlyRootFilesystem"=>true,"allowPrivilegeEscalation"=>false,"capabilities"=>{"drop"=>["ALL"]}} && sidecar["securityContext"] == api["securityContext"]
+abort("Sidecar gets no credentials") unless sidecar["env"].nil? && sidecar["envFrom"].nil?
+abort("No Kubernetes token") unless pod["automountServiceAccountToken"] == false
+abort("Non-root with volume group") unless pod["securityContext"]["runAsUser"] == 65532 && pod["securityContext"]["runAsNonRoot"] && pod["securityContext"]["fsGroup"] == 65532
+abort("No shared-volume resources in sidecar mode") if docs.any? { |d| d["kind"] == "PersistentVolumeClaim" || (d["kind"] == "CronJob" && d["metadata"]["name"] == "openfingerprint-network-data") }
+abort("No network CronJob policy") if docs.any? { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-network-data" }
+public = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]["egress"].select { |r| r["ports"] == [{"protocol"=>"TCP","port"=>443}] && r["to"].first["ipBlock"]["cidr"] == "0.0.0.0/0" && r["to"].last == {"ipBlock"=>{"cidr"=>"2000::/3"}} }
+abort("Public HTTPS egress must be allowed exactly once, TCP 443 only") unless public.size == 1
+abort("API policy must stay narrow") unless docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]["egress"].flat_map { |r| r["ports"].map { |p| p["port"] } }.uniq.sort == [43, 53, 443, 6379]
+groups = docs.find { |d| d["kind"] == "PrometheusRule" }["spec"]["groups"]
+abort("Network alerts missing") unless groups.any? { |g| g["name"] == "openfingerprint-network-data" && g["rules"].map { |r| r["alert"] } == %w[OpenFingerprintNetworkSourceUnavailable OpenFingerprintNetworkDataReloadFailing] }
+' "$rendered"
+done
+if grep -q 'network-updater' <<< "$(render)"; then echo "Network sidecar must be opt-in" >&2; exit 1; fi
+echo "Per-pod network sidecar, egress, isolation and alerts passed."
 for bad in "existingSecret=" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short" "networkPolicy.redisTo=bad" "networkPolicy.redisPort=0" "networkPolicy.redisPort=65536" "networkPolicy.redisPort=6379.5"; do
   if render --set "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi
 done

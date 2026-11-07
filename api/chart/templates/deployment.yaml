@@ -34,7 +34,7 @@ spec:
       terminationGracePeriodSeconds: 10
       securityContext:
         {{- include "of.podSecurity" . | nindent 8 }}
-        {{- if .Values.countryData.enabled }}
+        {{- if or .Values.countryData.enabled .Values.networkData.sidecar.enabled }}
         fsGroup: 65532
         {{- end }}
       {{- with .Values.imagePullSecrets }}
@@ -81,7 +81,7 @@ spec:
             - name: OPENFINGERPRINT_COUNTRY_DATA
               value: /country-data/country.mmdb
             {{- end }}
-            {{- if .Values.networkData.existingClaim }}
+            {{- if or .Values.networkData.existingClaim .Values.networkData.sidecar.enabled }}
             - name: OPENFINGERPRINT_NETWORK_DATA
               value: /network-data/network.json
             {{- end }}
@@ -108,14 +108,14 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled .Values.networkData.existingClaim }}
+          {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled .Values.networkData.existingClaim .Values.networkData.sidecar.enabled }}
           volumeMounts:
             {{- if .Values.domainData.refresh.enabled }}
             - name: domain-data
               mountPath: /domain-data
               readOnly: true
             {{- end }}
-            {{- if .Values.networkData.existingClaim }}
+            {{- if or .Values.networkData.existingClaim .Values.networkData.sidecar.enabled }}
             - name: network-data
               mountPath: /network-data
               readOnly: true
@@ -140,7 +140,20 @@ spec:
             - name: country-data
               mountPath: /country-data
         {{- end }}
-      {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled .Values.networkData.existingClaim }}
+        {{- if .Values.networkData.sidecar.enabled }}
+        - name: network-updater
+          image: {{ include "of.image" (dict "image" .Values.networkData.refresh.image "appVersion" .Chart.AppVersion) | quote }}
+          imagePullPolicy: {{ .Values.networkData.refresh.image.pullPolicy }}
+          args: ["--output", "/network-data/network.json", "--loop"]
+          securityContext:
+            {{- include "of.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.networkData.sidecar.resources | nindent 12 }}
+          volumeMounts:
+            - name: network-data
+              mountPath: /network-data
+        {{- end }}
+      {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled .Values.networkData.existingClaim .Values.networkData.sidecar.enabled }}
       volumes:
         {{- if .Values.countryData.enabled }}
         - name: country-data
@@ -154,7 +167,11 @@ spec:
             name: {{ include "of.dataName" . }}
             optional: true
         {{- end }}
-        {{- if .Values.networkData.existingClaim }}
+        {{- if .Values.networkData.sidecar.enabled }}
+        - name: network-data
+          emptyDir:
+            sizeLimit: {{ .Values.networkData.sidecar.sizeLimit }}
+        {{- else if .Values.networkData.existingClaim }}
         - name: network-data
           persistentVolumeClaim:
             claimName: {{ .Values.networkData.existingClaim | quote }}

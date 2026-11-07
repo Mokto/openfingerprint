@@ -118,7 +118,7 @@ spec:
           annotations:
             summary: {{ `Most OpenFingerprint registry lookups fail ({{ $value | humanizePercentage }})` }}
             description: Registration dates are unavailable. Check TCP 443 and 43 egress to public addresses; a single throttling registry rarely explains a majority.
-    {{- if .Values.networkData.existingClaim }}
+    {{- if or .Values.networkData.existingClaim .Values.networkData.sidecar.enabled }}
     - name: openfingerprint-network-data
       rules:
         - alert: OpenFingerprintNetworkSourceUnavailable
@@ -128,7 +128,7 @@ spec:
             severity: warning
           annotations:
             summary: OpenFingerprint network evidence is missing, expired or future-dated
-            description: Check the network-data CronJob, source availability and shared volume; unknown is not a clean result.
+            description: Check the network refresh (the network-updater sidecar's logs, or the network-data CronJob and shared volume) and source availability; unknown is not a clean result.
         - alert: OpenFingerprintNetworkDataReloadFailing
           expr: increase(openfingerprint_network_data_reload_failures_total{ {{- $selector -}} }[1h]) > 0
           labels:

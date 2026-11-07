@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createHash, randomBytes } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tor, hosting, vpn, datacenter, proxy, update, validate } from './update-network-data.mjs';
+import { tor, hosting, vpn, datacenter, proxy, update, validate, loop, prune } from './update-network-data.mjs';
 
 const directory = await mkdtemp(resolve(tmpdir(), 'openfingerprint-network-check-'));
 const path = resolve(directory, 'network.json');
@@ -138,6 +138,34 @@ try {
     await stopped;
     await update(path, { fetchBytes, now });
     assert.equal(await readFile(path, 'utf8'), previous);
+    {
+        const sidecar = resolve(directory, 'sidecar');
+        const manifest = resolve(sidecar, 'network.json');
+        await mkdir(sidecar);
+        const keep = 'b'.repeat(64);
+        const [old, recent, current] = ['a'.repeat(64), 'c'.repeat(64), keep].map(revision => resolve(sidecar, `asn-${revision}.mmdb`));
+        const other = resolve(sidecar, 'notes.txt');
+        for (const file of [old, recent, current, other]) await writeFile(file, 'x');
+        await writeFile(manifest, JSON.stringify({ version: 1, asn: { revision: keep } }));
+        const stale = new Date(Date.now() - 7200000);
+        for (const file of [old, current, other]) await utimes(file, stale, stale);
+        await prune(manifest);
+        assert.deepEqual((await readdir(sidecar)).sort(), ['network.json', `asn-${'b'.repeat(64)}.mmdb`, `asn-${'c'.repeat(64)}.mmdb`, 'notes.txt'].sort());
+        const stop = new AbortController();
+        const runs = [];
+        const looping = loop(manifest, stop.signal, { interval: 20, retry: 5, run: async () => { runs.push(Date.now()); if (runs.length === 2) stop.abort(); return { failures: [], sources: ['tor'] }; } });
+        await looping;
+        assert.equal(runs.length, 2);
+        const missing = resolve(sidecar, 'missing/network.json');
+        const gaps = [];
+        const retrying = new AbortController();
+        await loop(missing, retrying.signal, { interval: 100000, retry: 5, run: async () => { gaps.push(Date.now()); if (gaps.length === 3) retrying.abort(); throw new Error('offline'); } });
+        assert.equal(gaps.length, 3, 'A failed first refresh must retry quickly, not after the interval');
+        const afterFailure = new AbortController();
+        const failures = [];
+        await loop(manifest, afterFailure.signal, { interval: 5, retry: 100000, run: async () => { failures.push(Date.now()); if (failures.length === 3) afterFailure.abort(); throw new Error('offline'); } });
+        assert.equal(failures.length, 3, 'A failure with an existing manifest retries on the normal interval');
+    }
     const owner = spawn(process.execPath, ['--input-type=module', '-e', `import { update } from ${JSON.stringify(new URL('./update-network-data.mjs', import.meta.url).href)}; await update(${JSON.stringify(path)}, { fetchBytes: async () => { console.log('locked'); return new Promise(() => {}); } });`], { stdio: ['ignore','pipe','pipe'] });
     servers.push({ child: owner, output: '' });
     owner.stderr.resume();
