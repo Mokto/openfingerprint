@@ -88,6 +88,36 @@ spec:
             summary: OpenFingerprint rejected a changed country database
             description: The API retains the last valid database until it expires.
         {{- end }}
+    - name: openfingerprint-lookups
+      rules:
+        - alert: OpenFingerprintRedisErrors
+          expr: sum(increase(openfingerprint_rdap_cache_total{ {{- $selector -}} ,result="error"}[15m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: OpenFingerprint cannot use its Redis
+            description: Registration lookups bypass the cache and reach registries on every check, and collection challenges fail. Check the Redis pods, credentials and egress on the Redis port.
+        - alert: OpenFingerprintMxLookupsFailing
+          expr: |
+            sum(increase(openfingerprint_mx_lookups_total{ {{- $selector -}} ,result="unavailable"}[30m])) / sum(increase(openfingerprint_mx_lookups_total{ {{- $selector -}} }[30m])) > 0.5
+            and sum(increase(openfingerprint_mx_lookups_total{ {{- $selector -}} }[30m])) >= {{ .Values.prometheusRule.minLookups }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `Most OpenFingerprint MX lookups fail ({{ $value | humanizePercentage }})` }}
+            description: MX facts and inferred disposable or public-mailbox results are unavailable. Check the configured nameserver and UDP 53 egress to it.
+        - alert: OpenFingerprintRegistryLookupsFailing
+          expr: |
+            sum(increase({__name__=~"openfingerprint_(rdap|whois)_lookups_total", {{- $selector -}} ,result="unavailable"}[30m])) / sum(increase({__name__=~"openfingerprint_(rdap|whois)_lookups_total", {{- $selector -}} }[30m])) > 0.5
+            and sum(increase({__name__=~"openfingerprint_(rdap|whois)_lookups_total", {{- $selector -}} }[30m])) >= {{ .Values.prometheusRule.minLookups }}
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `Most OpenFingerprint registry lookups fail ({{ $value | humanizePercentage }})` }}
+            description: Registration dates are unavailable. Check TCP 443 and 43 egress to public addresses; a single throttling registry rarely explains a majority.
     {{- if .Values.networkData.existingClaim }}
     - name: openfingerprint-network-data
       rules:

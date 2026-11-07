@@ -92,6 +92,10 @@ rules = get.call("PrometheusRule")["spec"]["groups"][0]["rules"]
 check.call(rules.map { |r| r["alert"] } == %w[OpenFingerprintDomainDataUnavailable OpenFingerprintDomainSourceExpired OpenFingerprintDomainSourceExpiring OpenFingerprintDomainDataReloadFailing OpenFingerprintCountryDataUnavailable OpenFingerprintCountryDataExpiring OpenFingerprintCountryDataReloadFailing], "Alert set")
 check.call(rules.all? { |r| r["expr"].include?(%q{namespace="openfingerprint",service="openfingerprint"}) }, "Alerts scoped to this release")
 check.call(rules[2]["annotations"]["summary"].include?("{{ $labels.source }}"), "Prometheus templates survive Helm")
+lookups = get.call("PrometheusRule")["spec"]["groups"][1]
+check.call(lookups["name"] == "openfingerprint-lookups" && lookups["rules"].map { |r| r["alert"] } == %w[OpenFingerprintRedisErrors OpenFingerprintMxLookupsFailing OpenFingerprintRegistryLookupsFailing], "Lookup health alerts")
+check.call(lookups["rules"].all? { |r| r["expr"].scan(/\{[^}]*\}/).reject { |m| m.include?("$value") }.all? { |m| m.include?(%q{namespace="openfingerprint",service="openfingerprint"}) } }, "Every lookup alert selector is scoped to this release")
+check.call(lookups["rules"][1]["expr"].include?(">= 20"), "Lookup alerts ignore low volume")
 check.call(docs.all? { |d| d["metadata"]["namespace"].nil? || d["metadata"]["namespace"] == "openfingerprint" }, "No foreign namespaces")
 puts "Chart selectors, isolation, RBAC, refresh and monitoring checks passed."
 ' "$rendered"
