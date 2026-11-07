@@ -246,7 +246,7 @@ WEB.DE and mail.com, whose vanity catalogue (`email.com`, `usa.com`...) is cover
 In the Tranco top 20,000 this matched 25 domains, all shared consumer or ISP mail.
 Patterns that also serve organisations (Microsoft `mx.microsoft`, Yandex, Mail.ru)
 are deliberately not used. `relay` is true for reviewed forwarding-alias domains (Apple Hide My Email,
-DuckDuckGo, Firefox Relay, SimpleLogin, addy.io) and their subdomains: a real mailbox
+DuckDuckGo, Firefox Relay, SimpleLogin, Proton Pass, addy.io, StartMail, AliasVault) and their subdomains: a real mailbox
 hides behind the address. Neither is a risk verdict.
 
 `did_you_mean` suggests the public mailbox domain a registered domain was probably

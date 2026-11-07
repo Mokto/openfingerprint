@@ -100,7 +100,10 @@ assert.deepEqual(unprotected(['gmail.com', 'mx.google.com', 'yandex.net', 'com.b
 const guarded = JSON.parse(await snapshot(async url => url.endsWith('disposable_email_blocklist.conf') ? 'mail.example\ngmail.com\naspmx.l.google.com\nhotmail.fr\n' : url.endsWith('spammers.txt') ? 'spam.example\nyahoo.com\n' : publicSource(url), now));
 assert.deepEqual(guarded.sources.find(s => s.id === 'disposable_email_domains').domains, ['mail.example'], 'Reviewed public mailbox domains are protected too');
 assert(guarded.sources.find(s => s.id === 'reviewed_public_mailboxes').domains.includes('hotmail.fr'));
-assert.deepEqual(guarded.sources.find(s => s.id === 'reviewed_relays').domains.slice(0, 2), ['aleeas.com', 'anonaddy.com']);
+for (const source of guarded.sources.filter(s => s.id.startsWith('reviewed_'))) {
+    const shipped = bundled.sources.find(s => s.id === source.id);
+    assert.deepEqual([shipped.revision, shipped.domains, shipped.expires_at_unix], [source.revision, source.domains, source.expires_at_unix], `${source.id}: bundled snapshot matches its reviewed file`);
+}
 assert.deepEqual(guarded.sources.find(s => s.id === 'matomo_referrer_spam').domains, ['spam.example']);
 const published = [];
 await publish('openfingerprint-domain-data', publicSource, async (name, data) => published.push([name, JSON.parse(data).version]));

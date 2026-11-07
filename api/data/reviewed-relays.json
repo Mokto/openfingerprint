@@ -1,32 +1,37 @@
 {
   "license": "CC0-1.0",
-  "reviewed_at_unix": 1794031960,
-  "expires_at_unix": 1796623960,
+  "reviewed_at_unix": 1794043942,
+  "expires_at_unix": 1796635942,
   "entries": [
     {
-      "domain": "privaterelay.appleid.com",
-      "evidence_url": "https://support.apple.com/en-us/105078",
-      "evidence": "Apple's Hide My Email addresses use this domain and forward to the owner's real address. At review, its MX routed to Apple's relay (smtp1.privaterelay.appleid.com)."
+      "domain": "4wrd.cc",
+      "evidence_url": "https://github.com/anonaddy/browser-extension/blob/6e71cf5dcf7e784af527e306cc2827151d227f63/src/assets/js/constants.js",
+      "evidence": "addy.io's own browser extension lists 4wrd.cc among its shared alias domains, whose addresses forward to the owner. At review, its MX routed to addy.io (mx1.4wrd.cc, the same mail server as mail.anonaddy.me)."
     },
     {
-      "domain": "duck.com",
-      "evidence_url": "https://spreadprivacy.com/protect-your-inbox-with-duckduckgo-email-protection/",
-      "evidence": "DuckDuckGo Email Protection hands out @duck.com addresses that forward to the owner's inbox. At review, its MX routed to DuckDuckGo (smtp-inbound1.duck.com)."
+      "domain": "addy.io",
+      "evidence_url": "https://github.com/anonaddy/browser-extension/blob/6e71cf5dcf7e784af527e306cc2827151d227f63/src/assets/js/constants.js",
+      "evidence": "addy.io's own browser extension lists addy.io among its shared alias domains, whose addresses forward to the owner. At review, its MX routed to addy.io (mx1.addy.io, the same mail server as mail.anonaddy.me)."
     },
     {
-      "domain": "mozmail.com",
-      "evidence_url": "https://relay.firefox.com/faq/",
-      "evidence": "Firefox Relay masks use this domain and, for premium users, subdomains of it; mail is forwarded to the owner. At review, its MX routed to inbound mail processing (inbound-smtp.us-west-2.amazonaws.com)."
+      "domain": "addy.to",
+      "evidence_url": "https://github.com/anonaddy/browser-extension/blob/6e71cf5dcf7e784af527e306cc2827151d227f63/src/assets/js/constants.js",
+      "evidence": "addy.io's own browser extension lists addy.to among its shared alias domains, whose addresses forward to the owner. At review, its MX routed to addy.io (mx1.addy.to, the same mail server as mail.anonaddy.me)."
     },
     {
-      "domain": "simplelogin.co",
-      "evidence_url": "https://simplelogin.io/faq/",
-      "evidence": "SimpleLogin hands out alias addresses on this domain that forward to the owner. At review, its MX routed to SimpleLogin (mx1.simplelogin.co)."
+      "domain": "addymail.com",
+      "evidence_url": "https://github.com/anonaddy/browser-extension/blob/6e71cf5dcf7e784af527e306cc2827151d227f63/src/assets/js/constants.js",
+      "evidence": "addy.io's own browser extension lists addymail.com among its shared alias domains, whose addresses forward to the owner. At review, its MX routed to addy.io (mx1.addymail.com, the same mail server as mail.anonaddy.me)."
     },
     {
       "domain": "aleeas.com",
       "evidence_url": "https://simplelogin.io/faq/",
       "evidence": "SimpleLogin hands out alias addresses on this domain and its subdomains that forward to the owner. At review, its MX routed to SimpleLogin (mx1.simplelogin.co)."
+    },
+    {
+      "domain": "aliasvault.net",
+      "evidence_url": "https://github.com/aliasvault/aliasvault/releases/tag/0.30.0",
+      "evidence": "AliasVault's release notes say user email aliases use @aliasvault.net. At review, its MX routed to AliasVault's own mail server (mail.aliasvault.net)."
     },
     {
       "domain": "anonaddy.com",
@@ -37,6 +42,56 @@
       "domain": "anonaddy.me",
       "evidence_url": "https://addy.io/faq/",
       "evidence": "addy.io (AnonAddy) offers this as a shared alias domain that forwards to the owner. At review, its MX routed to addy.io (mail.anonaddy.me)."
+    },
+    {
+      "domain": "duck.com",
+      "evidence_url": "https://spreadprivacy.com/protect-your-inbox-with-duckduckgo-email-protection/",
+      "evidence": "DuckDuckGo Email Protection hands out @duck.com addresses that forward to the owner's inbox. At review, its MX routed to DuckDuckGo (smtp-inbound1.duck.com)."
+    },
+    {
+      "domain": "mailer.me",
+      "evidence_url": "https://github.com/anonaddy/browser-extension/blob/6e71cf5dcf7e784af527e306cc2827151d227f63/src/assets/js/constants.js",
+      "evidence": "addy.io's own browser extension lists mailer.me among its shared alias domains, whose addresses forward to the owner. At review, its MX routed to addy.io (mx1.mailer.me, the same mail server as mail.anonaddy.me)."
+    },
+    {
+      "domain": "mozmail.com",
+      "evidence_url": "https://relay.firefox.com/faq/",
+      "evidence": "Firefox Relay masks use this domain and, for premium users, subdomains of it; mail is forwarded to the owner. At review, its MX routed to inbound mail processing (inbound-smtp.us-west-2.amazonaws.com)."
+    },
+    {
+      "domain": "passmail.net",
+      "evidence_url": "https://proton.me/blog/benefits-of-email-aliases",
+      "evidence": "Proton's blog shows a Proton Pass alias on @passmail.net forwarding to the owner's mailbox. At review, its MX routed to SimpleLogin (mx1.simplelogin.co), which runs Proton Pass aliases."
+    },
+    {
+      "domain": "privaterelay.appleid.com",
+      "evidence_url": "https://support.apple.com/en-us/105078",
+      "evidence": "Apple's Hide My Email addresses use this domain and forward to the owner's real address. At review, its MX routed to Apple's relay (smtp1.privaterelay.appleid.com)."
+    },
+    {
+      "domain": "relay.firefox.com",
+      "evidence_url": "https://relay.firefox.com/faq/",
+      "evidence": "Firefox Relay's FAQ says masks used relay.firefox.com before the switch to mozmail.com; existing masks keep forwarding to the owner. At review, its MX routed to the same inbound mail processing as mozmail.com (inbound-smtp.us-west-2.amazonaws.com)."
+    },
+    {
+      "domain": "simplelogin.co",
+      "evidence_url": "https://simplelogin.io/faq/",
+      "evidence": "SimpleLogin hands out alias addresses on this domain that forward to the owner. At review, its MX routed to SimpleLogin (mx1.simplelogin.co)."
+    },
+    {
+      "domain": "simplelogin.com",
+      "evidence_url": "https://simplelogin.io/docs/getting-started/restore-alias/",
+      "evidence": "SimpleLogin's documentation names @simplelogin.com among SimpleLogin alias domains, and username subdomains of it for aliases created on the fly. At review, its MX routed to SimpleLogin (mx1.simplelogin.co)."
+    },
+    {
+      "domain": "simplelogin.fr",
+      "evidence_url": "https://simplelogin.io/blog/email-alias-vs-plus-sign/",
+      "evidence": "SimpleLogin's blog shows directory aliases on @simplelogin.fr forwarding to the owner. At review, its MX routed to SimpleLogin (mx1.simplelogin.co)."
+    },
+    {
+      "domain": "use.startmail.com",
+      "evidence_url": "https://www.startmail.com/aliases",
+      "evidence": "StartMail's alias page says personal and quick aliases end in @use.startmail.com and forward to the StartMail mailbox. At review, its MX routed to StartMail (mx1.startmail.com). Addresses on startmail.com itself are mailboxes and do not match."
     }
   ]
 }
