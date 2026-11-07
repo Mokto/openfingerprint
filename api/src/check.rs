@@ -22,11 +22,12 @@ struct SiteConfig {
     #[serde(default, rename = "origins")]
     _origins: Option<Vec<String>>,
 }
-struct Site {
+pub(crate) struct Site {
     secret: hmac::Tag,
 }
 pub struct AppState {
     sites: Vec<Site>,
+    pub collection: Option<crate::collection::Store>,
     pub domains: crate::domains::DomainStore,
     pub dns: crate::mx::Resolver,
 }
@@ -36,6 +37,7 @@ impl AppState {
             .map_err(|_| "OPENFINGERPRINT_SITES is required")?;
         let mut state = Self::configure(&config, crate::mx::Resolver::from_env()?)?;
         state.domains = crate::domains::DomainStore::from_env();
+        state.collection = crate::collection::Store::from_env()?;
         Ok(state)
     }
     fn configure(config: &str, dns: crate::mx::Resolver) -> Result<Self, &'static str> {
@@ -72,6 +74,7 @@ impl AppState {
             .collect();
         Ok(Self {
             sites,
+            collection: None,
             domains: crate::domains::DomainStore::new(crate::domains::DomainData::unavailable(
                 "not_configured",
             )),
@@ -93,12 +96,12 @@ impl AppState {
             other => data.check_with(&domain, &[], other.status()),
         }
     }
-    fn authorize(&self, headers: &HeaderMap) -> Result<(), ApiError> {
-        self.authenticate(headers)?;
+    pub(crate) fn authorize(&self, headers: &HeaderMap) -> Result<&Site, ApiError> {
+        let site = self.authenticate(headers)?;
         if headers.contains_key(header::ORIGIN) {
             return Err(ApiError::forbidden());
         }
-        Ok(())
+        Ok(site)
     }
     fn authenticate(&self, headers: &HeaderMap) -> Result<&Site, ApiError> {
         let secret = header_text(headers, header::AUTHORIZATION.as_str())
@@ -114,9 +117,16 @@ impl AppState {
     }
 }
 
+impl Site {
+    pub(crate) fn scope(&self) -> String {
+        sha256(&hex(self.secret.as_ref()))
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Signals {
+    automation: Option<serde_json::Value>,
     version: u16,
     fingerprint: Option<String>,
     core_fingerprint: Option<String>,
@@ -251,7 +261,9 @@ struct CheckResponse {
 }
 
 #[derive(Serialize)]
-struct SignalCheck {
+pub(crate) struct SignalCheck {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    automation: Option<crate::automation::Check>,
     #[serde(flatten)]
     profile: Verified,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -273,11 +285,12 @@ struct IntelligenceCheck {
     reason: &'static str,
 }
 
-fn check_signals(value: serde_json::Value) -> SignalCheck {
+pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
     if let Ok(signals) = serde_json::from_value::<Signals>(value)
         && let Ok(profile) = signals.verified()
     {
         return SignalCheck {
+            automation: signals.automation.map(crate::automation::check),
             profile,
             reason: None,
             evidence: Some(Evidence {
@@ -297,6 +310,7 @@ fn check_signals(value: serde_json::Value) -> SignalCheck {
         };
     }
     SignalCheck {
+        automation: None,
         profile: Verified {
             status: "invalid_input",
             schema_version: None,
@@ -342,7 +356,7 @@ pub(crate) fn domain(value: &str) -> bool {
 }
 
 #[derive(Debug)]
-pub struct ApiError(StatusCode, &'static str);
+pub struct ApiError(pub(crate) StatusCode, pub(crate) &'static str);
 impl ApiError {
     fn unauthorized() -> Self {
         Self(StatusCode::UNAUTHORIZED, "unauthorized")
@@ -350,7 +364,7 @@ impl ApiError {
     fn forbidden() -> Self {
         Self(StatusCode::FORBIDDEN, "origin_not_allowed")
     }
-    fn invalid() -> Self {
+    pub(crate) fn invalid() -> Self {
         Self(StatusCode::BAD_REQUEST, "invalid_request")
     }
 }
@@ -399,7 +413,7 @@ pub async fn check(
     .into_response())
 }
 
-fn json_error(error: axum::extract::rejection::JsonRejection) -> ApiError {
+pub(crate) fn json_error(error: axum::extract::rejection::JsonRejection) -> ApiError {
     if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
         ApiError(StatusCode::PAYLOAD_TOO_LARGE, "body_too_large")
     } else {

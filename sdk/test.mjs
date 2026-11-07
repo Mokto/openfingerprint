@@ -218,7 +218,7 @@ try {
 				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 5000 })
 			);
 			valid(a);
-			assert(!('automation' in a));
+			assert.deepEqual(a.automation, automation);
 			assert(!('webdriver' in a.hints));
 			assert(
 				a.fingerprint,
@@ -962,6 +962,7 @@ try {
 				snapshot.excluded.push('fonts');
 				snapshot.unavailable.audio = 'error';
 				snapshot.timings.gpu.durationMs = -1;
+				snapshot.automation.version = -1;
 			});
 			const diagnosticTimeout = await p.evaluate(() => window.finalCollection);
 			assert.equal(await p.evaluate(() => window.identityCalls), 1);
@@ -970,6 +971,7 @@ try {
 			assert(!diagnosticTimeout.excluded.includes('fonts'));
 			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
 			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
+			assert.equal(diagnosticTimeout.automation.version, 1);
 			assert(diagnosticTimeout.components.canvas);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);

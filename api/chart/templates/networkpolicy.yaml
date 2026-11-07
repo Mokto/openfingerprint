@@ -2,6 +2,12 @@
 {{- if or (not (kindIs "slice" .Values.networkPolicy.apiFrom)) (empty .Values.networkPolicy.apiFrom) }}
 {{- fail "networkPolicy.apiFrom must list the peers allowed to call the API" }}
 {{- end }}
+{{- if not (kindIs "slice" .Values.networkPolicy.redisTo) }}
+{{- fail "networkPolicy.redisTo must be a list of Redis peers" }}
+{{- end }}
+{{- if or (lt (int .Values.networkPolicy.redisPort) 1) (gt (int .Values.networkPolicy.redisPort) 65535) (ne (toString .Values.networkPolicy.redisPort) (toString (int .Values.networkPolicy.redisPort))) }}
+{{- fail "networkPolicy.redisPort must be an integer from 1 to 65535" }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -29,13 +35,19 @@ spec:
   {{- if or (not (kindIs "slice" .Values.networkPolicy.dnsTo)) (empty .Values.networkPolicy.dnsTo) }}
   {{- fail "networkPolicy.dnsTo must list the DNS servers the API may query" }}
   {{- end }}
-  # MX lookups only: no TCP fallback, no other destinations.
   egress:
     - to:
         {{- toYaml .Values.networkPolicy.dnsTo | nindent 8 }}
       ports:
         - protocol: UDP
           port: 53
+    {{- if .Values.networkPolicy.redisTo }}
+    - to:
+        {{- toYaml .Values.networkPolicy.redisTo | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.redisPort }}
+    {{- end }}
 {{- if .Values.domainData.refresh.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

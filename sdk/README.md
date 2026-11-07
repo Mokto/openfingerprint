@@ -2,13 +2,12 @@
 
 A standalone, MIT-licensed TypeScript browser-signal collector with **zero runtime dependencies**.
 
-The browser SDK makes no network requests and has no telemetry, remote code, WASM
-or import-time collection. Identity signals are hashed locally with Web Crypto;
-optional automation observations are unhashed booleans/nulls. You choose whether
-and where to send results. The optional API verifies hashed results and
-provides independent browser/domain/IP result sections without visitor storage or
-history. Domain/IP intelligence sources are not implemented yet: valid inputs
-explicitly return unknown. It is self-hosted, not a managed identification service.
+The SDK has no telemetry, remote code, WASM or import-time collection. `collect()`
+hashes identity signals locally and always includes automation observations as
+unhashed booleans/nulls, with no network requests. `identify()` submits that evidence
+to your same-origin collection proxy and returns an opaque event ID. The optional
+self-hosted API provides stateless checks and a Redis-backed single-use event flow;
+it does not provide managed identification or visitor history.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Different
 devices can collide; settings, updates and missing signals can split repeat visits.
@@ -41,7 +40,7 @@ pnpm build
 Node 24+ and pnpm 12.11.2 are used for development. Build outputs:
 
 - `dist/index.js`: standalone ES module.
-- `dist/index.iife.js`: script exposing `OpenFingerprint.collect` and `OpenFingerprint.collectAutomation`.
+- `dist/index.iife.js`: script exposing `OpenFingerprint.collect`, `OpenFingerprint.identify` and `OpenFingerprint.collectAutomation`.
 - `dist/types/`: TypeScript declarations.
 
 The package exports resolve to the built ES module and declarations. Only
@@ -59,8 +58,8 @@ the package contents and publishes to npm. A version already on npm is skipped.
 ## Optional Rust API
 
 The independent [Rust API](../api/README.md) verifies SDK evidence and accepts
-optional domain/IP inputs. It is self-hosted and experimental; domain/IP
-intelligence is not implemented yet. The SDK does not call it automatically.
+optional domain/IP inputs. It is self-hosted and experimental. `collect()` does
+not call it; `identify()` uses its collection endpoint via your same-origin proxy.
 See the [project overview](../README.md) for backend checks and releases.
 
 ## Use
@@ -89,22 +88,14 @@ Options:
 No persistence is used by default. Explicitly enabling `storageKey` reads/writes
 only that marker, not arbitrary localStorage data. Blocked storage returns `null`.
 
-### Opt-in automation observations
+### Automatic automation observations
 
-```js
-import { collect, collectAutomation } from '@openfingerprint/sdk';
-
-const signals = await collect();
-const automation = collectAutomation();
-const payload = { signals, automation };
-```
-
-Forward `payload` through your own backend to a compatible `POST /v1/check`.
-Never expose the API's server credential to browser code. Deploy the API update
-before sending `automation`; older versions reject the field.
-
-`collectAutomation()` is synchronous and browser-only. It returns separately
-versioned evidence; `collect()` never invokes it or includes it in identity hashes.
+Every `collect()` result and `onIdentity` snapshot includes `automation`.
+Forward `{ signals: result }` to a compatible `/v1/check` to receive the evaluation
+inside `response.signals.automation`. No opt-in or separate call is needed.
+Automation remains outside fingerprint hashes, so identity schema 5 is unchanged.
+Deploy the compatible API first: older versions reject this additional SDK field.
+`collectAutomation()` remains available as a synchronous browser-only helper.
 
 | Field | Observation |
 | --- | --- |
@@ -125,6 +116,47 @@ Hidden automation can evade them; applications can also define matching names.
 An observed false means only that this specific marker was absent. It does not
 prove human activity. The [API](../api/README.md#automation-indicators) evaluates
 the observations with versioned rules and preserves unknowns.
+
+### Challenge-bound identification
+
+Your backend first obtains a challenge from `POST /v1/challenges`, binding it to
+a random, server-stored session/action token and your exact browser origin.
+It gives only the challenge to the browser:
+
+```js
+import { identify } from '@openfingerprint/sdk';
+
+const { eventId } = await identify({
+	endpoint: '/fingerprint/collect',
+	challenge
+});
+```
+
+`identify()` collects identity and automation automatically, then makes one JSON
+POST to the same-origin endpoint. Your proxy forwards it to the API's
+`POST /v1/collect`, preserving Origin, User-Agent and Sec-CH-UA-Platform, but no
+cookies or Authorization. The browser receives only an opaque event ID, not a
+server verdict. Send that ID with the business action; your backend consumes it
+using `POST /v1/events/consume` and the expected server-stored binding.
+
+The endpoint must be same-origin HTTPS (HTTP is allowed on localhost/loopback).
+Requests omit credentials and referrers, disable caching, refuse redirects and do
+not retry. Allow the endpoint in your CSP `connect-src 'self'`.
+`timeoutMs` controls collection as for `collect()`; `networkTimeoutMs` is a
+separate 1–30000 ms network budget, default 5000. A failed/ambiguous submission
+requires a fresh challenge; do not retry the same one.
+
+Only this flow additionally sends bounded raw user-agent (512 UTF-8 bytes) and
+platform (128 bytes) observations for server consistency checks. Unavailable or
+over-limit values become null. They are not included in identity hashes, returned
+to the browser or retained in the event. `identify()` does not use storage and
+does not expose an `onIdentity` callback.
+
+Challenge/event binding prevents replacement and reuse of evaluated results; it
+does not attest honest browser execution. Unknown results stay unknown. Missing,
+expired or already-used events must never authorize a protected action. See the
+[collection API](../api/README.md#challenge-bound-collection) for deployment,
+retention, Redis and integration requirements.
 
 ### Identity readiness and cooperative batching
 

@@ -70,10 +70,12 @@ networkPolicy:
   # Peers allowed to scrape the metrics port, for example Prometheus.
   metricsFrom: []
   # The updater needs DNS, HTTPS to GitHub and the Kubernetes API (often 6443 behind the
-  # kubernetes Service). The API itself never initiates connections.
+  # kubernetes Service).
   kubeApiServerPorts: [6443]
-  # The API's only egress: MX lookups on UDP 53 through the pod's first resolv.conf nameserver,
+  # MX lookups use UDP 53 through the pod's first resolv.conf nameserver,
   # which these peers must include.
+  redisTo: []
+  redisPort: 6379
   dnsTo:
     - namespaceSelector:
         matchLabels:

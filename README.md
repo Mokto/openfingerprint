@@ -9,14 +9,16 @@ own licenses.
 | [`sdk/`](sdk/) | Standalone TypeScript browser collector, published as `@openfingerprint/sdk`. | [SDK guide](sdk/README.md) |
 | [`api/`](api/) | Self-hosted Rust backend for server-only signal, domain and IP checks. | [API guide](api/README.md) |
 
-The SDK has zero runtime dependencies. It hashes signals locally, makes no network
-requests and has no telemetry, remote code, WASM or import-time collection. You
-choose whether and where to send results. An opt-in `collectAutomation()` collector
-reports bounded automation observations separately from fingerprint identity;
-the API evaluates them with versioned rules. These client-reported indicators
-are forgeable, not proof of malicious traffic.
+The SDK has zero runtime dependencies, no telemetry, remote code, WASM or
+import-time collection. `collect()` hashes identity locally and automatically
+includes bounded automation observations, with no networking. `identify()` submits
+evidence through your same-origin collection proxy and returns an opaque event ID.
+The API binds events to short-lived challenges and consumes them once through
+shared Redis state. These protections prevent result replacement/replay, not
+forged browser observations or malicious traffic by themselves.
 
-The API verifies submitted evidence without visitor storage or history. Open
+Stateless API checks verify submitted evidence without visitor storage or history;
+the collection flow temporarily retains evaluated events in Redis. Open
 domain snapshots provide independent disposable, free-subdomain and scoped
 referrer-spam evidence, including recently monitored provider domains, provenance,
 expiry and exact reviewed disputes. The API looks up each unlisted domain's MX hosts to
