@@ -155,9 +155,16 @@ impl Rdap {
         if let Some(cached) = self.cache.get(&key).await.and_then(|v| decode(&v)) {
             return cached;
         }
+        let rdap = self.servers.contains_key(tld);
         let request = async {
+            // Includes the wait for a per-registry slot: a throttled registry queues callers.
+            let _timer = crate::metrics::start(if rdap {
+                crate::metrics::Step::RdapFetch
+            } else {
+                crate::metrics::Step::WhoisFetch
+            });
             let _permit = self.limits.get(server)?.acquire().await.ok()?;
-            Some(if self.servers.contains_key(tld) {
+            Some(if rdap {
                 self.fetch(&format!("{server}domain/{registrable}")).await
             } else {
                 crate::whois::query(server, registrable).await

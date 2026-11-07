@@ -5,6 +5,7 @@ mod collection;
 mod country;
 mod domains;
 mod mailauth;
+mod metrics;
 mod mx;
 mod network;
 mod providers;
@@ -33,6 +34,7 @@ fn app(state: Arc<check::AppState>) -> Router {
         .route("/v1/events/consume", post(collection::consume))
         .layer(DefaultBodyLimit::max(check::BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
+        .layer(middleware::from_fn(observe))
         .with_state(state)
 }
 
@@ -43,8 +45,17 @@ async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::respon
             + &state.dns.metrics()
             + &state.rdap.metrics()
             + &state.countries.metrics()
-            + &state.network.metrics(),
+            + &state.network.metrics()
+            + &metrics::render(),
     )
+}
+
+async fn observe(request: Request, next: Next) -> Response {
+    let route = metrics::route(request.uri().path());
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    metrics::observe_request(route, response.status().as_u16(), started.elapsed());
+    response
 }
 
 async fn no_store(request: Request, next: Next) -> Response {
