@@ -17,7 +17,7 @@ const sites = JSON.stringify([{ id: 'network_test', secret_key: secret }]);
 const meta = (id, license, lifetime) => ({ id, license, license_url: 'https://example.test/license', license_text: 'test license', attribution: 'test source', url: 'https://example.test/source', revision: 'a'.repeat(64), updated_at_unix: now - 60, fetched_at_unix: now, expires_at_unix: now + lifetime });
 const snapshot = {
     version: 1,
-    tor: { metadata: meta('tor_exit', 'CC0-1.0', 3600), entries: ['8.8.8.8', '2606:4700:4700::1111'] },
+    tor: { metadata: meta('tor_exit', 'CC0-1.0', 3600), entries: ['8.8.8.8', '2606:4700:4700::1111'].map(ip => ({ ip, observed_at_unix: now - 60 })) },
     hosting: { metadata: meta('cloud_ranges', 'MIT', 86400), entries: [{ network: '8.8.8.0/24', provider: 'Test Cloud' }, { network: '2606:4700::/32', provider: 'IPv6 Cloud' }] }
 };
 const servers = [];
@@ -64,7 +64,22 @@ try {
         if (url.endsWith('LICENSE')) return Buffer.from('unreviewed license');
         throw new Error('source unavailable');
     };
-    assert.equal((await tor(fetchBytes, now)).entries.length, 2);
+    assert.deepEqual((await tor(fetchBytes, now)).entries, [
+        { ip: '2606:4700:4700::1111', observed_at_unix: now - 1800 },
+        { ip: '8.8.8.8', observed_at_unix: now - 1800 }
+    ]);
+    const stamp = time => new Date(time * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    const boundary = [
+        'ExitAddress 8.8.8.8 ' + stamp(now - 86399),
+        'ExitAddress 8.8.8.8 ' + stamp(now - 60),
+        'ExitAddress 8.8.8.8 ' + stamp(now - 120),
+        'ExitAddress 1.1.1.1 ' + stamp(now - 86399),
+        'ExitAddress 9.9.9.9 ' + stamp(now - 86400)
+    ].join('\n');
+    assert.deepEqual((await tor(async url => url.endsWith('/exit-lists/') ? fetchBytes(url) : Buffer.from(boundary), now)).entries, [
+        { ip: '1.1.1.1', observed_at_unix: now - 86399 },
+        { ip: '8.8.8.8', observed_at_unix: now - 60 }
+    ]);
     await assert.rejects(tor(async url => url.endsWith('/exit-lists/') ? fetchBytes(url) : Buffer.from('ExitAddress invalid 2026-11-07 00:00:00'), now));
     await assert.rejects(hosting(fetchBytes, now), /license changed/);
     const result = await update(path, { fetchBytes, now });
@@ -128,6 +143,7 @@ try {
     stale.tor.metadata.updated_at_unix = now - 20000;
     stale.tor.metadata.fetched_at_unix = now - 19000;
     stale.tor.metadata.expires_at_unix = now - 10000;
+    stale.tor.entries = stale.tor.entries.map(({ ip }) => ({ ip, observed_at_unix: now - 20000 }));
     const stalePath = resolve(directory, 'stale.json');
     await writeFile(stalePath, JSON.stringify(stale));
     const staleServer = await start({ OPENFINGERPRINT_NETWORK_DATA: stalePath });
@@ -199,18 +215,22 @@ try {
         assert(!JSON.stringify(event).includes('8.8.8.8'));
         assert.equal((await collect(trusted, '8.8.8.8:80')).ip.reason, 'invalid_forwarded_ip');
         assert.equal((await collect(trusted, null)).ip.reason, 'forwarded_ip_unavailable');
-        const expiring = structuredClone(snapshot);
-        const time = Math.floor(Date.now() / 1000);
-        expiring.tor.metadata.updated_at_unix = time - 1;
-        expiring.tor.metadata.fetched_at_unix = time;
-        expiring.tor.metadata.expires_at_unix = time + 2;
-        const expiringPath = resolve(directory, 'expiring.json');
-        await writeFile(expiringPath, JSON.stringify(expiring));
-        const expiringServer = await start({ ...redis, OPENFINGERPRINT_TRUSTED_PROXIES: '["127.0.0.1/32"]', OPENFINGERPRINT_NETWORK_DATA: expiringPath });
-        const expired = await collect(expiringServer, '8.8.8.8', 3100);
-        assert.equal(expired.ip.tor.value, null);
-        assert.equal(expired.ip.tor.status, 'stale_data');
-        assert.deepEqual(expired.ip.hosting.value.providers, ['Test Cloud']);
+        for (const observationExpiry of [false, true]) {
+            const expiring = structuredClone(snapshot);
+            const time = Math.floor(Date.now() / 1000);
+            expiring.tor.metadata.updated_at_unix = time - 1;
+            expiring.tor.metadata.fetched_at_unix = time;
+            expiring.tor.metadata.expires_at_unix = time + (observationExpiry ? 3600 : 2);
+            expiring.tor.entries = expiring.tor.entries.map(({ ip }) => ({ ip, observed_at_unix: time - (observationExpiry ? 86400 - 2 : 60) }));
+            const expiringPath = resolve(directory, 'expiring.json');
+            await writeFile(expiringPath, JSON.stringify(expiring));
+            const expiringServer = await start({ ...redis, OPENFINGERPRINT_TRUSTED_PROXIES: '["127.0.0.1/32"]', OPENFINGERPRINT_NETWORK_DATA: expiringPath });
+            const expired = await collect(expiringServer, '8.8.8.8', 3100);
+            assert.equal(expired.ip.tor.value, null);
+            assert.equal(expired.ip.tor.status, 'stale_data');
+            assert.deepEqual(expired.ip.hosting.value.providers, ['Test Cloud']);
+            if (observationExpiry) assert(expired.ip.tor.source.expires_at_unix > Math.floor(Date.now() / 1000));
+        }
         console.log('Collection ignores untrusted forwarding, walks trusted chains, rejects browser IP claims and returns single-use events without raw IP retention.');
     } else console.log('Network collection integration skipped: set OPENFINGERPRINT_TEST_REDIS_URL.');
     for (const { output } of servers) for (const value of [secret, '8.8.8.8', '2606:4700:4700::1111']) assert(!output.includes(value));

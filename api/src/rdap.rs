@@ -149,7 +149,7 @@ impl Rdap {
         };
         // Hashed so a cache dump does not list checked domains in clear text.
         let key = format!(
-            "openfingerprint:rdap:v1:{}",
+            "openfingerprint:rdap:v2:{}",
             crate::check::sha256(registrable)
         );
         if let Some(cached) = self.cache.get(&key).await.and_then(|v| decode(&v)) {
@@ -393,12 +393,24 @@ fn unix(s: &str) -> Option<u64> {
     let offset = match rest.as_bytes() {
         [b'Z' | b'z'] => 0,
         [sign @ (b'+' | b'-'), _, _, b':', _, _] => {
-            let minutes = num(s.len() - 5..s.len() - 3)? * 60 + num(s.len() - 2..s.len())?;
+            let hours = num(s.len() - 5..s.len() - 3)?;
+            let minutes = num(s.len() - 2..s.len())?;
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            let minutes = hours * 60 + minutes;
             if *sign == b'-' { -minutes } else { minutes }
         }
         _ => return None,
     };
-    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 60 {
+    let month_days = match mo {
+        2 if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        _ => return None,
+    };
+    if !(1..=month_days).contains(&d) || h > 23 || mi > 59 || se > 60 {
         return None;
     }
     u64::try_from(days(y, mo, d) * 86400 + h * 3600 + mi * 60 + se - offset * 60).ok()
@@ -428,6 +440,18 @@ mod tests {
             ("2026-11-06T20:30:00-00:30", Some(1793998800)),
             ("2026-11-06 21:00:00Z", None),
             ("2026-13-06T21:00:00Z", None),
+            ("2026-00-06T21:00:00Z", None),
+            ("2026-02-00T00:00:00Z", None),
+            ("2026-02-31T00:00:00Z", None),
+            ("2026-04-31T00:00:00Z", None),
+            ("2026-02-29T00:00:00Z", None),
+            ("1900-02-29T00:00:00Z", None),
+            ("2000-02-29T00:00:00Z", Some(951782400)),
+            ("2100-02-29T00:00:00Z", None),
+            ("2026-01-10T00:00:00+24:00", None),
+            ("2026-01-10T00:00:00-24:00", None),
+            ("2026-01-10T00:00:00+00:60", None),
+            ("2026-01-10T00:00:00-00:99", None),
             ("2026-11-06T21:00:00", None),
             ("2026-11-06T21:00:00.Z", None),
             ("2026-11-06T21:00:00+0100", None),
@@ -474,6 +498,13 @@ mod tests {
                 body(
                     "example.com",
                     r#"[{"eventAction":"registration","eventDate":"redacted"}]"#,
+                ),
+                "no_date",
+            ),
+            (
+                body(
+                    "example.com",
+                    r#"[{"eventAction":"registration","eventDate":"2026-02-31T00:00:00Z"}]"#,
                 ),
                 "no_date",
             ),
@@ -570,6 +601,14 @@ mod tests {
             crate::cache::Cache::new(crate::cache::tests::client_for(&redis)),
         )
         .unwrap();
+        let legacy_key = format!(
+            "openfingerprint:rdap:v1:{}",
+            crate::check::sha256("found.test")
+        );
+        store
+            .lock()
+            .unwrap()
+            .insert(legacy_key.clone(), ("found:42".into(), "86400".into()));
         let before = requests.load(Ordering::Relaxed);
         for domain in [
             "found.test",
@@ -587,12 +626,16 @@ mod tests {
             4,
             "found and missing once, unavailable every time"
         );
-        let store = store.lock().unwrap();
+        let mut store = store.lock().unwrap();
+        assert_eq!(
+            store.remove(&legacy_key),
+            Some(("found:42".into(), "86400".into()))
+        );
         assert_eq!(store.len(), 2);
         assert!(
             store
                 .keys()
-                .all(|k| k.starts_with("openfingerprint:rdap:v1:") && !k.contains("test"))
+                .all(|k| k.starts_with("openfingerprint:rdap:v2:") && !k.contains("test"))
         );
         let ttls: std::collections::BTreeSet<_> = store
             .values()

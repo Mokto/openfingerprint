@@ -63,7 +63,7 @@ const page = `<dt>SHA1SUM</dt><dd class="small">${digest}</dd><a href='${url}'>M
 const networkPath = join(directory, 'network.json');
 await writeFile(networkPath, JSON.stringify({ version: 1, tor: {
     metadata: { id: 'tor_exit', license: 'CC0-1.0', license_url: 'https://example.test/license', attribution: 'test source', url: 'https://example.test/source', revision: 'a'.repeat(64), updated_at_unix: now - 100, fetched_at_unix: now, expires_at_unix: now + 3600 },
-    entries: ['8.8.8.8']
+    entries: [{ ip: '8.8.8.8', observed_at_unix: now - 100 }]
 } }));
 const calls = [];
 const fetcher = (payload = gzipSync(bytes), html = page, headers = {}) => async (input, options) => {

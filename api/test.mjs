@@ -101,6 +101,8 @@ const rdap = createServer((req, res) => {
     const domain = (ldhName, events) => res.writeHead(200, { 'content-type': 'application/rdap+json' }).end(JSON.stringify({ objectClassName: 'domain', ldhName, events }));
     if (name === 'rdapfound.example') domain('RDAPFOUND.EXAMPLE', [{ eventAction: 'expiration', eventDate: '2030-01-01T00:00:00Z' }, { eventAction: 'registration', eventDate: registered }]);
     else if (name === 'rdapnodate.example') domain(name, [{ eventAction: 'last changed', eventDate: registered }]);
+    else if (name === 'rdapbadcalendar.example') domain(name, [{ eventAction: 'registration', eventDate: '2026-02-31T00:00:00Z' }]);
+    else if (name === 'rdapbadoffset.example') domain(name, [{ eventAction: 'registration', eventDate: '2026-01-10T00:00:00+00:99' }]);
     else if (name === 'rdapwrong.example') domain('other.example', [{ eventAction: 'registration', eventDate: registered }]);
     else if (name === 'rdapbroken.example') res.writeHead(503).end();
     else if (name === 'rdapmoved.example') res.writeHead(302, { location: '/rdap/domain/rdapfound.example' }).end();
@@ -477,6 +479,7 @@ try {
         ['rdapfound.example', { status: 'found', registered_at_unix: Date.parse(registered) / 1000 }],
         ['mail.rdapfound.example', { status: 'found', registered_at_unix: Date.parse(registered) / 1000 }],
         ['rdapnodate.example', { status: 'no_date' }], ['rdapwrong.example', { status: 'unavailable' }],
+        ['rdapbadcalendar.example', { status: 'no_date' }], ['rdapbadoffset.example', { status: 'no_date' }],
         ['rdapbroken.example', { status: 'unavailable' }], ['rdapmoved.example', { status: 'unavailable' }],
         ['rdapslow.example', { status: 'unavailable' }], ['example.zz', { status: 'unsupported_tld' }],
         ['mail.old.wtest', { status: 'found', registered_at_unix: Date.parse('2001-02-03T00:00:00Z') / 1000 }],
@@ -490,7 +493,7 @@ try {
     assert(rdapRequests.includes('mail.example') && !rdapRequests.some(name => name.split('.').length > 2), 'RDAP must query registrable domains only');
     assert.equal(rdapRequests.filter(name => name === 'rdapfound.example').length, 1, 'Cached registrations must not reach the registry again');
     assert.equal(rdapRequests.filter(name => name === 'rdapbroken.example').length, 1);
-    assert(redisStore.size > 0 && [...redisStore.keys()].every(k => /^openfingerprint:rdap:v1:[0-9a-f]{64}$/.test(k)), 'Cache keys are hashed registered domains');
+    assert(redisStore.size > 0 && [...redisStore.keys()].every(k => /^openfingerprint:rdap:v2:[0-9a-f]{64}$/.test(k)), 'Cache keys are hashed registered domains');
     assert(![...redisStore.values()].some(v => v === 'unavailable'), 'Unavailable answers are not cached');
     assert(!rdapRequests.some(name => /github|co\.uk|duckdns\.org$/.test(name) && name !== 'duckdns.org'), 'Private-namespace tenants and public suffixes are not registrable');
     assert.deepEqual(whoisQueries, ['old.wtest', 'new.wtest', 'busy.wtest'], 'WHOIS gets the registrable domain once, then the cache answers');

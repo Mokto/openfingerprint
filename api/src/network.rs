@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     io::Read,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -70,6 +70,18 @@ struct Source<T> {
     entries: T,
 }
 #[derive(Deserialize)]
+#[serde(untagged)]
+enum TorEntry {
+    Observed(TorObservation),
+    Legacy(IpAddr),
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TorObservation {
+    ip: IpAddr,
+    observed_at_unix: u64,
+}
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HostingRange {
     network: IpNet,
@@ -79,14 +91,14 @@ struct HostingRange {
 #[serde(deny_unknown_fields)]
 struct Snapshot {
     version: u8,
-    tor: Option<Source<Vec<IpAddr>>>,
+    tor: Option<Source<Vec<TorEntry>>>,
     hosting: Option<Source<Vec<HostingRange>>>,
     asn: Option<Metadata>,
 }
 
 pub struct Data {
     metadata: [Option<Metadata>; 3],
-    tor: HashSet<IpAddr>,
+    tor: HashMap<IpAddr, Option<u64>>,
     hosting: HashMap<IpNet, BTreeSet<String>>,
     asn: Option<maxminddb::Reader<Vec<u8>>>,
     reason: &'static str,
@@ -95,7 +107,7 @@ impl Data {
     fn unavailable(reason: &'static str) -> Self {
         Self {
             metadata: [None, None, None],
-            tor: HashSet::new(),
+            tor: HashMap::new(),
             hosting: HashMap::new(),
             asn: None,
             reason,
@@ -119,11 +131,25 @@ impl Data {
             {
                 return Err(());
             }
-            data.tor = source
-                .entries
-                .into_iter()
-                .map(|ip| ip.to_canonical())
-                .collect();
+            for entry in source.entries {
+                let (ip, observed) = match entry {
+                    TorEntry::Observed(entry) => {
+                        if entry.observed_at_unix == 0
+                            || entry.observed_at_unix > source.metadata.fetched_at_unix
+                            || entry.observed_at_unix.saturating_add(DAY)
+                                <= source.metadata.fetched_at_unix
+                        {
+                            return Err(());
+                        }
+                        (entry.ip, Some(entry.observed_at_unix))
+                    }
+                    TorEntry::Legacy(ip) => (ip, None),
+                };
+                data.tor
+                    .entry(ip.to_canonical())
+                    .and_modify(|previous| *previous = (*previous).max(observed))
+                    .or_insert(observed);
+            }
             data.metadata[0] = Some(source.metadata);
         }
         if let Some(source) = snapshot.hosting {
@@ -227,9 +253,9 @@ impl Data {
         if !public(ip) {
             return json!({"status":"unknown", "reason":"non_global_ip", "source":source});
         }
-        let tor = self.fact(
+        let mut tor = self.fact(
             0,
-            if self.tor.contains(&ip) {
+            if self.tor.contains_key(&ip) {
                 json!(true)
             } else {
                 Value::Null
@@ -237,6 +263,9 @@ impl Data {
             now,
             "not_listed",
         );
+        if let (Some(Some(observed)), Some(meta)) = (self.tor.get(&ip), &self.metadata[0]) {
+            tor["expires_at_unix"] = json!(meta.expires_at_unix.min(observed.saturating_add(DAY)));
+        }
         let mut providers = BTreeSet::new();
         for prefix in 1..=if ip.is_ipv4() { 32 } else { 128 } {
             let network = IpNet::new(ip, prefix).unwrap().network();
@@ -273,13 +302,10 @@ impl Data {
                     .any(char::is_control)
         });
         let asn = self.fact(2, asn.map_or(Value::Null, |a| json!({"number":a.autonomous_system_number,"organization":a.autonomous_system_organization})), now, missing);
-        let status = if [&tor, &hosting, &asn].iter().any(|f| !f["value"].is_null()) {
-            "ok"
-        } else {
-            "unknown"
-        };
-        json!({"status":status,"source":source,"tor":tor,"hosting":hosting,"asn":asn,
-            "vpn":{"value":null,"status":"not_configured"},"proxy":{"value":null,"status":"not_configured"}})
+        let mut check = json!({"source":source,"tor":tor,"hosting":hosting,"asn":asn,
+            "vpn":{"value":null,"status":"not_configured"},"proxy":{"value":null,"status":"not_configured"}});
+        expire_at(&mut check, now);
+        check
     }
 }
 #[derive(Deserialize)]
@@ -449,6 +475,17 @@ fn expire_at(check: &mut Value, now: u64) {
             }
         }
     }
+    if check["tor"]["value"] == true {
+        let status = match check["tor"]["expires_at_unix"].as_u64() {
+            Some(expiry) if now >= expiry => "stale_data",
+            Some(_) => "matched",
+            None => "observation_time_unavailable",
+        };
+        if status != "matched" {
+            check["tor"]["value"] = Value::Null;
+            check["tor"]["status"] = json!(status);
+        }
+    }
     check["status"] = json!(if ["tor", "hosting", "asn"]
         .iter()
         .any(|name| !check[name]["value"].is_null())
@@ -518,7 +555,7 @@ mod tests {
     fn snapshot() -> Value {
         let meta = |id, license, expiry| json!({"id":id,"license":license,"license_url":"https://example.test/license","license_text":"test license","attribution":"fixture","url":"https://example.test/source","revision":"a".repeat(64),"updated_at_unix":1000,"fetched_at_unix":1000,"expires_at_unix":expiry});
         json!({"version":1,
-            "tor":{"metadata":meta("tor_exit","CC0-1.0",2000),"entries":["8.8.8.8","2606:4700:4700::1111"]},
+            "tor":{"metadata":meta("tor_exit","CC0-1.0",2000),"entries":[{"ip":"8.8.8.8","observed_at_unix":1000},{"ip":"2606:4700:4700::1111","observed_at_unix":1000}]},
             "hosting":{"metadata":meta("cloud_ranges","MIT",3000),"entries":[{"network":"8.8.8.0/24","provider":"Example Cloud"},{"network":"2606:4700::/32","provider":"IPv6 Cloud"}]}
         })
     }
@@ -562,6 +599,64 @@ mod tests {
         ] {
             assert_eq!(c(ip, 1500)["reason"], "non_global_ip", "{ip}");
         }
+    }
+    #[test]
+    fn tor_observations_expire_individually_and_keep_the_latest_canonical_address() {
+        let mut input = snapshot();
+        for name in ["tor", "hosting"] {
+            input[name]["metadata"]["updated_at_unix"] = json!(DAY);
+            input[name]["metadata"]["fetched_at_unix"] = json!(DAY + 1);
+            input[name]["metadata"]["expires_at_unix"] = json!(DAY + 3600);
+        }
+        input["tor"]["entries"] = json!([
+            {"ip":"8.8.8.8","observed_at_unix":2},
+            {"ip":"::ffff:8.8.8.8","observed_at_unix":3},
+            {"ip":"2606:4700:4700::1111","observed_at_unix":DAY}
+        ]);
+        let path = Path::new("/tmp/network.json");
+        let data = Data::load(path, &serde_json::to_vec(&input).unwrap()).unwrap();
+        let ip = "8.8.8.8".parse().unwrap();
+        let mut event = data.check_at(ip, "trusted_proxy", DAY + 2);
+        assert_eq!(event["tor"]["value"], true);
+        assert_eq!(event["tor"]["expires_at_unix"], DAY + 3);
+        expire_at(&mut event, DAY + 3);
+        let current = data.check_at(ip, "backend_supplied", DAY + 3);
+        for result in [&event, &current] {
+            assert!(result["tor"]["value"].is_null());
+            assert_eq!(result["tor"]["status"], "stale_data");
+            assert!(!result["hosting"]["value"].is_null());
+            assert_eq!(result["status"], "ok");
+        }
+        assert_eq!(
+            data.check_at("2606:4700:4700::1111".parse().unwrap(), "peer", DAY + 3)["tor"]["value"],
+            true
+        );
+        for invalid in [0, 1, DAY + 2] {
+            input["tor"]["entries"][0]["observed_at_unix"] = json!(invalid);
+            assert!(Data::load(path, &serde_json::to_vec(&input).unwrap()).is_err());
+        }
+    }
+    #[test]
+    fn timestamp_free_tor_snapshots_and_events_stay_unknown() {
+        let mut input = snapshot();
+        input["tor"]["entries"] = json!(["8.8.8.8"]);
+        let data = Data::load(
+            Path::new("/tmp/network.json"),
+            &serde_json::to_vec(&input).unwrap(),
+        )
+        .unwrap();
+        let legacy = data.check_at("8.8.8.8".parse().unwrap(), "peer", 1500);
+        assert!(legacy["tor"]["value"].is_null());
+        assert_eq!(legacy["tor"]["status"], "observation_time_unavailable");
+        assert!(!legacy["hosting"]["value"].is_null());
+        let mut event = fixture().check_at("8.8.8.8".parse().unwrap(), "trusted_proxy", 1500);
+        event["tor"]
+            .as_object_mut()
+            .unwrap()
+            .remove("expires_at_unix");
+        expire_at(&mut event, 1501);
+        assert_eq!(event["tor"], legacy["tor"]);
+        assert!(!event["hosting"]["value"].is_null());
     }
     #[test]
     fn stored_events_lose_expired_matches_before_consumption() {

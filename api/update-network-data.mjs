@@ -46,17 +46,17 @@ export async function tor(fetchBytes, now) {
     const [year, month, date, hour, minute, second] = name.split('-');
     const updated = epoch(`${year}-${month}-${date}T${hour}:${minute}:${second}Z`);
     const body = String(await fetchBytes(base + name));
-    const entries = new Set();
+    const entries = new Map();
     for (const line of body.split('\n')) {
         if (!line.startsWith('ExitAddress ')) continue;
         const match = /^ExitAddress (\S+) (\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)\r?$/.exec(line);
         assert(match && isIP(match[1]), 'Invalid observed exit address');
         const observed = epoch(`${match[2]}T${match[3]}Z`);
         assert(Number.isSafeInteger(observed) && observed <= now, 'Invalid exit observation date');
-        if (observed >= now - day) entries.add(match[1]);
+        if (observed > now - day) entries.set(match[1], Math.max(entries.get(match[1]) ?? 0, observed));
     }
     assert(entries.size > 0 && entries.size <= 100000, 'Invalid exit address count');
-    return { metadata: metadata('tor_exit', 'CC0-1.0', 'https://creativecommons.org/publicdomain/zero/1.0/', 'The Tor Project, observed exit addresses', base + name, sha(body), updated, now, 3 * 3600), entries: [...entries].sort() };
+    return { metadata: metadata('tor_exit', 'CC0-1.0', 'https://creativecommons.org/publicdomain/zero/1.0/', 'The Tor Project, observed exit addresses', base + name, sha(body), updated, now, 3 * 3600), entries: [...entries.keys()].sort().map(ip => ({ ip, observed_at_unix: entries.get(ip) })) };
 }
 export async function hosting(fetchBytes, now) {
     const commits = JSON.parse(String(await fetchBytes(`https://api.github.com/repos/${repo}/commits?path=data/providers/all.json&per_page=1`)));
