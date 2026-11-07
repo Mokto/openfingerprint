@@ -27,8 +27,9 @@ export const protectedDomains = [
     'secureserver.net', 't-online.de', 'tuta.com', 'tutanota.com', 'verizon.net', 'web.de', 'yahoo.com',
     'yahoodns.net', 'yandex.com', 'yandex.net', 'yandex.ru', 'zoho.com', 'zohomail.com'
 ];
-export function unprotected(entries) {
-    const hit = d => protectedDomains.some(p => d === p || d.endsWith('.' + p) || p.endsWith('.' + d));
+export function unprotected(entries, extra = []) {
+    const all = [...protectedDomains, ...extra];
+    const hit = d => all.some(p => d === p || d.endsWith('.' + p) || p.endsWith('.' + d));
     return { kept: entries.filter(d => !hit(d)), dropped: entries.filter(hit) };
 }
 
@@ -77,8 +78,16 @@ export async function download(url) {
     return Buffer.concat(chunks).toString('utf8');
 }
 
+const reviewedFiles = [
+    ['reviewed-free-subdomains.json', 'reviewed_free_subdomains', 'free_subdomain'],
+    ['reviewed-domain-disputes.json', 'reviewed_disposable_disputes', 'disposable_review'],
+    ['reviewed-public-mailboxes.json', 'reviewed_public_mailboxes', 'public_mailbox'],
+    ['reviewed-relays.json', 'reviewed_relays', 'relay']
+];
+
 export async function snapshot(fetchText = download, now = Math.floor(Date.now() / 1000)) {
     const datasets = [];
+    const mailboxes = JSON.parse(await readFile(resolve(root, 'data', 'reviewed-public-mailboxes.json'), 'utf8')).entries.map(e => e.domain);
     for (const source of sources) {
         phase = source.id;
         const commit = JSON.parse(await fetchText(`https://api.github.com/repos/${source.repo}/commits/${source.branch}`));
@@ -95,7 +104,7 @@ export async function snapshot(fetchText = download, now = Math.floor(Date.now()
         const body = await fetchText(base + source.path);
         if (source.domain) assert(body.includes(source.domain), 'Provider namespace evidence changed');
         const listed = source.domain ? [source.domain] : source.id === 'fakefilter_recent' ? monitoredDomains(body, now) : domains(body);
-        const { kept, dropped } = source.domain ? { kept: listed, dropped: [] } : unprotected(listed);
+        const { kept, dropped } = source.domain ? { kept: listed, dropped: [] } : unprotected(listed, mailboxes);
         if (dropped.length) console.warn(`${source.id}: ignored ${dropped.length} listing(s) of protected mail domains: ${dropped.slice(0, 20).join(', ')}`);
         datasets.push({
             id: source.id, category: source.category, license: source.license,
@@ -108,10 +117,7 @@ export async function snapshot(fetchText = download, now = Math.floor(Date.now()
         });
     }
     const cc0 = datasets.find(s => s.license === 'CC0-1.0').license_text;
-    for (const [file, id, category] of [
-        ['reviewed-free-subdomains.json', 'reviewed_free_subdomains', 'free_subdomain'],
-        ['reviewed-domain-disputes.json', 'reviewed_disposable_disputes', 'disposable_review']
-    ]) {
+    for (const [file, id, category] of reviewedFiles) {
         phase = id;
         const reviewed = await readFile(resolve(root, 'data', file), 'utf8');
         const curated = JSON.parse(reviewed);

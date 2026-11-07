@@ -48,14 +48,14 @@ async function publicSource(url) {
     return url.endsWith('LICENSE') ? bundled.sources.find(s => s.id === id).license_text : (id === 'is_a_dev' ? 'is-a.dev' : 'is-a.bot');
 }
 const result = JSON.parse(await snapshot(publicSource, now));
-assert.equal(result.sources.length, 7);
+assert.equal(result.sources.length, 9);
 for (const s of result.sources) {
     assert.equal(createHash('sha256').update(s.license_text).digest('hex'), s.license_sha256);
     assert(s.expires_at_unix > s.fetched_at_unix);
 }
 assert.equal(result.sources.find(s => s.id === 'fakefilter_recent').license, 'BSD-3-Clause');
 assert.deepEqual(result.sources.find(s => s.id === 'fakefilter_recent').domains, ['boundary.example', 'recent.example']);
-for (const id of ['reviewed_free_subdomains', 'reviewed_disposable_disputes']) {
+for (const id of ['reviewed_free_subdomains', 'reviewed_disposable_disputes', 'reviewed_public_mailboxes', 'reviewed_relays']) {
     assert.equal(result.sources.find(s => s.id === id).fetched_at_unix, bundled.sources.find(s => s.id === id).fetched_at_unix);
 }
 await assert.rejects(snapshot(async url => url.endsWith('LICENSE.txt') ? 'Terms changed' : publicSource(url), now), /license changed/);
@@ -97,8 +97,10 @@ try {
 assert.deepEqual(unprotected(['gmail.com', 'mx.google.com', 'yandex.net', 'com.br', 'mail.example', 'notgmail.com']), {
     kept: ['com.br', 'mail.example', 'notgmail.com'], dropped: ['gmail.com', 'mx.google.com', 'yandex.net']
 });
-const guarded = JSON.parse(await snapshot(async url => url.endsWith('disposable_email_blocklist.conf') ? 'mail.example\ngmail.com\naspmx.l.google.com\n' : url.endsWith('spammers.txt') ? 'spam.example\nyahoo.com\n' : publicSource(url), now));
-assert.deepEqual(guarded.sources.find(s => s.id === 'disposable_email_domains').domains, ['mail.example']);
+const guarded = JSON.parse(await snapshot(async url => url.endsWith('disposable_email_blocklist.conf') ? 'mail.example\ngmail.com\naspmx.l.google.com\nhotmail.fr\n' : url.endsWith('spammers.txt') ? 'spam.example\nyahoo.com\n' : publicSource(url), now));
+assert.deepEqual(guarded.sources.find(s => s.id === 'disposable_email_domains').domains, ['mail.example'], 'Reviewed public mailbox domains are protected too');
+assert(guarded.sources.find(s => s.id === 'reviewed_public_mailboxes').domains.includes('hotmail.fr'));
+assert.deepEqual(guarded.sources.find(s => s.id === 'reviewed_relays').domains.slice(0, 2), ['aleeas.com', 'anonaddy.com']);
 assert.deepEqual(guarded.sources.find(s => s.id === 'matomo_referrer_spam').domains, ['spam.example']);
 const published = [];
 await publish('openfingerprint-domain-data', publicSource, async (name, data) => published.push([name, JSON.parse(data).version]));

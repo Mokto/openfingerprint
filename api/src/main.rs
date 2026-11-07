@@ -6,6 +6,7 @@ mod country;
 mod domains;
 mod mx;
 mod network;
+mod providers;
 mod rdap;
 mod whois;
 

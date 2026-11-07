@@ -38,12 +38,13 @@ const dataPath = join(directory, 'domains.json');
 const now = Math.floor(Date.now() / 1000);
 const license = readFileSync(new URL('./data/domains.json', import.meta.url), 'utf8');
 const cc0 = JSON.parse(license).sources.find(s => s.license === 'CC0-1.0').license_text;
-const sources = ['disposable', 'free_subdomain', 'referrer_spam'].map(category => ({
+const fixtureDomains = { disposable: ['mail.example', 'sharklasers.com'], free_subdomain: ['free.example', 'duckdns.org'], referrer_spam: ['spam.example', 'bad.customer.example', 'github.io'], public_mailbox: ['publicmail.example'], relay: ['relay.example'] };
+const sources = Object.keys(fixtureDomains).map(category => ({
     id: category, category, license: 'CC0-1.0', license_text: cc0,
     license_sha256: createHash('sha256').update(cc0).digest('hex'),
     url: 'https://example.test/source', revision: 'fixture1', updated_at_unix: now - 3600,
     fetched_at_unix: now - 3600, expires_at_unix: mode === 'stale' ? now - 1 : now + 3600,
-    domains: category === 'disposable' ? ['mail.example', 'sharklasers.com'] : category === 'free_subdomain' ? ['free.example', 'duckdns.org'] : ['spam.example', 'bad.customer.example', 'github.io'],
+    domains: fixtureDomains[category],
     allowlist: category === 'disposable' ? ['good.mail.example'] : []
 }));
 const bsd = JSON.parse(license).sources.find(s => s.id === 'fakefilter_recent').license_text;
@@ -60,7 +61,8 @@ const mxAnswers = {
     'mxself.example': [[10, 'mx.mxself.example']],
     'mxdisputed.example': [[10, 'mx.disputed.mail.example']],
     'mxallowed.example': [[10, 'mx1.mail.example'], [20, 'mx.good.mail.example']],
-    'dnsdrop.example': [[10, 'mx.drop.example']]
+    'dnsdrop.example': [[10, 'mx.drop.example']],
+    'workspace.example': [[5, 'eu-smtp-inbound-1.mimecast.com'], [1, 'smtp.google.com'], [9, 'eu-smtp-inbound-2.mimecast.com']]
 };
 const dns = createSocket('udp4');
 const dnsName = name => Buffer.concat([...name.split('.').filter(Boolean).map(l => Buffer.concat([Buffer.from([l.length]), Buffer.from(l)])), Buffer.from([0])]);
@@ -242,7 +244,7 @@ function domainExpected(overrides = {}) {
     const hasReview = overrides.disputed && ['fresh', 'stale'].includes(mode);
     const result = { status: hasReview ? 'partial' : mode === 'fresh' ? 'ok' : 'unknown' };
     if (['invalid', 'missing'].includes(mode)) result.reason = mode === 'invalid' ? 'invalid_data' : 'data_unavailable';
-    for (const [field, category, scope] of [['disposable', 'disposable', 'disposable_domain'], ['free_subdomain', 'free_subdomain', 'free_subdomain_namespace'], ['spam', 'referrer_spam', 'referrer_spam']]) {
+    for (const [field, category, scope] of [['disposable', 'disposable', 'disposable_domain'], ['free_subdomain', 'free_subdomain', 'free_subdomain_namespace'], ['spam', 'referrer_spam', 'referrer_spam'], ['public_mailbox', 'public_mailbox', 'public_mailbox'], ['relay', 'relay', 'email_relay']]) {
         const matched = overrides[field];
         const status = mode === 'fresh' ? (matched === true ? 'listed' : matched === false ? (field === 'free_subdomain' ? 'provider_domain' : 'allowlisted') : 'not_listed') : 'unknown';
         const disputed = hasReview && field === 'disposable';
@@ -256,7 +258,9 @@ function domainExpected(overrides = {}) {
         });
         result[field] = fact;
     }
-    result.mx_lookup = overrides.mx_lookup ?? (result.disposable.status === 'not_listed' ? 'no_records' : 'not_needed');
+    result.did_you_mean = overrides.did_you_mean ?? null;
+    result.mx_lookup = overrides.mx_lookup ?? 'no_records';
+    if (overrides.mx_providers) result.mx_providers = overrides.mx_providers;
     result.registration = overrides.registration ?? { status: 'not_found' };
     return result;
 }
@@ -438,7 +442,7 @@ try {
         ['spam.example', { spam: true }], ['child.spam.example', { spam: true }],
         ['bad.customer.example', { spam: true }], ['customer.example', {}],
         ['notbad.customer.example', {}], ['innocent.github.io', { public_suffix_excluded: true, registration: { status: 'not_applicable' } }],
-        ['co.uk', { registration: { status: 'not_applicable' } }]
+        ['co.uk', { registration: { status: 'not_applicable' }, mx_lookup: 'not_needed' }]
     ]) {
         const response = await request('/v1/check', authHeaders(sites[4]), { signals: signals(), domain });
         assert.equal(response.status, 200);
@@ -458,19 +462,25 @@ try {
         const started = Date.now();
         const response = await request('/v1/check', authHeaders(sites[9]), { domain });
         assert(Date.now() - started < 3000);
-        const want = domainExpected(mode === 'fresh' ? { mx_lookup: lookup, ...(disposable ? { disposable } : {}) } : {});
+        const want = domainExpected({ mx_lookup: lookup, ...(lookup === 'resolved' ? { mx_providers: [] } : {}), ...(mode === 'fresh' && disposable ? { disposable } : {}) });
         if (mode === 'fresh' && disposable) want.disposable.status = 'mx_listed';
         assert.deepEqual(await response.json(), { domain: want });
     }
-    if (mode === 'fresh') {
-        assert(dnsQueries.includes('example.test') && dnsQueries.includes('dnsmx.example'));
-        for (const decided of ['mail.example', 'child.mail.example', 'good.mail.example', 'disputed.mail.example']) {
-            assert(!dnsQueries.includes(decided), 'Looked up a domain whose result MX hosts cannot change');
-        }
-    } else {
-        assert.deepEqual(dnsQueries, [], 'Looked up MX hosts without fresh domain data');
+    assert(['example.test', 'dnsmx.example', 'mail.example', 'good.mail.example', 'innocent.github.io'].every(name => dnsQueries.includes(name)), 'Every registrable domain is looked up');
+    assert(!dnsQueries.includes('co.uk'), 'Public suffixes are not sent to DNS');
+    console.log(`MX lookups, provider inference and its blockers, timeouts, spoofed replies and public-suffix skipping passed (${mode}).`);
+
+    phase = `public mailboxes, relays, typo suggestions and MX providers (${mode})`;
+    for (const [domain, expected] of [
+        ['publicmail.example', { public_mailbox: true }], ['sub.publicmail.example', {}],
+        ['relay.example', { relay: true }], ['user.relay.example', { relay: true }],
+        ['publicmial.example', mode === 'fresh' ? { did_you_mean: 'publicmail.example' } : {}],
+        ['workspace.example', { mx_lookup: 'resolved', mx_providers: [{ slug: 'google', type: 'mailbox' }, { slug: 'mimecast', type: 'gateway' }] }]
+    ]) {
+        const response = await request('/v1/check', authHeaders(sites[9]), { domain });
+        assert.deepEqual(await response.json(), { domain: domainExpected(expected) }, domain);
     }
-    console.log(`MX lookups, provider inference and its blockers, timeouts, spoofed replies and lookup skipping passed (${mode}).`);
+    console.log(`Public mailboxes (exact), relays (with subdomains), typo suggestions and MX providers passed (${mode}).`);
 
     phase = `RDAP registration dates (${mode})`;
     for (const [domain, registration] of [
@@ -592,7 +602,7 @@ try {
     assert.equal(await metric('openfingerprint_domain_data_reload_failures_total'), 1);
     assert.equal(await reloadedValue(), true);
     assert.equal(await metric('openfingerprint_domain_data_loaded'), 1);
-    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), mode === 'fresh' ? 7 : 0);
+    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), 8);
     assert.equal(await metric('openfingerprint_whois_lookups_total{result="found"}'), 1);
     assert.equal(await metric('openfingerprint_rdap_lookups_total{result="found"}'), 1);
     assert(await metric('openfingerprint_rdap_cache_total{result="hit"}') >= 1);

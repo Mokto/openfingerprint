@@ -105,8 +105,10 @@ impl AppState {
         };
         let data = self.domains.current();
         let mx = async {
-            // Skipping lookups that cannot change the result also avoids sending those domains to DNS.
-            if !data.needs_mx(&domain) {
+            // A public suffix has no mailbox of its own; skipping it keeps it away from DNS.
+            if psl::suffix(domain.as_bytes()).is_some_and(|s| {
+                s.as_bytes() == domain.as_bytes() && s.typ() == Some(psl::Type::Icann)
+            }) {
                 return (Vec::new(), "not_needed");
             }
             match self.dns.mx(&domain).await {

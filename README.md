@@ -20,11 +20,12 @@ forged browser observations or malicious traffic by themselves.
 Stateless API checks verify submitted evidence without visitor storage or history;
 the collection flow temporarily retains evaluated events in the Redis the API
 requires, which also caches registry answers. Open
-domain snapshots provide independent disposable, free-subdomain and scoped
-referrer-spam evidence, including recently monitored provider domains, provenance,
-expiry and exact reviewed disputes. The API looks up each unlisted domain's MX hosts to
-detect new domains whose mail is routed to a listed disposable provider, and the
-registration date of its registered domain over RDAP. Unlisted data stays
+domain snapshots provide independent disposable, free-subdomain, public-mailbox,
+email-relay and scoped referrer-spam evidence, including recently monitored provider
+domains, provenance, expiry and exact reviewed disputes, plus typo suggestions for
+public mailbox domains. The API looks up each domain's MX hosts to name its mail
+provider and detect new domains whose mail is routed to a listed disposable
+provider, and the registration date of its registered domain over RDAP. Unlisted data stays
 unknown, not clean. IP country estimates use an optional local DB-IP Country Lite
 database, with provenance, expiry and automatic refresh in the Helm chart; they
 do not establish a person's location. Optional local network snapshots add
