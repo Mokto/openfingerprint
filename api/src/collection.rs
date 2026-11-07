@@ -329,6 +329,7 @@ pub async fn collect(
     {
         return Err(ApiError::invalid());
     }
+    input.signals = crate::check::open(&input.signals);
     let initial =
         serde_json::to_value(check_signals(input.signals.clone())).map_err(|_| unavailable())?;
     if initial["status"] == "invalid_input"

@@ -41,7 +41,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 const directory = '.test-results/identification';
 await mkdir(directory, { recursive: true });
 const plan = {
-  format: 1, study: randomUUID(), schema: 5,
+  format: 1, study: randomUUID(), schema: 1,
   build: createHash('sha256').update(await readFile('sdk/dist/index.js')).digest('hex'),
   targets: [
     { browser: randomUUID(), device: randomUUID(), cohort: 'real_device', platform: 'ios', family: 'safari', deviceClass: 'phone' },
@@ -143,7 +143,7 @@ privacy settings, mode changes, browser versions and non-returning participants 
 A real result needs an audited cohort, actual follow-up time and an appropriate sampling plan.
 
 Plans are bounded to 500 browser targets and 32 rounds, with consecutive round IDs, random
-UUID labels, schema 5 and one bundle digest. CLI files are limited to 1 MiB for the plan and
+UUID labels, schema 1 and one bundle digest. CLI files are limited to 1 MiB for the plan and
 32 MiB for JSONL, with 8 KiB records. Mixed builds/studies, unknown labels, invalid fields and
 duplicates fail the report without echoing private values.
 

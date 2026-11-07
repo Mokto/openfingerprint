@@ -116,7 +116,9 @@ await mkdir(dirname(output), { recursive: true });
 const checkpoint = () => writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
 
 function valid(r) {
-	assert.equal(r.version, 5);
+	assert.equal(r.version, 1);
+	assert(typeof r.token === 'string' && r.token.length > 100 && /^[\w-]+$/.test(r.token));
+	assert(!r.token.includes('fingerprint') && (!r.fingerprint || !r.token.includes(r.fingerprint)));
 	assert(Array.isArray(r.excluded));
 	assert(r.fingerprint === null || /^[0-9a-f]{64}$/.test(r.fingerprint));
 	assert(r.coreFingerprint === null || /^[0-9a-f]{64}$/.test(r.coreFingerprint));
@@ -357,12 +359,12 @@ try {
 			const hints = Object.entries(a.hints)
 				.filter(([name]) => !a.excluded.includes(name))
 				.sort(order);
-			const canonical = 'stealth-agent:5\0' + JSON.stringify({ components, hints });
+			const canonical = 'stealth-agent:1\0' + JSON.stringify({ components, hints });
 			assert.equal(a.fingerprint, createHash('sha256').update(canonical).digest('hex'));
 			assert.equal(
 				a.coreFingerprint,
 				createHash('sha256')
-					.update('stealth-core:5\0' + JSON.stringify(components))
+					.update('stealth-core:1\0' + JSON.stringify(components))
 					.digest('hex')
 			);
 			report.checks.push({
@@ -437,7 +439,7 @@ try {
 			assert.equal(
 				batched.candidates,
 				96,
-				'The schema-4 catalogue must still test all 96 font families'
+				'The font catalogue must still test all 96 font families'
 			);
 			assert.equal(
 				batched.maxCallsInSlice,
@@ -1121,7 +1123,7 @@ try {
 				const original = crypto.subtle.digest.bind(crypto.subtle);
 				window.aggregateSeen = false;
 				crypto.subtle.digest = (algorithm, data) => {
-					if (new TextDecoder().decode(data).startsWith('stealth-agent:5')) {
+					if (new TextDecoder().decode(data).startsWith('stealth-agent:1')) {
 						window.aggregateSeen = true;
 						return new Promise(() => {});
 					}

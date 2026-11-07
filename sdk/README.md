@@ -91,15 +91,15 @@ only that marker, not arbitrary localStorage data. Blocked storage returns `null
 ### Automatic automation observations
 
 Every `collect()` result and `onIdentity` snapshot includes `automation`.
-Forward `{ signals: result }` to a compatible `/v1/check` to receive the evaluation
-inside `response.signals.automation`. No opt-in or separate call is needed.
-Automation remains outside fingerprint hashes, so identity schema 5 is unchanged.
+Forward `{ signals: result.token }` to a compatible `/v1/check` to receive the evaluation
+in `response.automation` (`response.signals.automation` with `detail: true`). No opt-in or separate call is needed.
+Automation remains outside fingerprint hashes, so the identity schema is unchanged.
 Deploy the compatible API first: older versions reject this additional SDK field.
 `collectAutomation()` remains available as a synchronous browser-only helper.
 
 | Field | Observation |
 | --- | --- |
-| `version` | Always `2`, independent of fingerprint schema 5. |
+| `version` | Always `2`, independent of the fingerprint schema. |
 | `webdriver` | The boolean `navigator.webdriver` value. |
 | `headlessUserAgent` | A `HeadlessChrome/` token in the user-agent string. |
 | `seleniumArtifacts` | Presence of `__webdriver_evaluate`, `__selenium_evaluate`, `__webdriver_script_fn` or `__selenium_unwrapped` on `document`. |
@@ -253,7 +253,12 @@ wall-time guarantee or a recovery mechanism for missing identities.
 
 ## Result and schema
 
-Version **0.6.0**, result **schema 5**:
+Version **0.6.0**, result **schema 1**:
+
+- `token`: one opaque string encoding the whole result. Send this to the backend
+  (and `identify()` does) instead of the fields below. It is obfuscated, not
+  encrypted: anyone with this package can decode it, and a determined attacker can
+  forge one.
 
 - `fingerprint`: full SHA-256 over selected component and environment-hint hashes.
 - `coreFingerprint`: separately domain-separated hash of selected rendering probes;
@@ -291,18 +296,10 @@ fallback metrics remain separate. Temporary frames are removed on failure/abort.
 
 ### Compatibility
 
-Hash domains (`stealth-agent:5`, `stealth-core:5`) and the optional marker
+Hash domains (`stealth-agent:1`, `stealth-core:1`) and the optional marker
 namespace (`stealth:`) intentionally retain their original `stealth` spelling.
 Renaming the project must not silently change existing IDs or markers. Compare IDs
 only within the same schema; any change to identity inputs requires versioning.
-
-Schema 5 (version 0.6.0) changes only the locale hint: it uses the primary
-`navigator.language`, time-zone name and resolved `Intl` locale. It no longer
-includes the full `navigator.languages` list, which Chrome incognito and Safari
-reduce to one entry, or the current UTC offset, which changes at daylight-saving
-transitions. Probes, canvas/font/GPU/audio inputs and the core ID inputs are
-unchanged, but every full and core ID differs from schema 4 because the hash domain
-changes. Schema-4 history does not match schema-5 IDs.
 
 ## Tests and reference comparison
 

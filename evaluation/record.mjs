@@ -30,7 +30,7 @@ export function validateSample(value) {
     const time = typeof value.at === 'string' ? Date.parse(value.at) : NaN;
     check(Number.isFinite(time) && new Date(time).toISOString() === value.at, 'Invalid sample time');
     check(['collected', 'failed'].includes(value.status), 'Invalid collection status');
-    check(value.schema === (value.status === 'collected' ? 5 : null), 'Unsupported identity schema');
+    check(value.schema === (value.status === 'collected' ? 1 : null), 'Unsupported identity schema');
     for (const field of ['fingerprint', 'coreFingerprint']) {
         check(value[field] === null || (typeof value[field] === 'string' && hash.test(value[field])), 'Invalid identity digest');
     }
@@ -53,7 +53,7 @@ export async function capture(value, collect) {
     const base = { ...value, format: 1, at: new Date().toISOString() };
     try {
         const result = await collect();
-        check(result.version === 5 && Array.isArray(result.excluded), 'Unsupported SDK result');
+        check(result.version === 1 && Array.isArray(result.excluded), 'Unsupported SDK result');
         for (const map of [result.components, result.hints]) {
             check(map !== null && typeof map === 'object' && !Array.isArray(map)
                 && Object.values(map).every(value => typeof value === 'string' && hash.test(value)), 'Invalid SDK probe hashes');
