@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.0](https://github.com/Mokto/openfingerprint/compare/api-v0.9.0...api-v0.10.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** /v1/check response keys are camelCase (mxLookup, mxProviders, publicMailbox, freeSubdomain, registeredAtUnix, countryCode, ruleVersion, unavailableProbes, ...), and did_you_mean is now suggestedDomain. Enumerated values stay snake_case. /v1/verify and the collection envelope are unchanged.
+
+### Features
+
+* add canvas and audio tampering indicators, separate from automation ([#54](https://github.com/Mokto/openfingerprint/issues/54)) ([a22c26f](https://github.com/Mokto/openfingerprint/commit/a22c26f10bd267e821beaaecdbf21316eb137ad2))
+* **api:** accept a full email address and report role accounts ([#55](https://github.com/Mokto/openfingerprint/issues/55)) ([676aa4d](https://github.com/Mokto/openfingerprint/commit/676aa4d582e70e2928307fe12f0ceaf92420c569))
+* **api:** request and per-step latency histograms for /v1/check ([#57](https://github.com/Mokto/openfingerprint/issues/57)) ([f596b08](https://github.com/Mokto/openfingerprint/commit/f596b0845303a386c2a673a4478f09675dff57f1))
+* **api:** return camelCase keys from /v1/check ([#59](https://github.com/Mokto/openfingerprint/issues/59)) ([22ecb56](https://github.com/Mokto/openfingerprint/commit/22ecb568a9ce981ca7231f5d0043b8b3ca284c6d))
+
 ## [0.9.0](https://github.com/Mokto/openfingerprint/compare/api-v0.8.0...api-v0.9.0) (2026-11-07)
 
 
