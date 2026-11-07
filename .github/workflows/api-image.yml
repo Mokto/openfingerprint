@@ -60,40 +60,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24'
-      - run: |
-          docker buildx build --load --provenance=false --platform "linux/$ARCH" \
-            --label "org.opencontainers.image.version=$VERSION" \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            -f api/Dockerfile -t "$IMAGE:sha-$GITHUB_SHA-$ARCH" .
-          node api/test.mjs --image "$IMAGE:sha-$GITHUB_SHA-$ARCH"
-      - name: Build and smoke-test the data updater against the live public sources
-        run: |
-          docker buildx build --load --provenance=false --platform "linux/$ARCH" \
-            --label "org.opencontainers.image.version=$VERSION" \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --build-arg "API_IMAGE=$IMAGE:sha-$GITHUB_SHA-$ARCH" \
-            -f api/updater.Dockerfile -t "$UPDATER:sha-$GITHUB_SHA-$ARCH" .
-          out="$(mktemp -d)"
-          chmod 777 "$out"
-          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
-            -v "$out:/out" "$UPDATER:sha-$GITHUB_SHA-$ARCH" --output /out/domains.json
-          node -e 'const d = require(process.argv[1]); if (d.version !== 1 || d.sources.length < 7) process.exit(1)' "$out/domains.json"
-          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
-            --entrypoint /nodejs/bin/node -v "$out:/out" "$UPDATER:sha-$GITHUB_SHA-$ARCH" \
-            /app/update-country-data.mjs --output /out/country.mmdb
-          test -s "$out/country.mmdb"
-      - name: Build and smoke-test the network updater against licensed public sources
-        run: |
-          docker buildx build --load --provenance=false --platform "linux/$ARCH" \
-            --label "org.opencontainers.image.version=$VERSION" \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            -f api/Dockerfile --target network-updater -t "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH" .
-          out="$(mktemp -d)"
-          chmod 777 "$out"
-          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
-            -v "$out:/out" "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH" --output /out/network.json
-          docker run --rm --read-only --network none --cap-drop=ALL \
-            -v "$out:/out:ro" "$IMAGE:sha-$GITHUB_SHA-$ARCH" --validate-network-data /out/network.json
+      - name: Build and smoke-test the API, domain-updater and network-updater images
+        run: bash api/build-images.sh "$IMAGE:sha-$GITHUB_SHA-$ARCH" "$UPDATER:sha-$GITHUB_SHA-$ARCH" "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH"
       - env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
