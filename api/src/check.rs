@@ -974,7 +974,8 @@ mod tests {
     fn compact_responses_keep_verdicts_and_drop_provenance() {
         let mut response = serde_json::json!({
             "signals": {"status":"ok","fingerprint":"abc","evidence":{},
-                "automation":{"status":"detected","ruleVersion":2,"source":"client_reported","indicators":["webdriver"],"unavailableProbes":[]}},
+                "automation":{"status":"detected","ruleVersion":2,"source":"client_reported","indicators":["webdriver"],"unavailableProbes":[]},
+                "tampering":{"status":"detected","rule_version":1,"source":"client_reported","indicators":["canvas_readback_altered"],"unavailable_probes":[]}},
             "email": {"status":"checked","roleAccount":false},
             "domain": {"status":"ok","disposable":{"value":true,"status":"listed","scope":"s","sources":[]},
                 "spam":{"value":null,"status":"unknown"},
@@ -990,6 +991,7 @@ mod tests {
             serde_json::json!({
                 "fingerprint":"abc",
                 "automation":{"detected":true,"indicators":["webdriver"]},
+                "tampering":{"detected":true,"indicators":["canvas_readback_altered"]},
                 "email":{"disposable":true,"free":false,"mx":true,"role":false},
                 "ip":{"country":"dk","tor":false}
             })
