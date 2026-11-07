@@ -6,7 +6,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tor, hosting, update, validate } from './update-network-data.mjs';
+import { tor, hosting, vpn, datacenter, proxy, update, validate } from './update-network-data.mjs';
 
 const directory = await mkdtemp(resolve(tmpdir(), 'openfingerprint-network-check-'));
 const path = resolve(directory, 'network.json');
@@ -18,8 +18,13 @@ const meta = (id, license, lifetime) => ({ id, license, license_url: 'https://ex
 const snapshot = {
     version: 1,
     tor: { metadata: meta('tor_exit', 'CC0-1.0', 3600), entries: ['8.8.8.8', '2606:4700:4700::1111'].map(ip => ({ ip, observed_at_unix: now - 60 })) },
-    hosting: { metadata: meta('cloud_ranges', 'MIT', 86400), entries: [{ network: '8.8.8.0/24', provider: 'Test Cloud' }, { network: '2606:4700::/32', provider: 'IPv6 Cloud' }] }
+    hosting: { metadata: meta('cloud_ranges', 'MIT', 86400), entries: [{ network: '8.8.8.0/24', provider: 'Test Cloud' }, { network: '2606:4700::/32', provider: 'IPv6 Cloud' }] },
+    vpn: { metadata: meta('vpn_ranges', 'MIT', 86400), entries: [{ network: '8.8.8.0/25' }, { network: '2606:4700:4700::/48' }] },
+    datacenter: { metadata: meta('datacenter_ranges', 'MIT', 86400), entries: [{ network: '8.8.0.0/16' }] },
+    proxy: { metadata: meta('open_proxies', 'MIT', 3600), entries: [{ ip: '8.8.8.8', protocols: ['http', 'socks5'] }] }
 };
+const x4bLicense = "MIT License\n\nCopyright (c) 2026 X4B (Mathew Heard)\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n";
+const proxyLicense = "MIT License\n\nCopyright (c) 2022 monosans\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n";
 const servers = [];
 async function start(extra = {}) {
     const env = { ...process.env };
@@ -60,7 +65,7 @@ try {
     const fetchBytes = async url => {
         if (url.endsWith('/exit-lists/')) return Buffer.from(`<a href="${name}">latest</a>`);
         if (url.endsWith(name)) return Buffer.from(exitBody);
-        if (url.includes('/commits?')) return Buffer.from(JSON.stringify([{ sha: 'a'.repeat(40), commit: { committer: { date } } }]));
+        if (url.includes('/commits?')) return Buffer.from(JSON.stringify([{ sha: 'a'.repeat(40), commit: { committer: { date: date.replace('.000Z', 'Z') } } }]));
         if (url.endsWith('LICENSE')) return Buffer.from('unreviewed license');
         throw new Error('source unavailable');
     };
@@ -82,8 +87,34 @@ try {
     ]);
     await assert.rejects(tor(async url => url.endsWith('/exit-lists/') ? fetchBytes(url) : Buffer.from('ExitAddress invalid 2026-11-07 00:00:00'), now));
     await assert.rejects(hosting(fetchBytes, now), /license changed/);
+    const listSource = (readme, files) => async url => {
+        if (url.includes('/commits?')) return fetchBytes(url);
+        if (url.endsWith('README.md')) return Buffer.from(readme);
+        const file = Object.keys(files).find(name => url.endsWith(name));
+        if (file) return Buffer.from(files[file]);
+        throw new Error('source unavailable');
+    };
+    const readme = year => `# License\n\n\`\`\`\n${x4bLicense.replace('2026', year)}\`\`\`\n`;
+    const lists = { 'vpn/ipv4.txt': '1.2.3.0/24\n1.2.4.0/24\n1.2.3.0/24\n', 'vpn/ipv6.txt': '2001:4860::/32\n', 'datacenter/ipv4.txt': '5.6.0.0/16\n', 'datacenter/ipv6.txt': '\n2a00::/12\n' };
+    const vpnResult = await vpn(listSource(readme('2030'), lists), now);
+    assert.deepEqual(vpnResult.entries, [{ network: '1.2.3.0/24' }, { network: '1.2.4.0/24' }, { network: '2001:4860::/32' }]);
+    assert.equal(vpnResult.metadata.id, 'vpn_ranges');
+    assert.equal(vpnResult.metadata.expires_at_unix - vpnResult.metadata.updated_at_unix, 7 * 86400);
+    assert.deepEqual((await datacenter(listSource(readme('2026'), lists), now)).entries, [{ network: '2a00::/12' }, { network: '5.6.0.0/16' }]);
+    await assert.rejects(vpn(listSource(readme('2026').replace('Permission', 'Changed'), lists), now), /license changed/);
+    await assert.rejects(vpn(listSource(readme('2026'), { ...lists, 'vpn/ipv4.txt': '1.2.3.0\n' }), now), /Invalid list CIDR/);
+    await assert.rejects(vpn(listSource(readme('2026'), { ...lists, 'vpn/ipv6.txt': '1.2.3.0/24\n' }), now), /Invalid list CIDR/);
+    const proxyFetch = body => async url => url.includes('/commits?') ? fetchBytes(url) : url.endsWith('LICENSE') ? Buffer.from(proxyLicense) : url.endsWith('all.txt') ? Buffer.from(body) : Promise.reject(new Error('source unavailable'));
+    assert.deepEqual((await proxy(proxyFetch('http://9.9.9.9:80\nsocks5://9.9.9.9:1080\nsocks4://u:p@1.1.1.1:3629\n\n'), now)).entries, [
+        { ip: '1.1.1.1', protocols: ['socks4'] },
+        { ip: '9.9.9.9', protocols: ['http', 'socks5'] }
+    ]);
+    await assert.rejects(proxy(proxyFetch('ftp://9.9.9.9:21\n'), now), /Invalid proxy entry/);
+    await assert.rejects(proxy(proxyFetch('http://not-an-ip:80\n'), now), /Invalid proxy entry/);
+    await assert.rejects(proxy(proxyFetch('\n'), now), /Invalid proxy count/);
+    await assert.rejects(proxy(async url => url.endsWith('LICENSE') ? Buffer.from('other') : fetchBytes(url), now), /license changed/);
     const result = await update(path, { fetchBytes, now });
-    assert.deepEqual(result.failures, ['hosting', 'asn']);
+    assert.deepEqual(result.failures, ['hosting', 'vpn', 'datacenter', 'proxy', 'asn']);
     const refreshed = JSON.parse(await readFile(path));
     assert.equal(refreshed.hosting.metadata.expires_at_unix, snapshot.hosting.metadata.expires_at_unix);
     assert.equal(refreshed.tor.metadata.updated_at_unix, now - 1800);
@@ -130,6 +161,9 @@ try {
     assert.equal(matched.tor.value, true);
     assert.deepEqual(matched.hosting.value.providers, ['Test Cloud']);
     assert.equal(matched.asn.value, null);
+    assert.deepEqual(matched.vpn.value, { scope: 'listed_vpn_range' });
+    assert.deepEqual(matched.datacenter.value, { scope: 'listed_datacenter_range' });
+    assert.deepEqual(matched.proxy.value, { protocols: ['http', 'socks5'], scope: 'listed_open_proxy' });
     assert.equal(matched.source, 'backend_supplied');
     assert.equal((await check(direct, '::ffff:8.8.8.8')).tor.value, true);
     assert.equal((await check(direct, '2606:4700:4700::1111')).tor.value, true);
@@ -137,6 +171,12 @@ try {
     assert.equal(absent.status, 'unknown');
     assert.equal(absent.hosting.value, null);
     assert.equal(absent.tor.status, 'not_listed');
+    assert.equal(absent.vpn.status, 'not_listed');
+    assert.equal(absent.proxy.status, 'not_listed');
+    const outside = await check(direct, '8.8.9.9');
+    assert.equal(outside.vpn.value, null);
+    assert.deepEqual(outside.datacenter.value, { scope: 'listed_datacenter_range' });
+    assert.deepEqual((await check(direct, '2606:4700:4700::1')).vpn.value, { scope: 'listed_vpn_range' });
     assert.equal((await check(direct, '8.8.8.8:80')).status, 'invalid_input');
     assert.equal((await check(direct, '192.168.1.1')).reason, 'non_global_ip');
     const stale = structuredClone(snapshot);

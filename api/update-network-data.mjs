@@ -81,6 +81,51 @@ export async function hosting(fetchBytes, now) {
     }
     return { metadata: { ...metadata('cloud_ranges', 'MIT', `https://github.com/${repo}/blob/${commit.sha}/LICENSE`, 'Tobi, public-cloud-provider-ip-ranges (derived published provider ranges)', `https://github.com/${repo}/blob/${commit.sha}/data/providers/all.json`, commit.sha, epoch(commit.commit.committer.date), now, 7 * day), license_text: license }, entries };
 }
+const x4b = 'X4BNet/lists_vpn';
+const x4bLicenseHash = '05edab1ea40a7cc9d60581c3db0c7f200bd676ebf6ed730628316cfdfe07e255';
+const x4bAttribution = 'X4B (Mathew Heard), lists_vpn; ASN data from IPLocate.io (CC BY-SA 4.0)';
+async function x4bRanges(fetchBytes, now, id, directory) {
+    const commits = JSON.parse(String(await fetchBytes(`https://api.github.com/repos/${x4b}/commits?path=output/${directory}&per_page=1`)));
+    const commit = commits[0];
+    assert(/^[a-f0-9]{40}$/.test(commit?.sha), 'Invalid list source revision');
+    const base = `https://raw.githubusercontent.com/${x4b}/${commit.sha}/`;
+    const readme = String(await fetchBytes(base + 'README.md'));
+    const license = /# License\n\n[^`]*```\n([\s\S]*?)```/.exec(readme)?.[1];
+    assert(license && sha(license.replace(/Copyright \(c\) \d{4}/, 'Copyright (c) YEAR')) === x4bLicenseHash, 'List source license changed: review required');
+    const entries = new Set();
+    for (const family of ['ipv4', 'ipv6']) {
+        for (const line of String(await fetchBytes(`${base}output/${directory}/${family}.txt`)).split('\n')) {
+            const cidr = line.trim();
+            if (!cidr) continue;
+            const [ip, prefix, extra] = cidr.split('/');
+            assert(isIP(ip) === (family === 'ipv4' ? 4 : 6) && extra === undefined && /^\d{1,3}$/.test(prefix) && +prefix > 0 && +prefix <= (family === 'ipv4' ? 32 : 128), 'Invalid list CIDR');
+            entries.add(cidr);
+        }
+    }
+    assert(entries.size > 0 && entries.size <= 200000, 'Invalid list range count');
+    return { metadata: { ...metadata(id, 'MIT', `https://github.com/${x4b}/blob/${commit.sha}/README.md`, x4bAttribution, `https://github.com/${x4b}/tree/${commit.sha}/output/${directory}`, commit.sha, epoch(commit.commit.committer.date), now, 7 * day), license_text: license }, entries: [...entries].sort().map(network => ({ network })) };
+}
+export const vpn = (fetchBytes, now) => x4bRanges(fetchBytes, now, 'vpn_ranges', 'vpn');
+export const datacenter = (fetchBytes, now) => x4bRanges(fetchBytes, now, 'datacenter_ranges', 'datacenter');
+const proxyRepo = 'monosans/proxy-list';
+const proxyLicenseHash = 'f0214b6cf7a99766c90f7007fbddcc8df43df7ab6299c40c84c3ae10458d58ca';
+export async function proxy(fetchBytes, now) {
+    const commits = JSON.parse(String(await fetchBytes(`https://api.github.com/repos/${proxyRepo}/commits?path=proxies/all.txt&per_page=1`)));
+    const commit = commits[0];
+    assert(/^[a-f0-9]{40}$/.test(commit?.sha), 'Invalid proxy source revision');
+    const base = `https://raw.githubusercontent.com/${proxyRepo}/${commit.sha}/`;
+    const license = String(await fetchBytes(base + 'LICENSE'));
+    assert(sha(license) === proxyLicenseHash, 'Proxy source license changed: review required');
+    const found = new Map();
+    for (const line of String(await fetchBytes(base + 'proxies/all.txt')).split('\n')) {
+        if (!line.trim()) continue;
+        const match = /^(http|socks4|socks5):\/\/(?:[^@/]+@)?([^:/@]+):\d{1,5}$/.exec(line.trim());
+        assert(match && isIP(match[2]), 'Invalid proxy entry');
+        found.set(match[2], new Set([...(found.get(match[2]) ?? []), match[1]]));
+    }
+    assert(found.size > 0 && found.size <= 100000, 'Invalid proxy count');
+    return { metadata: { ...metadata('open_proxies', 'MIT', `https://github.com/${proxyRepo}/blob/${commit.sha}/LICENSE`, 'monosans, proxy-list (checked public proxy addresses)', `https://github.com/${proxyRepo}/blob/${commit.sha}/proxies/all.txt`, commit.sha, epoch(commit.commit.committer.date), now, 6 * 3600), license_text: license }, entries: [...found.keys()].sort().map(ip => ({ ip, protocols: [...found.get(ip)].sort() })) };
+}
 async function asn(fetchBytes, now, directory) {
     const date = new Date(now * 1000);
     let url, compressed, updated;
@@ -147,7 +192,7 @@ export async function update(output, { fetchBytes = download, now = Math.floor(D
         try { await check(output, signal); baselineValid = true; } catch {}
         const failures = [];
         let refreshed = 0;
-        for (const [id, load] of [['tor', tor], ['hosting', hosting], ['asn', (fetch, time) => asn(fetch, time, dirname(output))]]) {
+        for (const [id, load] of [['tor', tor], ['hosting', hosting], ['vpn', vpn], ['datacenter', datacenter], ['proxy', proxy], ['asn', (fetch, time) => asn(fetch, time, dirname(output))]]) {
             signal?.throwIfAborted();
             try {
                 if (id === 'asn' && baselineValid && result.asn && result.asn.fetched_at_unix <= now && now - result.asn.fetched_at_unix < day && result.asn.expires_at_unix > now) continue;
@@ -169,7 +214,7 @@ export async function update(output, { fetchBytes = download, now = Math.floor(D
         await check(temporary, signal);
         signal?.throwIfAborted();
         await rename(temporary, output);
-        return { failures, sources: ['tor', 'hosting', 'asn'].filter(id => result[id]) };
+        return { failures, sources: ['tor', 'hosting', 'vpn', 'datacenter', 'proxy', 'asn'].filter(id => result[id]) };
     } finally {
         // Never unlink the lock file: another writer may already be locking the same inode.
         if (lock.exitCode === null && lock.signalCode === null) {

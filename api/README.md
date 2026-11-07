@@ -410,14 +410,18 @@ their country-only meaning. Independent network evidence is returned under
 `ip.network`, with `source: "backend_supplied"`: the server credential authenticates the caller,
 not the IP's origin. Never pass a browser-provided IP or the application's own IP.
 
-For public addresses, the independent `tor`, `hosting` and `asn` facts contain
+For public addresses, the independent `tor`, `hosting`, `asn`, `vpn`, `datacenter` and `proxy` facts contain
 `value`, `status` and `source` provenance. A Tor match is `true`; a hosting
 match is `{"providers":["AWS"],"scope":"published_cloud_range"}`; an ASN match
 is `{"number":15169,"organization":"Google LLC"}` (illustrative values).
 `ip.network.status: "ok"` means at least one network fact is known, not that the
 visitor is safe; it does not change `ip.status` or the country estimate.
-No match yields null, never false or a residential/human verdict. The independent
-`vpn` and `proxy` facts remain null/`not_configured`.
+A `vpn` match is `{"scope":"listed_vpn_range"}`, a `datacenter` match is
+`{"scope":"listed_datacenter_range"}` and a `proxy` match is
+`{"protocols":["http","socks5"],"scope":"listed_open_proxy"}`.
+No match yields null, never false or a residential/human verdict. Facts for a source
+that is not loaded report `not_configured`. Residential proxies and VPNs missing from the
+lists are not detected, and datacenter ranges include VPN ranges as the upstream defines them.
 
 Fact statuses include `matched`, `not_listed`, `not_in_database`,
 `not_configured`, `invalid_data`, `stale_data`, `clock_skew` and
@@ -429,6 +433,9 @@ relabel old data as newly updated.
 | --- | --- | --- | --- |
 | [Tor CollecTor exit lists](https://collector.torproject.org/recent/exit-lists/) | Recently measured exit addresses only, not relay listening addresses or proof of abuse. Each observation expires at 24 hours, even while its snapshot is fresh. Incomplete coverage, including IPv6; absence stays unknown. | [CC0](https://metrics.torproject.org/about.html) | 3 hours from the collected list timestamp. |
 | [Published cloud ranges](https://github.com/tobilg/public-cloud-provider-ip-ranges) | Source-labelled provider ranges, not a physical datacenter/device classifier. Includes shared/CDN infrastructure; not all hosting providers are covered. No organization-name or whole-ASN heuristics. | MIT; exact license pinned and retained in the manifest. | 7 days from the last commit changing the source data file. |
+| [X4BNet lists_vpn](https://github.com/X4BNet/lists_vpn) `output/vpn` | Netblocks of common VPN providers, built by the project from ASN data. A match shows the address belongs to a listed VPN network, not that this visitor is hiding anything. Incomplete; unlisted VPNs stay unknown. | MIT (the project's statement; its ASN input, IPLocate, is CC BY-SA 4.0 and is credited in the manifest). The license text is pinned and retained. | 7 days from the last commit changing the lists. |
+| X4BNet lists_vpn `output/datacenter` | Networks that are "not an eyeball network": VPN and datacenter/hosting ASNs, selected partly by name keywords. Overlaps `hosting` and `vpn`; shared or CDN space is included. | Same as above. | 7 days. |
+| [monosans/proxy-list](https://github.com/monosans/proxy-list) | Public HTTP, SOCKS4 and SOCKS5 proxy addresses that the upstream tested as working. Only the listening address is matched, without port. A proxy can exit through another address, and these lists change by the hour. | MIT; exact license pinned and retained in the manifest. | 6 hours from the last commit changing the list. |
 | [DB-IP ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) | Monthly IPv4/IPv6 ASN number and organization, with reduced coverage/accuracy. ASN is not visitor identity, geolocation or hosting proof. | CC BY 4.0. | 45 days from the earlier of the release month and actual MMDB build time. |
 
 **DB-IP attribution:** pages that display or use its results must link to
