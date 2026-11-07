@@ -29,6 +29,12 @@ struct Entry {
     #[serde(default)]
     #[allow(dead_code)]
     consumer_evidence: String,
+    /// Hosts that only forward mail to the users of an email-alias service.
+    #[serde(default)]
+    relay: Vec<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    relay_evidence: String,
     /// Why a suffix the provider does not document is still the provider's.
     #[serde(default)]
     #[allow(dead_code)]
@@ -60,14 +66,10 @@ static PROVIDERS: LazyLock<Vec<(&'static str, Provider)>> = LazyLock::new(|| {
         .collect()
 });
 
-static CONSUMER: LazyLock<Vec<Entry>> = LazyLock::new(|| {
+static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
     let table: Table = serde_json::from_str(include_str!("../data/mx-providers.json"))
         .expect("bundled MX provider table is validated by tests");
-    table
-        .providers
-        .into_iter()
-        .filter(|e| !e.consumer.is_empty())
-        .collect()
+    table.providers
 });
 
 fn under(host: &str, suffix: &str) -> bool {
@@ -80,12 +82,22 @@ fn under(host: &str, suffix: &str) -> bool {
 /// The provider whose shared consumer mail infrastructure receives all of these MX hosts. Such a
 /// domain's addresses belong to unrelated people, like the provider's own consumer domains.
 pub fn consumer(hosts: &[String]) -> Option<&'static str> {
+    all_on(hosts, |e, host| {
+        e.consumer.iter().any(|s| under(host, s)) && !e.business.iter().any(|s| under(host, s))
+    })
+}
+
+/// The email-alias service whose forwarding hosts receive all of these MX hosts: every address
+/// at the domain is an alias that forwards to someone else's mailbox.
+pub fn relay(hosts: &[String]) -> Option<&'static str> {
+    all_on(hosts, |e, host| e.relay.iter().any(|s| under(host, s)))
+}
+
+fn all_on(hosts: &[String], on: impl Fn(&Entry, &str) -> bool) -> Option<&'static str> {
     let slug_of = |host: &String| {
-        CONSUMER.iter().find_map(|e| {
-            (e.consumer.iter().any(|s| under(host, s))
-                && !e.business.iter().any(|s| under(host, s)))
-            .then_some(e.slug.as_str())
-        })
+        TABLE
+            .iter()
+            .find_map(|e| on(e, host).then_some(e.slug.as_str()))
     };
     let first = slug_of(hosts.first()?)?;
     hosts
@@ -145,7 +157,7 @@ mod tests {
         }
         assert!(PROVIDERS.len() == suffixes.len());
         for e in &table.providers {
-            for s in e.consumer.iter().chain(&e.business) {
+            for s in e.consumer.iter().chain(&e.business).chain(&e.relay) {
                 assert!(
                     e.suffixes.iter().any(|own| under(s, own)),
                     "{s} is outside {}'s own suffixes",
@@ -155,6 +167,12 @@ mod tests {
             assert_eq!(
                 e.consumer.is_empty(),
                 e.consumer_evidence.is_empty(),
+                "{}",
+                e.slug
+            );
+            assert_eq!(
+                e.relay.is_empty(),
+                e.relay_evidence.is_empty(),
                 "{}",
                 e.slug
             );
@@ -207,6 +225,28 @@ mod tests {
             &[],
         ] {
             assert_eq!(consumer(&hosts(not)), None, "{not:?}");
+        }
+    }
+
+    #[test]
+    fn relay_infrastructure_needs_every_mx_host() {
+        let hosts = |h: &[&str]| h.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            relay(&hosts(&["mx1.simplelogin.co", "mx2.simplelogin.co"])),
+            Some("simplelogin")
+        );
+        assert_eq!(
+            relay(&hosts(&["mail.anonaddy.me", "mail2.anonaddy.me"])),
+            Some("addy")
+        );
+        for not in [
+            &["mx1.simplelogin.co", "mx.example.com"][..],
+            &["mx1.simplelogin.co", "mail.anonaddy.me"],
+            &["route1.mx.cloudflare.net"],
+            &["mx1.improvmx.com"],
+            &[],
+        ] {
+            assert_eq!(relay(&hosts(not)), None, "{not:?}");
         }
     }
 

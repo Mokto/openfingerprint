@@ -316,8 +316,13 @@
         "simplelogin.co"
       ],
       "evidence_urls": [
+        "https://simplelogin.io/docs/custom-domain/registrars/namecheap/namecheap/",
         "https://simplelogin.io/faq/"
-      ]
+      ],
+      "relay": [
+        "simplelogin.co"
+      ],
+      "relay_evidence": "SimpleLogin is an email-alias service: custom domains point their MX at mx1/mx2.simplelogin.co, which forward each alias to its owner's mailbox. Proton Pass custom-domain aliases use the same service."
     },
     {
       "slug": "addy",
@@ -326,8 +331,13 @@
         "anonaddy.me"
       ],
       "evidence_urls": [
-        "https://addy.io/faq/"
-      ]
+        "https://addy.io/faq/",
+        "https://addy.io/help/adding-a-custom-domain/"
+      ],
+      "relay": [
+        "anonaddy.me"
+      ],
+      "relay_evidence": "addy.io is an email-alias service: custom domains point their MX at mail/mail2.anonaddy.me, which forward each alias to its owner's mailbox."
     },
     {
       "slug": "namecheap",

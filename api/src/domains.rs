@@ -91,6 +91,19 @@ impl DomainCheck {
     }
 }
 
+/// An otherwise unlisted domain whose MX hosts all belong to one provider's consumer (or alias)
+/// infrastructure, so its addresses are like those at the provider's own domains.
+fn mx_inferred(fact: Fact, provider: Option<&str>) -> Fact {
+    match provider {
+        Some(_) if fact.status == "not_listed" => Fact {
+            value: Some(true),
+            status: "mx_listed",
+            ..fact
+        },
+        _ => fact,
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all(serialize = "camelCase"))]
 struct Facts {
@@ -303,11 +316,14 @@ impl DomainData {
                 "free_subdomain_namespace",
             ),
             spam: self.fact(domain, now, Category::ReferrerSpam, "referrer_spam"),
-            public_mailbox: self.consumer_fact(
+            public_mailbox: mx_inferred(
                 self.fact(domain, now, Category::PublicMailbox, "public_mailbox"),
-                mx,
+                crate::providers::consumer(mx),
             ),
-            relay: self.fact(domain, now, Category::Relay, "email_relay"),
+            relay: mx_inferred(
+                self.fact(domain, now, Category::Relay, "email_relay"),
+                crate::providers::relay(mx),
+            ),
             did_you_mean: None,
         };
         let facts = Facts {
@@ -374,18 +390,6 @@ impl DomainData {
             });
         let hit = hits.next()?;
         hits.next().is_none().then(|| hit.clone())
-    }
-
-    /// An otherwise unlisted domain whose mail goes only to a provider's consumer infrastructure.
-    fn consumer_fact(&self, fact: Fact, mx: &[String]) -> Fact {
-        match crate::providers::consumer(mx) {
-            Some(_) if fact.status == "not_listed" => Fact {
-                value: Some(true),
-                status: "mx_listed",
-                ..fact
-            },
-            _ => fact,
-        }
     }
 
     fn mx_fact(&self, fact: Fact, domain: &str, mx: &[String], now: u64) -> Fact {
