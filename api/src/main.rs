@@ -4,6 +4,7 @@ mod check;
 mod collection;
 mod country;
 mod domains;
+mod email;
 mod mailauth;
 mod metrics;
 mod mx;

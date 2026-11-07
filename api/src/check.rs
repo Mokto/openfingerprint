@@ -329,6 +329,7 @@ struct CheckRequest {
     automation: Option<serde_json::Value>,
     signals: Option<serde_json::Value>,
     domain: Option<serde_json::Value>,
+    email: Option<serde_json::Value>,
     ip: Option<serde_json::Value>,
 }
 
@@ -347,6 +348,8 @@ struct CheckResponse {
     signals: Option<SignalCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     domain: Option<crate::domains::DomainCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<crate::email::EmailCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ip: Option<IpCheck>,
 }
@@ -468,15 +471,24 @@ pub async fn check(
     let Json(input) = Json::<CheckRequest>::from_request(request, &())
         .await
         .map_err(json_error)?;
-    if input.automation.is_none()
+    let empty = input.automation.is_none()
         && input.signals.is_none()
         && input.domain.is_none()
-        && input.ip.is_none()
-    {
+        && input.email.is_none()
+        && input.ip.is_none();
+    if empty || (input.domain.is_some() && input.email.is_some()) {
         return Err(ApiError::invalid());
     }
     use crate::metrics::{Step, start, timed};
-    let domain = match input.domain {
+    let (email, domain) = match input.email.as_ref().map(crate::email::parse) {
+        Some(Some((local, domain))) => (
+            Some(crate::email::check(&local)),
+            Some(serde_json::Value::String(domain)),
+        ),
+        Some(None) => (Some(crate::email::invalid()), None),
+        None => (None, input.domain),
+    };
+    let domain = match domain {
         Some(value) => Some(timed(Step::Domain, state.check_domain(value)).await),
         None => None,
     };
@@ -490,6 +502,7 @@ pub async fn check(
             check_signals(s)
         }),
         domain,
+        email,
         ip: input.ip.map(|ip| IpCheck {
             country: {
                 let _timer = start(Step::IpCountry);

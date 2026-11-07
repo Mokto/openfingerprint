@@ -518,6 +518,22 @@ try {
     }
     console.log(`Public mailboxes (exact and consumer MX), relays (with subdomains), typo suggestions and MX providers passed (${mode}).`);
 
+    phase = `full email addresses and role accounts (${mode})`;
+    for (const [email, role, expected] of [
+        ['Support+EU@PublicMail.example', true, { public_mailbox: true }],
+        ['no-reply@relay.example', true, { relay: true }],
+        ['zq.person-7@relay.example', false, { relay: true }]
+    ]) {
+        const body = await (await request('/v1/check', authHeaders(sites[9]), { email })).json();
+        assert.deepEqual(body, { domain: domainExpected(expected), email: { status: 'checked', role_account: role } }, 'email case');
+    }
+    for (const email of ['publicmail.example', 'a@b@publicmail.example', 'a..b@publicmail.example', '"a b"@publicmail.example', 'a@localhost', 42, {}]) {
+        const body = await (await request('/v1/check', authHeaders(sites[9]), { email, ip: '192.0.2.1' })).json();
+        assert.deepEqual(Object.keys(body).sort(), ['email', 'ip'], 'Invalid addresses run no domain check');
+        assert.deepEqual(body.email, { status: 'invalid_input', reason: 'invalid_email' });
+    }
+    console.log(`Full email addresses: role accounts, domain checks of the address's domain and invalid addresses passed (${mode}).`);
+
     phase = `SPF and DMARC (${mode})`;
     for (const [domain, spf, dmarc] of [
         ['authmail.example', { status: 'found' }, { status: 'found', policy: 'reject' }],
@@ -576,7 +592,8 @@ try {
     }
     for (const body of [{}, { signals: null, domain: null, ip: null }, { automation: null }, [], null, 'not-json',
         { mx: ['mx.mail.example'] }, { domain: 'example.test', mx: ['mx.mail.example'] },
-        ...['email', 'visitor_token', 'account_id', 'userAgent', 'storageId'].map(k => ({ domain: 'example.test', [k]: 'unsolicited' }))]) {
+        { domain: 'example.test', email: 'a@example.test' },
+        ...['visitor_token', 'account_id', 'userAgent', 'storageId'].map(k => ({ domain: 'example.test', [k]: 'unsolicited' }))]) {
         const response = await request('/v1/check', authHeaders(sites[5]), body);
         assert.equal(response.status, 400);
         assert.deepEqual(await response.json(), { error: 'invalid_request' });
@@ -667,7 +684,7 @@ try {
     for (const sensitive of [
         ...sites.flatMap(site => [site.secret_key, site.site_key].filter(Boolean)),
         signals().fingerprint, signals('same', 'same', 5).fingerprint,
-        signals().components.fontPreferences, 'unsolicited', 'ExAmPlE.test.', '2001:db8::1', '192.0.2.1',
+        signals().components.fontPreferences, 'unsolicited', 'ExAmPlE.test.', 'Support+EU', 'zq.person-7', '2001:db8::1', '192.0.2.1',
         'mail.example', 'disputed.mail.example', 'child.disputed.mail.example', 'dnsmx.example', 'mx.other.example', 'rdapfound.example'
     ]) assert(!serverOutput.includes(sensitive));
     console.log('No request evidence, raw metadata or credentials appeared in server output.');
