@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.9.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.8.0...sdk-v0.9.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** compact flat /v1/check response, short IDs and opaque SDK token ([#66](https://github.com/Mokto/openfingerprint/issues/66))
+
+### Features
+
+* **api:** compact flat /v1/check response, short IDs and opaque SDK token ([#66](https://github.com/Mokto/openfingerprint/issues/66)) ([13e522f](https://github.com/Mokto/openfingerprint/commit/13e522fab1c5e9f4193eccc9cb9bebedda0c39b1))
+
 ## [0.8.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.7.0...sdk-v0.8.0) (2026-11-07)
 
 
