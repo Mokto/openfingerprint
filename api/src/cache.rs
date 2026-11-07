@@ -1,7 +1,10 @@
 use std::{
     fmt::Write as _,
     future::Future,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -12,6 +15,9 @@ const TIMEOUT: Duration = Duration::from_millis(250);
 const RESULTS: [&str; 3] = ["hit", "miss", "error"];
 // Well under the 330 s idle timeout of the bundled HAProxy, so a reused connection is never
 // one that a proxy or NAT already dropped.
+// Background writes in flight; beyond this, a write is dropped (and counted as an error) rather
+// than queueing behind a slow Redis.
+const MAX_PENDING_WRITES: usize = 64;
 const IDLE: Duration = Duration::from_secs(60);
 
 /// The Redis shared by collection state and the RDAP cache. Required: the API does not start
@@ -127,16 +133,41 @@ impl Link {
 }
 
 /// RDAP answer cache: every failure is a miss, never a failed check.
+#[derive(Clone)]
 pub struct Cache {
-    link: Link,
-    counts: [AtomicU64; 3],
+    link: Arc<Link>,
+    counts: Arc<[AtomicU64; 3]>,
+    pending: Arc<AtomicUsize>,
 }
 
 impl Cache {
     pub fn new(client: redis::Client) -> Self {
         Self {
-            link: Link::new(client),
+            link: Arc::new(Link::new(client)),
             counts: Default::default(),
+            pending: Default::default(),
+        }
+    }
+
+    /// Writes without making the caller wait: a cache write is a best-effort optimisation for
+    /// later lookups, so the request that computed the answer returns without it.
+    pub fn set_later(&self, key: String, value: String, ttl_seconds: u64) {
+        if self.pending.fetch_add(1, Ordering::Relaxed) >= MAX_PENDING_WRITES {
+            self.pending.fetch_sub(1, Ordering::Relaxed);
+            self.counts[2].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        let cache = self.clone();
+        tokio::spawn(async move {
+            cache.set(&key, &value, ttl_seconds).await;
+            cache.pending.fetch_sub(1, Ordering::Relaxed);
+        });
+    }
+
+    #[cfg(test)]
+    pub async fn flush(&self) {
+        while self.pending.load(Ordering::Relaxed) > 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     }
 
@@ -184,7 +215,7 @@ impl Cache {
         let mut out = String::from(
             "# HELP openfingerprint_rdap_cache_total RDAP cache reads by outcome, and failed writes as errors.\n# TYPE openfingerprint_rdap_cache_total counter\n",
         );
-        for (result, count) in RESULTS.iter().zip(&self.counts) {
+        for (result, count) in RESULTS.iter().zip(self.counts.iter()) {
             let _ = writeln!(
                 out,
                 "openfingerprint_rdap_cache_total{{result=\"{result}\"}} {}",
@@ -389,5 +420,36 @@ pub mod tests {
         tokio::time::sleep(Duration::from_millis(80)).await;
         assert_eq!(get(&idle).await.unwrap().as_deref(), Some("v"));
         assert_eq!(accepted(), 4, "an idle connection is replaced before use");
+    }
+
+    #[tokio::test]
+    async fn background_writes_do_not_block_the_caller_and_are_bounded() {
+        let (addr, store) = fake_redis(None).await;
+        let cache = Cache::new(client_for(&addr));
+        cache.set_later("k".into(), "v".into(), 60);
+        cache.flush().await;
+        assert_eq!(store.lock().unwrap()["k"], ("v".into(), "60".into()));
+
+        // A Redis that accepts connections but never answers.
+        let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stuck = Cache::new(client_for(&silent.local_addr().unwrap().to_string()));
+        let started = Instant::now();
+        for i in 0..MAX_PENDING_WRITES + 10 {
+            stuck.set_later(format!("k{i}"), "v".into(), 60);
+        }
+        assert!(
+            started.elapsed() < TIMEOUT / 2,
+            "callers never wait for Redis"
+        );
+        assert!(
+            stuck.metrics().contains("result=\"error\"} 10"),
+            "writes beyond the bound are dropped"
+        );
+        stuck.flush().await;
+        assert!(
+            stuck
+                .metrics()
+                .contains(&format!("result=\"error\"}} {}", MAX_PENDING_WRITES + 10))
+        );
     }
 }

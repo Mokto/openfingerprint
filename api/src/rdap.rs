@@ -180,7 +180,7 @@ impl Rdap {
             counts[i].fetch_add(1, Ordering::Relaxed);
         }
         if let Some((value, ttl)) = encode(&result) {
-            self.cache.set(&key, &value, ttl).await;
+            self.cache.set_later(key, value, ttl);
         }
         result
     }
@@ -627,6 +627,7 @@ mod tests {
             "broken.test",
         ] {
             cached.lookup(domain).await;
+            cached.cache.flush().await;
         }
         assert_eq!(cached.lookup("found.test").await, found);
         assert_eq!(
