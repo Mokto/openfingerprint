@@ -10,6 +10,8 @@ const limit = 8 * 1024 * 1024;
 let phase = 'source metadata';
 const sources = [
     { id: 'disposable_email_domains', repo: 'disposable-email-domains/disposable-email-domains', branch: 'main', path: 'disposable_email_blocklist.conf', category: 'disposable', license: 'CC0-1.0', licensePath: 'LICENSE.txt', licenseHash: '521b63b0ca6dde974084d728b652c80bd8a169c845b9c3c124f4583957b93d54' },
+    // Only domains the aggregator scraped from live temp-mail services; its copies of published lists are skipped.
+    { id: 'disposable_live_services', repo: 'disposable/disposable-email-domains', branch: 'master', path: 'domains_source_map.txt', category: 'disposable', license: 'MIT', licensePath: 'LICENSE', licenseHash: '7ce15ed3b57f1045db3ba34e3e71ae5d629ee2c766cf2035fe09990e08892ab2', maxBytes: 32 * 1024 * 1024, maxAgeDays: 3 },
     { id: 'fakefilter_recent', repo: '7c/fakefilter', branch: 'main', path: 'json/data.json', category: 'disposable', license: 'BSD-3-Clause', licensePath: 'LICENSE.md', licenseHash: '25e04934f5510427abb55d007d942a58184b095a2e40618b0a4b76b69b3da59a' },
     { id: 'is_a_dev', repo: 'is-a-dev/register', branch: 'main', path: 'README.md', domain: 'is-a.dev', category: 'free_subdomain', license: 'MIT', licensePath: 'LICENSE', licenseHash: '2ffd9de047964b8cb6e526079da1dc6c8ffd3d1691faabb6433b4100e5e2790b' },
     { id: 'is_a_bot', repo: 'free-domains/is-a.bot', branch: 'main', path: 'README.md', domain: 'is-a.bot', category: 'free_subdomain', license: 'MIT', licensePath: 'LICENSE', licenseHash: '14979e0fc8469d414ea35d1c3e08ebdd3b336ac07e55c0d089413bdcaeb88046' },
@@ -46,6 +48,18 @@ export function domains(text) {
     return [...new Set(entries)].sort();
 }
 
+// `source:domain` lines; published lists (GitHub raw files, gists, throwaway.cloud) are other
+// people's lists, the rest are temp-mail services the aggregator reads directly.
+export function liveServiceDomains(text) {
+    const listed = text.split(/\r?\n/).filter(Boolean).map(line => {
+        const at = line.lastIndexOf(':');
+        assert(at > 0, 'Invalid source map line');
+        return [line.slice(0, at), line.slice(at + 1)];
+    }).filter(([source]) => !/^https:\/\/(raw\.githubusercontent\.com|gist\.githubusercontent\.com|throwaway\.cloud)\//.test(source));
+    assert(listed.length >= 500, 'Too few live-service domains: the source map format may have changed');
+    return domains(listed.map(([, domain]) => domain).join('\n'));
+}
+
 export function monitoredDomains(text, now) {
     const feed = JSON.parse(text);
     assert(feed && typeof feed === 'object' && !Array.isArray(feed), 'Invalid monitored envelope');
@@ -62,7 +76,7 @@ export function monitoredDomains(text, now) {
 }
 
 const hash = text => createHash('sha256').update(text).digest('hex');
-export async function download(url) {
+export async function download(url, max = limit) {
     const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(20000), headers: { Accept: 'application/vnd.github+json' } });
     assert(response.status === 200, `Public source unavailable (HTTP ${response.status})`);
     const reader = response.body.getReader();
@@ -72,7 +86,7 @@ export async function download(url) {
         const { done, value } = await reader.read();
         if (done) break;
         size += value.length;
-        if (size > limit) { await reader.cancel(); throw new Error('Public source too large'); }
+        if (size > max) { await reader.cancel(); throw new Error('Public source too large'); }
         chunks.push(value);
     }
     return Buffer.concat(chunks).toString('utf8');
@@ -94,6 +108,7 @@ export async function snapshot(fetchText = download, now = Math.floor(Date.now()
         assert(/^[a-f0-9]{40}$/.test(commit.sha), 'Invalid source revision');
         const updated = Math.floor(Date.parse(commit.commit.committer.date) / 1000);
         assert(Number.isSafeInteger(updated) && updated > 0 && updated <= now + 300, 'Invalid source date');
+        if (source.maxAgeDays) assert(updated >= now - source.maxAgeDays * 86400, 'Source is stale');
         const base = `https://raw.githubusercontent.com/${source.repo}/${commit.sha}/`;
         let license = (await fetchText(base + source.licensePath)).trim();
         if (source.id === 'matomo_referrer_spam') {
@@ -101,9 +116,9 @@ export async function snapshot(fetchText = download, now = Math.floor(Date.now()
             license = license.split('## License\n').at(-1).trim();
         }
         assert(hash(license) === source.licenseHash, 'Source license changed: review required');
-        const body = await fetchText(base + source.path);
+        const body = await fetchText(base + source.path, source.maxBytes);
         if (source.domain) assert(body.includes(source.domain), 'Provider namespace evidence changed');
-        const listed = source.domain ? [source.domain] : source.id === 'fakefilter_recent' ? monitoredDomains(body, now) : domains(body);
+        const listed = source.domain ? [source.domain] : source.id === 'fakefilter_recent' ? monitoredDomains(body, now) : source.id === 'disposable_live_services' ? liveServiceDomains(body) : domains(body);
         const { kept, dropped } = source.domain ? { kept: listed, dropped: [] } : unprotected(listed, mailboxes);
         if (dropped.length) console.warn(`${source.id}: ignored ${dropped.length} listing(s) of protected mail domains: ${dropped.slice(0, 20).join(', ')}`);
         datasets.push({

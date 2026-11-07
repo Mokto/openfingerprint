@@ -9,6 +9,7 @@ It contains no email addresses, browser profiles, account associations or IP his
 | Source | License | Meaning |
 | --- | --- | --- |
 | [disposable-email-domains](https://github.com/disposable-email-domains/disposable-email-domains) | CC0-1.0 | Community-listed disposable email domains. The upstream warns that entries can become outdated; a match is evidence, not device/user fraud proof. |
+| [disposable/disposable-email-domains](https://github.com/disposable/disposable-email-domains) (`domains_source_map.txt`) | MIT | Only the domains the aggregator reads directly from live temporary-mail services (their domain pickers and APIs). Its copies of published community lists are skipped: in a labelled evaluation those copies flagged real organisations, while about 98% of live-service domains routed mail to temporary-mail servers. A snapshot older than 3 days is refused. |
 | [FakeFilter](https://github.com/7c/fakefilter) | BSD-3-Clause | Domains observed by monitored temporary-mail providers within the last 14 days. Older observations are not imported. |
 | [is-a.dev](https://github.com/is-a-dev/register) | MIT | User registrations beneath `is-a.dev`; the apex is not a user subdomain. |
 | [is-a.bot](https://github.com/free-domains/is-a.bot) | MIT | User registrations beneath `is-a.bot`; the apex is not a user subdomain. |

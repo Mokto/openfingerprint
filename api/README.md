@@ -196,7 +196,7 @@ See [country licensing and refresh](data/README.md#ip-country-data) before using
 these results: DB-IP requires attribution, including a link on web pages that use them.
 With fresh domain data, `domain` contains `disposable`, `free_subdomain`, `spam`,
 `public_mailbox` and `relay` facts. Disposable evidence combines the community list with recently monitored
-provider domains from an openly licensed feed; no vendor API results are imported. Each has a nullable `value`, evidence `status`, `scope` and `sources` with
+provider domains and domains read directly from live temporary-mail services, each from an openly licensed feed; no vendor API results are imported. Each has a nullable `value`, evidence `status`, `scope` and `sources` with
 license, revision, source-commit/retrieval/expiry times. For example, a confirmed
 list match yields `value: true, status: listed`; an ordinary non-match yields
 `value: null, status: not_listed`, not a clean verdict.
