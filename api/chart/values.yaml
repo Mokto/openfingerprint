@@ -41,6 +41,8 @@ prometheusRule:
   labels: {}
   # Warn when any loaded source expires within this many days.
   expiryWarningDays: 5
+  # Lookup failure-ratio alerts need at least this many lookups in 30 minutes.
+  minLookups: 20
 
 domainData:
   # Seconds between checks of the mounted snapshot; a changed, valid snapshot is swapped in.

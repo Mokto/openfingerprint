@@ -180,6 +180,9 @@ With `prometheusRule.enabled`:
 | `OpenFingerprintCountryDataUnavailable` | No country database for 30 minutes, or the metric is missing. |
 | `OpenFingerprintCountryDataExpiring` | The database expires within `expiryWarningDays` or has expired. |
 | `OpenFingerprintCountryDataReloadFailing` | The API rejected a changed country file in the last hour. |
+| `OpenFingerprintRedisErrors` | Redis calls from the registration cache failed for 15 minutes. Registries then get every lookup, and collection challenges fail. |
+| `OpenFingerprintMxLookupsFailing` | Over half of MX lookups were unavailable in 30 minutes (with at least `minLookups`, default 20), for 15 minutes: usually the nameserver or UDP 53 egress. |
+| `OpenFingerprintRegistryLookupsFailing` | Over half of RDAP and WHOIS lookups were unavailable in 30 minutes (with at least `minLookups`), for 30 minutes: usually TCP 443/43 egress. |
 | `OpenFingerprintNetworkSourceUnavailable` | With a network claim configured, any of the three expected network sources is missing, stale or future-dated for 15 minutes. |
 | `OpenFingerprintNetworkDataReloadFailing` | A network reload was rejected in the last hour; last-good sources keep their original expiry. |
 
