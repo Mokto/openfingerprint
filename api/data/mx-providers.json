@@ -1,6 +1,6 @@
 {
   "license": "CC0-1.0",
-  "reviewed_at_unix": 1794032027,
+  "reviewed_at_unix": 1794044481,
   "providers": [
     {
       "slug": "google",
@@ -19,7 +19,8 @@
       "type": "mailbox",
       "suffixes": [
         "protection.outlook.com",
-        "mx.microsoft"
+        "mx.microsoft",
+        "mail.eo.outlook.com"
       ],
       "evidence_urls": [
         "https://learn.microsoft.com/en-us/microsoft-365/enterprise/external-domain-name-system-records",
@@ -28,7 +29,8 @@
       "consumer": [
         "olc.protection.outlook.com"
       ],
-      "consumer_evidence": "Microsoft's consumer domains (outlook.com, hotmail.com, live.com, msn.com, passport.com) route to *.olc.protection.outlook.com; organisation tenants use *.mail.protection.outlook.com. In the Tranco top 20,000 only those five domains routed all MX there."
+      "consumer_evidence": "Microsoft's consumer domains (outlook.com, hotmail.com, live.com, msn.com, passport.com) route to *.olc.protection.outlook.com; organisation tenants use *.mail.protection.outlook.com. In the Tranco top 20,000 only those five domains routed all MX there.",
+      "ownership": "mail.eo.outlook.com is the older Exchange Online MX form on Microsoft-owned outlook.com; its servers present an organisation-validated certificate for Microsoft Corporation (mail.protection.outlook.com)."
     },
     {
       "slug": "apple",
@@ -44,11 +46,14 @@
       "slug": "zoho",
       "type": "mailbox",
       "suffixes": [
-        "zoho.com"
+        "zoho.com",
+        "zoho.eu"
       ],
       "evidence_urls": [
-        "https://www.zoho.com/mail/help/adminconsole/configure-email-delivery.html"
-      ]
+        "https://www.zoho.com/mail/help/adminconsole/configure-email-delivery.html",
+        "https://www.zoho.eu/mail/"
+      ],
+      "ownership": "zoho.eu is the domain of Zoho's EU data centre and site; organisations hosted there use mx.zoho.eu."
     },
     {
       "slug": "fastmail",
@@ -181,6 +186,100 @@
       ]
     },
     {
+      "slug": "privateemail",
+      "type": "mailbox",
+      "suffixes": [
+        "privateemail.com"
+      ],
+      "evidence_urls": [
+        "https://www.namecheap.com/support/knowledgebase/article.aspx/1340/2176/namecheap-private-email-records-for-domains-with-thirdparty-dns"
+      ]
+    },
+    {
+      "slug": "godaddy",
+      "type": "mailbox",
+      "suffixes": [
+        "secureserver.net"
+      ],
+      "evidence_urls": [
+        "https://www.godaddy.com/help/add-an-mx-record-19234",
+        "https://www.godaddy.com/en-ph/help/what-are-my-dns-settings-for-professional-email-powered-by-titan-42767"
+      ]
+    },
+    {
+      "slug": "alibaba",
+      "type": "mailbox",
+      "suffixes": [
+        "qiye.aliyun.com",
+        "mxhichina.com"
+      ],
+      "evidence_urls": [
+        "https://www.alibabacloud.com/help/en/dns/pubz-add-mailbox-resolution",
+        "https://help.aliyun.com/en/document_detail/36723.html"
+      ]
+    },
+    {
+      "slug": "feishu",
+      "type": "mailbox",
+      "suffixes": [
+        "feishu.cn"
+      ],
+      "evidence_urls": [
+        "https://www.feishu.cn/hc/en-US/articles/360049067804-admin-configure-dns-settings-on-godaddy"
+      ]
+    },
+    {
+      "slug": "vkworkspace",
+      "type": "mailbox",
+      "suffixes": [
+        "emx.mail.ru"
+      ],
+      "evidence_urls": [
+        "https://biz.mail.ru/docs/saas/get-started/own/setup/mx-record/index.html"
+      ]
+    },
+    {
+      "slug": "ovh",
+      "type": "mailbox",
+      "suffixes": [
+        "mail.ovh.net"
+      ],
+      "evidence_urls": [
+        "https://docs.ovhcloud.com/en/guides/web-cloud/domains/dns-zone-mx"
+      ]
+    },
+    {
+      "slug": "mailboxorg",
+      "type": "mailbox",
+      "suffixes": [
+        "mailbox.org"
+      ],
+      "evidence_urls": [
+        "https://kb.mailbox.org/en/business/custom-domains/using-emails-with-a-custom-domain"
+      ]
+    },
+    {
+      "slug": "siteground",
+      "type": "mailbox",
+      "suffixes": [
+        "mailspamprotection.com"
+      ],
+      "evidence_urls": [
+        "https://www.siteground.com/kb/point-mail-service"
+      ]
+    },
+    {
+      "slug": "seznam",
+      "type": "mailbox",
+      "suffixes": [
+        "seznam.cz"
+      ],
+      "evidence_urls": [
+        "https://o-seznam.cz/napoveda/email/profi"
+      ],
+      "ownership": "seznam.cz is Seznam's own domain; Email Profi organisations use mx1/mx2.emailprofi.seznam.cz and seznam.cz mailboxes use Seznam's own MX."
+    },
+    {
       "slug": "cloudflare",
       "type": "forwarding",
       "suffixes": [
@@ -231,6 +330,21 @@
       ]
     },
     {
+      "slug": "namecheap",
+      "type": "forwarding",
+      "suffixes": [
+        "eforward1.registrar-servers.com",
+        "eforward2.registrar-servers.com",
+        "eforward3.registrar-servers.com",
+        "eforward4.registrar-servers.com",
+        "eforward5.registrar-servers.com"
+      ],
+      "evidence_urls": [
+        "https://www.namecheap.com/support/knowledgebase/article.aspx/536/51/how-do-i-set-my-domain-to-use-namecheaps-freedns-service"
+      ],
+      "ownership": "Namecheap documents registrar-servers.com as its own DNS service domain; its email-forwarding MX hosts are eforward1 to eforward5 under it."
+    },
+    {
       "slug": "mimecast",
       "type": "gateway",
       "suffixes": [
@@ -261,6 +375,71 @@
       ]
     },
     {
+      "slug": "proofpoint",
+      "type": "gateway",
+      "suffixes": [
+        "pphosted.com",
+        "ppe-hosted.com",
+        "gpphosted.com"
+      ],
+      "evidence_urls": [
+        "https://www.proofpoint.com/us/products/email-security-and-protection/email-protection"
+      ],
+      "ownership": "Proofpoint publishes no public MX documentation. At review, proofpoint.com's own MX routed to pphosted.com, and MX servers under pphosted.com, ppe-hosted.com (Essentials) and gpphosted.com presented organisation-validated certificates issued to Proofpoint, Inc."
+    },
+    {
+      "slug": "barracuda",
+      "type": "gateway",
+      "suffixes": [
+        "ess.barracudanetworks.com"
+      ],
+      "evidence_urls": [
+        "https://documentation.campus.barracuda.com/wiki/spaces/EGD/pages/2850986/Understanding+the+Different+States+on+the+Domains+Page"
+      ]
+    },
+    {
+      "slug": "trendmicro",
+      "type": "gateway",
+      "suffixes": [
+        "trendmicro.com",
+        "trendmicro.eu"
+      ],
+      "evidence_urls": [
+        "https://docs.trendmicro.com/en-us/documentation/article/trend-micro-email-security-online-help-configuring-a-domain"
+      ]
+    },
+    {
+      "slug": "hornetsecurity",
+      "type": "gateway",
+      "suffixes": [
+        "hornetsecurity.com"
+      ],
+      "evidence_urls": [
+        "https://www.hornetsecurity.com/en/onboarding-information"
+      ]
+    },
+    {
+      "slug": "cloudflaresecurity",
+      "type": "gateway",
+      "suffixes": [
+        "cf-emailsecurity.net"
+      ],
+      "evidence_urls": [
+        "https://developers.cloudflare.com/cloudflare-one/email-security/setup/pre-delivery-deployment/prerequisites/m365-email-security-mx"
+      ]
+    },
+    {
+      "slug": "fortinet",
+      "type": "gateway",
+      "suffixes": [
+        "fortimailcloud.com"
+      ],
+      "evidence_urls": [
+        "https://www.fortinet.com/products/email-security"
+      ],
+      "ownership": "At review, MX servers under fortimailcloud.com presented an organisation-validated certificate issued to Fortinet, Inc. for *.fortimailcloud.com."
+    },
+    {
       "slug": "mailgun",
       "type": "inbound",
       "suffixes": [
@@ -278,6 +457,38 @@
       ],
       "evidence_urls": [
         "https://www.twilio.com/docs/sendgrid/for-developers/parsing-email/setting-up-the-inbound-parse-webhook"
+      ]
+    },
+    {
+      "slug": "amazonses",
+      "type": "inbound",
+      "suffixes": [
+        "inbound-smtp.af-south-1.amazonaws.com",
+        "inbound-smtp.ap-northeast-1.amazonaws.com",
+        "inbound-smtp.ap-northeast-2.amazonaws.com",
+        "inbound-smtp.ap-northeast-3.amazonaws.com",
+        "inbound-smtp.ap-south-1.amazonaws.com",
+        "inbound-smtp.ap-southeast-1.amazonaws.com",
+        "inbound-smtp.ap-southeast-2.amazonaws.com",
+        "inbound-smtp.ap-southeast-3.amazonaws.com",
+        "inbound-smtp.ca-central-1.amazonaws.com",
+        "inbound-smtp.eu-central-1.amazonaws.com",
+        "inbound-smtp.eu-north-1.amazonaws.com",
+        "inbound-smtp.eu-south-1.amazonaws.com",
+        "inbound-smtp.eu-west-1.amazonaws.com",
+        "inbound-smtp.eu-west-2.amazonaws.com",
+        "inbound-smtp.eu-west-3.amazonaws.com",
+        "inbound-smtp.il-central-1.amazonaws.com",
+        "inbound-smtp.me-south-1.amazonaws.com",
+        "inbound-smtp.sa-east-1.amazonaws.com",
+        "inbound-smtp.us-east-1.amazonaws.com",
+        "inbound-smtp.us-east-2.amazonaws.com",
+        "inbound-smtp.us-west-1.amazonaws.com",
+        "inbound-smtp.us-west-2.amazonaws.com"
+      ],
+      "evidence_urls": [
+        "https://docs.aws.amazon.com/ses/latest/dg/receiving-email-mx-record.html",
+        "https://docs.aws.amazon.com/general/latest/gr/ses.html"
       ]
     }
   ]

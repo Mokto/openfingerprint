@@ -226,7 +226,13 @@ hosts, in MX preference order, as `{"slug": "google", "type": "mailbox"}`. Types
 `forwarding` (mail is passed on to another address) and `inbound` (delivered to an
 application). An empty list means self-hosted or unrecognised routing, not a missing
 provider. The table (`data/mx-providers.json`) holds only host suffixes that the
-provider documents or owns, with evidence, and ships with each release.
+provider documents or owns, with evidence, and ships with each release. Ownership
+without public documentation means the provider's own domain or its own mail routes
+there and the MX servers present an organisation-validated certificate issued to the
+provider (Proofpoint, Fortinet); the entry's `ownership` note records the check. Broad
+cloud domains are never used: Amazon SES is matched by its documented regional
+`inbound-smtp` hosts only, not by self-hosted mail on `amazonaws.com`. In the Tranco
+top 20,000, the table names a provider for 72% of domains with MX.
 
 `public_mailbox` is true when the exact domain is a reviewed shared mailbox service
 (Gmail, Outlook.com, Yahoo, iCloud, GMX, regional providers and large ISPs): its
