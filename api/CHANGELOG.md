@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.11.0](https://github.com/Mokto/openfingerprint/compare/api-v0.10.1...api-v0.11.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** compact flat /v1/check response, short IDs and opaque SDK token ([#66](https://github.com/Mokto/openfingerprint/issues/66))
+
+### Features
+
+* **api:** compact flat /v1/check response, short IDs and opaque SDK token ([#66](https://github.com/Mokto/openfingerprint/issues/66)) ([13e522f](https://github.com/Mokto/openfingerprint/commit/13e522fab1c5e9f4193eccc9cb9bebedda0c39b1))
+* **api:** serve compact /v1/check verdicts over gRPC ([#68](https://github.com/Mokto/openfingerprint/issues/68)) ([226a288](https://github.com/Mokto/openfingerprint/commit/226a288cbbafe0f4516363a0c255182377217bc4))
+* **data:** recognise 305 more personal mailbox domains and email-alias custom domains ([#67](https://github.com/Mokto/openfingerprint/issues/67)) ([22af74b](https://github.com/Mokto/openfingerprint/commit/22af74b8afc21bcd3aa56ef9365047c162902bba))
+
+
+### Performance Improvements
+
+* **api:** reuse one Redis connection per consumer instead of one per command ([#62](https://github.com/Mokto/openfingerprint/issues/62)) ([0e6dd7f](https://github.com/Mokto/openfingerprint/commit/0e6dd7fc6c558342c26a5d7b4f796dd95ab889dd))
+* **api:** write the RDAP cache in the background ([#64](https://github.com/Mokto/openfingerprint/issues/64)) ([9c7172e](https://github.com/Mokto/openfingerprint/commit/9c7172eacf702d95b0d1766c2780813013453853))
+
 ## [0.10.1](https://github.com/Mokto/openfingerprint/compare/api-v0.10.0...api-v0.10.1) (2026-11-07)
 
 
