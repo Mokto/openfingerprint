@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.6.1...sdk-v0.7.0) (2026-11-07)
+
+
+### Features
+
+* add challenge-bound collection with Redis-backed single-use events ([#29](https://github.com/Mokto/openfingerprint/issues/29)) ([8846292](https://github.com/Mokto/openfingerprint/commit/88462929fafb089a1b423405ab013d7ab1c58bcc))
+* add offline identification accuracy study tools ([#41](https://github.com/Mokto/openfingerprint/issues/41)) ([7e4aa69](https://github.com/Mokto/openfingerprint/commit/7e4aa6923e83df2bd3ad619af2632096ed1a4d55))
+* add opt-in automation indicators to the SDK and /v1/check ([#28](https://github.com/Mokto/openfingerprint/issues/28)) ([8dde374](https://github.com/Mokto/openfingerprint/commit/8dde3742e03f929c66a1be51a25bb114c9c42923))
+* add opt-in WebRTC address check comparing STUN-reflexive addresses with the request IP ([#46](https://github.com/Mokto/openfingerprint/issues/46)) ([b1dd08e](https://github.com/Mokto/openfingerprint/commit/b1dd08e527e39199e7a3df55f1e5f82bdaf2ed6b))
+* add ten automation probes as evidence version 2 in the SDK and /v1/check ([#42](https://github.com/Mokto/openfingerprint/issues/42)) ([9d2de42](https://github.com/Mokto/openfingerprint/commit/9d2de42f9dfc9e8ec3530aeffe1c1c854486d74e))
+* **api:** add local network intelligence for collection (Tor, ASN, cloud ranges) ([#31](https://github.com/Mokto/openfingerprint/issues/31)) ([8825dd3](https://github.com/Mokto/openfingerprint/commit/8825dd3f37bc56f0cd82083511397def56809795))
+
 ## [0.6.1](https://github.com/Mokto/openfingerprint/compare/sdk-v0.6.0...sdk-v0.6.1) (2026-11-05)
 
 
