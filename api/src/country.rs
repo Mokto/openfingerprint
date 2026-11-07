@@ -16,6 +16,7 @@ const MAX_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_AGE: u64 = 62 * 86400;
 
 #[derive(Serialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 pub struct Check {
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -27,6 +28,7 @@ pub struct Check {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 struct Source {
     id: &'static str,
     license: &'static str,

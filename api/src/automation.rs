@@ -24,6 +24,7 @@ const V2: [(&str, &str); 10] = [
 ];
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 pub struct Check {
     status: &'static str,
     rule_version: u8,

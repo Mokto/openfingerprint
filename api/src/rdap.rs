@@ -37,6 +37,7 @@ const RESULTS: [&str; 5] = [
 ];
 
 #[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 pub struct Registration {
     pub(crate) status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]

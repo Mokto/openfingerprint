@@ -363,6 +363,7 @@ pub(crate) struct SignalCheck {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 struct Evidence {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     identity_groups: BTreeMap<&'static str, String>,
