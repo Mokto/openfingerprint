@@ -154,8 +154,9 @@ networkPolicy:
       podSelector:
         matchLabels:
           k8s-app: kube-dns
-  # Registries the API may query over HTTPS for RDAP registration dates. They are spread across
-  # the Internet, so the default is every public address and no private or link-local range.
+  # Registries the API may query for registration dates: RDAP over HTTPS (443) and, for TLDs
+  # without RDAP, WHOIS (TCP 43). They are spread across the Internet, so the default is every
+  # public address and no private or link-local range.
   rdapTo:
     - ipBlock:
         cidr: 0.0.0.0/0

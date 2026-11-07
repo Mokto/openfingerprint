@@ -65,7 +65,7 @@ check.call(policy["egress"][0] == {"to" => dns_peer, "ports" => [{"protocol" => 
 https = policy["egress"][1]
 check.call(policy["egress"].size == 4 && https["ports"] == [{"protocol" => "TCP", "port" => 443}], "Country updater HTTPS only")
 check.call(https["to"] == [{"ipBlock" => {"cidr" => "0.0.0.0/0", "except" => %w[0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4]}}, {"ipBlock" => {"cidr" => "2000::/3"}}], "Country HTTPS excludes private, loopback and link-local targets")
-check.call(plain.(policy["egress"][2]) == {"to" => public, "ports" => [{"protocol" => "TCP", "port" => 443}]}, "RDAP HTTPS preserves its configured peers")
+check.call(plain.(policy["egress"][2]) == {"to" => public, "ports" => [{"protocol" => "TCP", "port" => 443}, {"protocol" => "TCP", "port" => 43}]}, "Registries: RDAP over HTTPS and WHOIS on 43, to the configured peers only")
 check.call(policy["egress"][3] == {"to" => [{"podSelector" => {"matchLabels" => {"app" => "redis-ha-haproxy", "release" => "openfingerprint"}}}], "ports" => [{"protocol" => "TCP", "port" => 6379}]}, "Redis egress stays scoped to HAProxy")
 check.call(pod["dnsConfig"] == {"options" => [{"name" => "ndots", "value" => "1"}]}, "Registry hosts skip cluster search domains")
 check.call(policy["ingress"].map { |r| r["ports"] } == [[{"protocol" => "TCP", "port" => 8180}], [{"protocol" => "TCP", "port" => 9180}]], "API and metrics ports only")

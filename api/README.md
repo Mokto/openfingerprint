@@ -53,8 +53,9 @@ image; the API re-reads an override file every minute and swaps in a changed
 snapshot only if it is valid.
 
 A domain check whose result MX hosts could still change (a fresh `not_listed`
-domain) sends one UDP MX query to one nameserver: a random transaction ID, a
-one-second limit, no retries, no TCP fallback and no cache in the API.
+domain) sends one UDP MX query to one nameserver: a random transaction ID, resent
+once after a second without an answer, a two-second limit (the registry lookup that
+runs alongside has the same budget), no TCP fallback and no cache in the API.
 Already-decided domains are never sent to DNS. The nameserver sees the domains you
 check; use a resolver you trust, such as the cluster DNS, and allow only it on UDP
 53. Without DNS access, lookups report `unavailable` and everything else works.
@@ -63,14 +64,24 @@ Every valid domain check also asks the registry for the creation date of the
 registered domain under its ICANN public suffix (`mail.example.co.uk` queries
 `example.co.uk`). The registry comes from the IANA RDAP bootstrap bundled in the
 image (`data/rdap-dns.json`, refreshed weekly): one HTTPS GET, a two-second limit,
-a 256 KiB response cap, no redirects or retries. The registry sees the registered
-domains you check. Answers are cached in Redis for a day (an hour for `not_found`)
+a 256 KiB response cap and no retries. A redirect is followed once, only to HTTPS on
+a host name with the same `/domain/<name>` path (registries such as `.ua` refer to a
+sub-registry). For TLDs without RDAP (`.io`, `.me`, `.us`, `.it`, `.ru` and about 150
+more), the API sends one plain WHOIS query on TCP 43 to the TLD's WHOIS server from
+IANA (`data/whois-servers.json`, refreshed weekly), with the same time limit and a
+64 KiB cap. WHOIS is free text: a date counts only from a known creation field in an
+unambiguous format, recorded at day precision, and an answer it cannot classify
+(including rate-limit notices) is `unavailable`. Some registries publish no
+creation date (DENIC for `.de`, EURid for `.eu`): those answer `no_date`. At most
+four RDAP and two WHOIS requests run at once per server; others wait inside the
+same two-second budget, because bursts get throttled. The registry sees the
+registered domains you check, and its terms of use apply. Answers are cached in Redis for a day (an hour for `not_found`)
 under `openfingerprint:rdap:v1:<SHA-256 of the registered domain>`; unavailable
 answers are not cached. A slow or failing Redis (250 ms limit) only means asking the
 registry. The cache holds public registry dates, not who asked. Tenants of private namespaces (`name.github.io`, a
 listed free-subdomain service) are not looked up: their registered domain belongs
-to the namespace operator. The API needs HTTPS to public addresses for this; without
-it, results report `unavailable`.
+to the namespace operator. The API needs HTTPS and TCP 43 to public addresses for
+this; without them, results report `unavailable`.
 There are no lookup retries, remote-provider waits or visitor-history fallbacks.
 
 The SDK hashes identity signals locally and automatically includes bounded
@@ -101,6 +112,7 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_COUNTRY_DATA` | Optional read-only DB-IP Country Lite MMDB path. Without it, IP checks return `unknown/not_configured`. Missing/invalid files yield unknown country results without disabling other checks. |
 | `OPENFINGERPRINT_COUNTRY_DATA_RELOAD_SECONDS` | Seconds between country file checks, 1–86400, default 60. Invalid files or older database builds are rejected; the last valid database remains until it expires. |
 | `OPENFINGERPRINT_DNS` | Nameserver for MX lookups, default `system` (the first `nameserver` in `/etc/resolv.conf`). Also accepts an IP, `IP:port` or `host:port` (resolved once at startup). Startup fails without a usable nameserver. |
+| `OPENFINGERPRINT_WHOIS_SERVERS` | Optional path to a `{"servers": {"tld": "host"}}` file replacing the bundled WHOIS server list; `host:port` is allowed, for local test servers. |
 | `OPENFINGERPRINT_RDAP_BOOTSTRAP` | Optional path to an IANA RDAP bootstrap file replacing the bundled one; read at startup. It may contain `http://` servers, for local test registries. |
 | `OPENFINGERPRINT_METRICS_ADDR` | Optional listener for Prometheus `GET /metrics`, for example `0.0.0.0:9180`. Keep it off the API port so network policy can expose it separately. |
 
@@ -210,7 +222,7 @@ Every valid domain section also has `registration`:
 | `found` | `registered_at_unix` is the registry's `registration` event for the registered domain. |
 | `no_date` | The registry answered without a usable registration date (some redact it). |
 | `not_found` | The registry does not know the domain: unregistered or recently deleted. |
-| `unsupported_tld` | The TLD publishes no RDAP service in the IANA bootstrap (for example `.de` or `.io`). |
+| `unsupported_tld` | The TLD has neither an RDAP service nor a reachable WHOIS server that accepts automated queries (for example `.ch`). |
 | `not_applicable` | A public suffix, or a tenant of a private namespace. |
 | `unavailable` | Timeout, error status, redirect, oversized or inconsistent answer. Unknown, not clean. |
 
@@ -623,7 +635,8 @@ requests, domains or credentials:
 | `openfingerprint_network_data_source_expiry_timestamp_seconds{source}` | When each network source expires; 0 when absent. |
 | `openfingerprint_network_data_reload_failures_total` | Rejected reload attempts, retried so repaired sidecars can recover without editing the manifest. |
 | `openfingerprint_mx_lookups_total{result}` | MX lookups by `mx_lookup` outcome. |
-| `openfingerprint_rdap_lookups_total{result}` | Registry lookups by `registration.status` (not cache hits or `not_applicable`). |
+| `openfingerprint_rdap_lookups_total{result}` | RDAP lookups by `registration.status` (not cache hits or `not_applicable`); `unsupported_tld` counts TLDs with neither RDAP nor WHOIS. |
+| `openfingerprint_whois_lookups_total{result}` | WHOIS lookups for TLDs without RDAP, by `registration.status`. |
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
 | `openfingerprint_country_data_loaded` | 1 when a valid country database is loaded (not necessarily fresh). |
 | `openfingerprint_country_data_expiry_timestamp_seconds` | When the country database stops being used, or 0 when unavailable. |

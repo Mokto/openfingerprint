@@ -1,9 +1,14 @@
 use std::{
     collections::HashMap,
     fmt::Write as _,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
+
+use tokio::sync::Semaphore;
 
 use axum::{
     body::Bytes,
@@ -19,6 +24,10 @@ use serde::Serialize;
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_BODY: usize = 256 * 1024;
+// Concurrent requests per registry server; the rest wait inside the same two-second budget.
+// Bursts beyond this were throttled (HTTP 429) or timed out in testing.
+const RDAP_PARALLEL: usize = 4;
+const WHOIS_PARALLEL: usize = 2;
 const RESULTS: [&str; 5] = [
     "found",
     "no_date",
@@ -29,12 +38,19 @@ const RESULTS: [&str; 5] = [
 
 #[derive(Debug, PartialEq, Serialize)]
 pub struct Registration {
-    status: &'static str,
+    pub(crate) status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     registered_at_unix: Option<u64>,
 }
 
 impl Registration {
+    pub fn found(registered_at_unix: u64) -> Self {
+        Self {
+            status: "found",
+            registered_at_unix: Some(registered_at_unix),
+        }
+    }
+
     pub fn status(status: &'static str) -> Self {
         Self {
             status,
@@ -43,25 +59,51 @@ impl Registration {
     }
 }
 
-// One GET to the registry from the bundled IANA bootstrap: no redirects or retries. Through the
-// cache, each registered domain reaches its registry at most once per TTL while Redis is up.
+// One GET to the registry from the bundled IANA bootstrap, following at most one redirect to the
+// same domain path, or one WHOIS query for TLDs without RDAP. No retries. Through the cache, each
+// registered domain reaches its registry at most once per TTL while Redis is up.
 pub struct Rdap {
     client: Client<HttpsConnector<HttpConnector>, Empty<Bytes>>,
     servers: HashMap<String, String>,
+    whois: HashMap<String, String>,
+    limits: HashMap<String, Arc<Semaphore>>,
     counts: [AtomicU64; 5],
+    whois_counts: [AtomicU64; 5],
     cache: crate::cache::Cache,
 }
 
 impl Rdap {
     pub fn from_env(redis: redis::Client) -> Result<Self, &'static str> {
         let cache = crate::cache::Cache::new(redis);
-        match std::env::var("OPENFINGERPRINT_RDAP_BOOTSTRAP") {
+        let whois = match std::env::var("OPENFINGERPRINT_WHOIS_SERVERS") {
+            Ok(path) => {
+                std::fs::read(path).map_err(|_| "Unreadable OPENFINGERPRINT_WHOIS_SERVERS")?
+            }
+            Err(_) => include_bytes!("../data/whois-servers.json").to_vec(),
+        };
+        let whois = crate::whois::servers(&whois).ok_or("Invalid WHOIS server list")?;
+        let rdap = match std::env::var("OPENFINGERPRINT_RDAP_BOOTSTRAP") {
             Ok(path) => Self::new(
                 &std::fs::read(path).map_err(|_| "Unreadable OPENFINGERPRINT_RDAP_BOOTSTRAP")?,
                 true,
                 cache,
             ),
             Err(_) => Self::new(include_bytes!("../data/rdap-dns.json"), false, cache),
+        }?;
+        Ok(rdap.with_whois(whois))
+    }
+
+    pub fn with_whois(self, whois: HashMap<String, String>) -> Self {
+        let mut limits = self.limits;
+        for server in whois.values() {
+            limits
+                .entry(server.clone())
+                .or_insert_with(|| Arc::new(Semaphore::new(WHOIS_PARALLEL)));
+        }
+        Self {
+            whois,
+            limits,
+            ..self
         }
     }
 
@@ -77,10 +119,17 @@ impl Rdap {
             .https_or_http()
             .enable_http1()
             .build();
+        let limits = servers
+            .values()
+            .map(|base| (base.clone(), Arc::new(Semaphore::new(RDAP_PARALLEL))))
+            .collect();
         Ok(Self {
             client: Client::builder(TokioExecutor::new()).build(connector),
             servers,
+            whois: HashMap::new(),
+            limits,
             counts: Default::default(),
+            whois_counts: Default::default(),
             cache,
         })
     }
@@ -90,9 +139,13 @@ impl Rdap {
         let Some((registrable, tld)) = registrable(domain) else {
             return Registration::status("not_applicable");
         };
-        let Some(base) = self.servers.get(tld) else {
-            self.counts[4].fetch_add(1, Ordering::Relaxed);
-            return Registration::status("unsupported_tld");
+        let (server, counts) = match (self.servers.get(tld), self.whois.get(tld)) {
+            (Some(base), _) => (base, &self.counts),
+            (None, Some(host)) => (host, &self.whois_counts),
+            (None, None) => {
+                self.counts[4].fetch_add(1, Ordering::Relaxed);
+                return Registration::status("unsupported_tld");
+            }
         };
         // Hashed so a cache dump does not list checked domains in clear text.
         let key = format!(
@@ -102,12 +155,21 @@ impl Rdap {
         if let Some(cached) = self.cache.get(&key).await.and_then(|v| decode(&v)) {
             return cached;
         }
-        let result =
-            tokio::time::timeout(TIMEOUT, self.fetch(&format!("{base}domain/{registrable}")))
-                .await
-                .unwrap_or(Registration::status("unavailable"));
+        let request = async {
+            let _permit = self.limits.get(server)?.acquire().await.ok()?;
+            Some(if self.servers.contains_key(tld) {
+                self.fetch(&format!("{server}domain/{registrable}")).await
+            } else {
+                crate::whois::query(server, registrable).await
+            })
+        };
+        let result = tokio::time::timeout(TIMEOUT, request)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(Registration::status("unavailable"));
         if let Some(i) = RESULTS.iter().position(|s| *s == result.status) {
-            self.counts[i].fetch_add(1, Ordering::Relaxed);
+            counts[i].fetch_add(1, Ordering::Relaxed);
         }
         if let Some((value, ttl)) = encode(&result) {
             self.cache.set(&key, &value, ttl).await;
@@ -117,13 +179,33 @@ impl Rdap {
 
     async fn fetch(&self, url: &str) -> Registration {
         let unavailable = Registration::status("unavailable");
-        let Ok(request) = Request::get(url)
-            .header(header::ACCEPT, "application/rdap+json")
-            .body(Empty::new())
-        else {
-            return unavailable;
-        };
-        let Ok(response) = self.client.request(request).await else {
+        let mut target = url.to_owned();
+        let mut response = None;
+        for _ in 0..2 {
+            let Ok(request) = Request::get(&target)
+                .header(header::ACCEPT, "application/rdap+json")
+                .body(Empty::new())
+            else {
+                return unavailable;
+            };
+            let Ok(r) = self.client.request(request).await else {
+                return unavailable;
+            };
+            if !r.status().is_redirection() {
+                response = Some(r);
+                break;
+            }
+            // Registries may refer to a sub-registry (.ua): one hop, to HTTPS, same domain path.
+            let next = r
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|l| l.to_str().ok());
+            match next.filter(|n| target == url && referral(url, n)) {
+                Some(next) => target = next.to_owned(),
+                None => return unavailable,
+            }
+        }
+        let Some(response) = response else {
             return unavailable;
         };
         match response.status().as_u16() {
@@ -132,7 +214,7 @@ impl Rdap {
             _ => return unavailable,
         }
         match Limited::new(response.into_body(), MAX_BODY).collect().await {
-            Ok(body) => parse_domain(&body.to_bytes(), url),
+            Ok(body) => parse_domain(&body.to_bytes(), &target),
             Err(_) => unavailable,
         }
     }
@@ -146,6 +228,16 @@ impl Rdap {
             let _ = writeln!(
                 out,
                 "openfingerprint_rdap_lookups_total{{result=\"{result}\"}} {}",
+                count.load(Ordering::Relaxed)
+            );
+        }
+        out.push_str(
+            "# HELP openfingerprint_whois_lookups_total WHOIS registration lookups for TLDs without RDAP, by outcome.\n# TYPE openfingerprint_whois_lookups_total counter\n",
+        );
+        for (result, count) in RESULTS[..4].iter().zip(&self.whois_counts) {
+            let _ = writeln!(
+                out,
+                "openfingerprint_whois_lookups_total{{result=\"{result}\"}} {}",
                 count.load(Ordering::Relaxed)
             );
         }
@@ -173,6 +265,21 @@ fn decode(value: &str) -> Option<Registration> {
             registered_at_unix: Some(value.strip_prefix("found:")?.parse().ok()?),
         }),
     }
+}
+
+/// An absolute HTTPS URL on a DNS name whose path still ends in `/domain/<queried name>`.
+fn referral(from: &str, to: &str) -> bool {
+    let Some(rest) = to.strip_prefix("https://") else {
+        return false;
+    };
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let queried = from.rsplit('/').next().unwrap_or_default();
+    crate::check::domain(host)
+        && host.parse::<std::net::IpAddr>().is_err()
+        && !to.contains(['?', '#', '@'])
+        && path
+            .strip_suffix(queried)
+            .is_some_and(|p| p.ends_with("domain/"))
 }
 
 fn parse_bootstrap(bytes: &[u8], allow_http: bool) -> Option<HashMap<String, String>> {
@@ -294,12 +401,16 @@ fn unix(s: &str) -> Option<u64> {
     if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 60 {
         return None;
     }
+    u64::try_from(days(y, mo, d) * 86400 + h * 3600 + mi * 60 + se - offset * 60).ok()
+}
+
+/// Days from 1970-01-01 to a proleptic Gregorian date.
+pub fn days(y: i64, mo: i64, d: i64) -> i64 {
     let y = if mo <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
     let doy = (153 * ((mo + 9) % 12) + 2) / 5 + d - 1;
-    let days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
-    u64::try_from(days * 86400 + h * 3600 + mi * 60 + se - offset * 60).ok()
+    era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468
 }
 
 #[cfg(test)]
@@ -395,7 +506,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetches_bounded_responses_without_following_redirects() {
+    async fn fetches_bounded_responses_without_following_unsafe_redirects() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -495,6 +606,60 @@ mod tests {
             ]
             .into()
         );
+    }
+
+    #[test]
+    fn follows_only_https_referrals_for_the_same_domain() {
+        let from = "https://rdap.hostmaster.ua/domain/mailbox.in.ua";
+        assert!(referral(from, "https://rdap.sunic.ua/domain/mailbox.in.ua"));
+        for bad in [
+            "http://rdap.sunic.ua/domain/mailbox.in.ua",
+            "https://rdap.sunic.ua/domain/other.in.ua",
+            "https://rdap.sunic.ua/entity/mailbox.in.ua",
+            "https://10.0.0.1/domain/mailbox.in.ua",
+            "https://user@rdap.sunic.ua/domain/mailbox.in.ua",
+            "https://rdap.sunic.ua/domain/mailbox.in.ua?x=1",
+            "/domain/mailbox.in.ua",
+        ] {
+            assert!(!referral(from, bad), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn tlds_without_rdap_use_their_whois_server_and_count_separately() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = listener.accept().await.unwrap();
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut q = vec![0; 256];
+                let n = s.read(&mut q).await.unwrap();
+                let reply = if &q[..n] == b"old.wtest\r\n" {
+                    "Domain Name: old.wtest\r\nCreated: 2001-02-03\r\n"
+                } else {
+                    "Domain not found.\r\n"
+                };
+                let _ = s.write_all(reply.as_bytes()).await;
+            }
+        });
+        let rdap = Rdap::new(
+            br#"{"services":[[["test"],["https://rdap.invalid/"]]]}"#,
+            false,
+            crate::cache::Cache::new(crate::cache::tests::client_for("127.0.0.1:1")),
+        )
+        .unwrap()
+        .with_whois([("wtest".to_owned(), addr)].into());
+        assert_eq!(
+            rdap.lookup("mail.old.wtest").await,
+            Registration::found(u64::try_from(days(2001, 2, 3) * 86400).unwrap())
+        );
+        assert_eq!(rdap.lookup("new.wtest").await.status, "not_found");
+        assert_eq!(rdap.lookup("x.nowhois").await.status, "unsupported_tld");
+        let metrics = rdap.metrics();
+        assert!(metrics.contains("openfingerprint_whois_lookups_total{result=\"found\"} 1"));
+        assert!(metrics.contains("openfingerprint_whois_lookups_total{result=\"not_found\"} 1"));
+        assert!(metrics.contains("openfingerprint_rdap_lookups_total{result=\"found\"} 0"));
     }
 
     #[test]

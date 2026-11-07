@@ -7,6 +7,7 @@ mod domains;
 mod mx;
 mod network;
 mod rdap;
+mod whois;
 
 use std::{sync::Arc, time::Duration};
 

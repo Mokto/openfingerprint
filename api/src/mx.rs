@@ -5,7 +5,9 @@ use std::{
     time::Duration,
 };
 
-const TIMEOUT: Duration = Duration::from_secs(1);
+const TIMEOUT: Duration = Duration::from_secs(2);
+// Resent once if unanswered; this fits inside the RDAP lookup that runs alongside.
+const RETRANSMIT: Duration = Duration::from_secs(1);
 const RESULTS: [&str; 4] = ["resolved", "no_records", "no_domain", "unavailable"];
 
 #[derive(Debug, PartialEq)]
@@ -30,8 +32,8 @@ impl Lookup {
     }
 }
 
-// ponytail: one UDP query to one nameserver with no cache, retries or TCP fallback; a truncated
-// answer is reported as unavailable. Add TCP if real MX sets ever exceed 1232 bytes.
+// ponytail: one UDP query to one nameserver, resent once after a second, with no cache or TCP
+// fallback; a truncated answer is reported as unavailable. Add TCP if MX sets exceed 1232 bytes.
 pub struct Resolver {
     server: SocketAddr,
     counts: [AtomicU64; 4],
@@ -102,8 +104,22 @@ impl Resolver {
             return Lookup::Unavailable;
         }
         let mut buf = [0; 1232];
+        let mut resend_at = Some(tokio::time::Instant::now() + RETRANSMIT);
         loop {
-            let Ok(n) = socket.recv(&mut buf).await else {
+            let received = match resend_at {
+                Some(at) => match tokio::time::timeout_at(at, socket.recv(&mut buf)).await {
+                    Ok(received) => received,
+                    Err(_) => {
+                        resend_at = None;
+                        if socket.send(&query).await.is_err() {
+                            return Lookup::Unavailable;
+                        }
+                        continue;
+                    }
+                },
+                None => socket.recv(&mut buf).await,
+            };
+            let Ok(n) = received else {
                 return Lookup::Unavailable;
             };
             if let Some(result) = parse(&buf[..n], &query) {
@@ -409,5 +425,31 @@ mod tests {
         let metrics = resolver.metrics();
         assert!(metrics.contains("result=\"no_records\"} 1"));
         assert!(metrics.contains("result=\"unavailable\"} 1"));
+    }
+
+    #[tokio::test]
+    async fn resends_once_when_the_first_query_is_lost() {
+        let server = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let resolver = Resolver::new(&server.local_addr().unwrap().to_string(), None).unwrap();
+        let answer = async {
+            let mut buf = [0; 512];
+            server.recv_from(&mut buf).await.unwrap();
+            let (n, peer) = server.recv_from(&mut buf).await.unwrap();
+            server
+                .send_to(
+                    &reply(&buf[..n], [0x81, 0x80], &[(10, "mx.temp.example")]),
+                    peer,
+                )
+                .await
+                .unwrap();
+            std::future::pending::<()>().await;
+        };
+        let started = std::time::Instant::now();
+        let result = tokio::select! {
+            r = resolver.mx("lossy.example") => r,
+            _ = answer => unreachable!(),
+        };
+        assert_eq!(result, Lookup::Hosts(vec!["mx.temp.example".into()]));
+        assert!(started.elapsed() >= RETRANSMIT && started.elapsed() < TIMEOUT);
     }
 }

@@ -59,7 +59,8 @@ const mxAnswers = {
     'mxunlisted.example': [[10, 'mx.notmail.example']],
     'mxself.example': [[10, 'mx.mxself.example']],
     'mxdisputed.example': [[10, 'mx.disputed.mail.example']],
-    'mxallowed.example': [[10, 'mx1.mail.example'], [20, 'mx.good.mail.example']]
+    'mxallowed.example': [[10, 'mx1.mail.example'], [20, 'mx.good.mail.example']],
+    'dnsdrop.example': [[10, 'mx.drop.example']]
 };
 const dns = createSocket('udp4');
 const dnsName = name => Buffer.concat([...name.split('.').filter(Boolean).map(l => Buffer.concat([Buffer.from([l.length]), Buffer.from(l)])), Buffer.from([0])]);
@@ -81,6 +82,7 @@ dns.on('message', (msg, peer) => {
         });
         dns.send(Buffer.concat([header, msg.subarray(12, pos + 5), ...answers]), peer.port, peer.address);
     };
+    if (name === 'dnsdrop.example' && !dnsQueries.slice(0, -1).includes(name)) return; // lose the first query
     if (mxAnswers[name]) reply(0, mxAnswers[name]);
     else if (name === 'dnsnx.example') reply(3);
     else if (name === 'dnsnull.example') reply(0, [[0, '.']]);
@@ -124,6 +126,14 @@ const redis = createTcpServer(socket => {
     socket.on('error', () => {});
 });
 await new Promise(resolve => redis.listen(0, container ? '0.0.0.0' : '127.0.0.1', resolve));
+const whoisQueries = [];
+const whois = createTcpServer(socket => socket.once('data', chunk => {
+    const name = chunk.toString().trim();
+    whoisQueries.push(name);
+    socket.end(name === 'old.wtest' ? 'Domain Name: old.wtest\r\nCreation Date: 2001-02-03T04:05:06Z\r\n' : name === 'busy.wtest' ? 'Query rate limit exceeded\r\n' : 'Domain not found.\r\n');
+}).on('error', () => {}));
+await new Promise(resolve => whois.listen(0, container ? '0.0.0.0' : '127.0.0.1', resolve));
+writeFileSync(join(directory, 'whois.json'), JSON.stringify({ servers: { wtest: `${container ? 'dns.test' : '127.0.0.1'}:${whois.address().port}` } }), { mode: 0o644 });
 writeFileSync(join(directory, 'rdap.json'), JSON.stringify({ services: [[['example', 'test', 'org', 'io', 'uk'], [`http://${container ? 'dns.test' : '127.0.0.1'}:${rdap.address().port}/rdap/`]]] }), { mode: 0o644 });
 const args = container
 	? [
@@ -135,7 +145,7 @@ const args = container
             '--env', 'OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS',
             '--env', 'OPENFINGERPRINT_DOMAIN_DATA',
             '--env', 'OPENFINGERPRINT_DNS', '--add-host', 'dns.test:host-gateway',
-            '--env', 'OPENFINGERPRINT_RDAP_BOOTSTRAP', '--env', 'OPENFINGERPRINT_REDIS_URL',
+            '--env', 'OPENFINGERPRINT_RDAP_BOOTSTRAP', '--env', 'OPENFINGERPRINT_WHOIS_SERVERS', '--env', 'OPENFINGERPRINT_REDIS_URL',
             '--mount', `type=bind,src=${directory},dst=/domain-data,readonly`,
 			...(values.platform ? ['--platform', values.platform] : []),
 			values.image
@@ -156,6 +166,7 @@ const child = spawn(container ? 'docker' : values.binary, args, {
         OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS: '1',
         OPENFINGERPRINT_DNS: `${container ? 'dns.test' : '127.0.0.1'}:${dns.address().port}`,
         OPENFINGERPRINT_RDAP_BOOTSTRAP: container ? '/domain-data/rdap.json' : join(directory, 'rdap.json'),
+        OPENFINGERPRINT_WHOIS_SERVERS: container ? '/domain-data/whois.json' : join(directory, 'whois.json'),
         OPENFINGERPRINT_REDIS_URL: `redis://${container ? 'dns.test' : '127.0.0.1'}:${redis.address().port}/`
 	},
 	stdio: ['ignore', 'pipe', 'pipe']
@@ -441,6 +452,7 @@ try {
         ['mxself.example', 'resolved'], ['mxdisputed.example', 'resolved'], ['mxallowed.example', 'resolved'],
         ['dnsnx.example', 'no_domain'], ['dnsnull.example', 'no_records'],
         ['dnsfail.example', 'unavailable'], ['dnstrunc.example', 'unavailable'], ['dnsslow.example', 'unavailable'],
+        ['dnsdrop.example', 'resolved'],
         ['dnsspoof.example', 'no_records']
     ]) {
         const started = Date.now();
@@ -466,7 +478,9 @@ try {
         ['mail.rdapfound.example', { status: 'found', registered_at_unix: Date.parse(registered) / 1000 }],
         ['rdapnodate.example', { status: 'no_date' }], ['rdapwrong.example', { status: 'unavailable' }],
         ['rdapbroken.example', { status: 'unavailable' }], ['rdapmoved.example', { status: 'unavailable' }],
-        ['rdapslow.example', { status: 'unavailable' }], ['example.zz', { status: 'unsupported_tld' }]
+        ['rdapslow.example', { status: 'unavailable' }], ['example.zz', { status: 'unsupported_tld' }],
+        ['mail.old.wtest', { status: 'found', registered_at_unix: Date.parse('2001-02-03T00:00:00Z') / 1000 }],
+        ['new.wtest', { status: 'not_found' }], ['busy.wtest', { status: 'unavailable' }]
     ]) {
         const started = Date.now();
         const response = await request('/v1/check', authHeaders(sites[9]), { domain });
@@ -479,7 +493,8 @@ try {
     assert(redisStore.size > 0 && [...redisStore.keys()].every(k => /^openfingerprint:rdap:v1:[0-9a-f]{64}$/.test(k)), 'Cache keys are hashed registered domains');
     assert(![...redisStore.values()].some(v => v === 'unavailable'), 'Unavailable answers are not cached');
     assert(!rdapRequests.some(name => /github|co\.uk|duckdns\.org$/.test(name) && name !== 'duckdns.org'), 'Private-namespace tenants and public suffixes are not registrable');
-    console.log(`RDAP registration dates, cache, registrable-domain scope, redirects, timeouts and unsupported TLDs passed (${mode}).`);
+    assert.deepEqual(whoisQueries, ['old.wtest', 'new.wtest', 'busy.wtest'], 'WHOIS gets the registrable domain once, then the cache answers');
+    console.log(`RDAP and WHOIS registration dates, cache, registrable-domain scope, redirects, timeouts and unsupported TLDs passed (${mode}).`);
 
     phase = 'independent field validation and bounded envelopes';
     for (const domain of ['', 'localhost', 'https://example.test', 'person@example.test', 'example.test:80', 'a..test', 'bücher.test', 'a'.repeat(64) + '.test', {}, 42]) {
@@ -577,7 +592,8 @@ try {
     assert.equal(await metric('openfingerprint_domain_data_reload_failures_total'), 1);
     assert.equal(await reloadedValue(), true);
     assert.equal(await metric('openfingerprint_domain_data_loaded'), 1);
-    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), mode === 'fresh' ? 6 : 0);
+    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), mode === 'fresh' ? 7 : 0);
+    assert.equal(await metric('openfingerprint_whois_lookups_total{result="found"}'), 1);
     assert.equal(await metric('openfingerprint_rdap_lookups_total{result="found"}'), 1);
     assert(await metric('openfingerprint_rdap_cache_total{result="hit"}') >= 1);
     assert.equal(await metric('openfingerprint_rdap_cache_total{result="error"}'), 0);
@@ -650,6 +666,7 @@ try {
     rdap.closeAllConnections();
     rdap.close();
     redis.close();
+    whois.close();
     rmSync(directory, { recursive: true, force: true });
 }
 
