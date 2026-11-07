@@ -248,6 +248,44 @@ try {
 				check: 'Automation observations isolate throwing/missing properties and never execute artifact getters',
 				passed: true
 			});
+			const clean = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }).then(r => r.tampering));
+			assert.deepEqual(clean, { version: 1, canvasReadbackAltered: false, audioRenderAltered: false });
+			const noisy = await fresh(() => {
+				const read = CanvasRenderingContext2D.prototype.getImageData;
+				CanvasRenderingContext2D.prototype.getImageData = function (...args) {
+					const image = read.apply(this, args);
+					image.data[0] ^= 1;
+					return image;
+				};
+				const channel = AudioBuffer.prototype.getChannelData;
+				AudioBuffer.prototype.getChannelData = function (...args) {
+					const data = channel.apply(this, args);
+					for (let i = 0; i < data.length; i += 97) data[i] += 1e-7;
+					return data;
+				};
+			});
+			try {
+				const injected = await noisy.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }).then(r => r.tampering));
+				assert.deepEqual(injected, { version: 1, canvasReadbackAltered: true, audioRenderAltered: true });
+				const blocked = await fresh(() => {
+					CanvasRenderingContext2D.prototype.getImageData = () => { throw new Error('blocked'); };
+					window.OfflineAudioContext = undefined;
+					window.webkitOfflineAudioContext = undefined;
+				});
+				try {
+					const unreadable = await blocked.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }).then(r => r.tampering));
+					assert.deepEqual(unreadable, { version: 1, canvasReadbackAltered: null, audioRenderAltered: null });
+				} finally {
+					await blocked.close();
+				}
+			} finally {
+				await noisy.close();
+			}
+			report.checks.push({
+				browser: name,
+				check: 'Tampering probes read exact on clean canvas/audio, flag injected noise and report null when blocked',
+				passed: true
+			});
 			const a = await page.evaluate(() =>
 				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 5000 })
 			);
@@ -651,7 +689,9 @@ try {
 					let count = 0;
 					window.audioDisconnects = 0;
 					globalThis.OfflineAudioContext = class {
-						id = ++count;
+						constructor(channels, length) {
+							this.id = length === 4410 ? 0 : ++count;
+						}
 						createOscillator() {
 							return {
 								frequency: { value: 0 },

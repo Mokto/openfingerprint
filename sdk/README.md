@@ -134,7 +134,19 @@ An observed false means only that this specific marker was absent. It does not
 prove human activity. The [API](../api/README.md#automation-indicators) evaluates
 the observations with versioned rules and preserves unknowns.
 
+### Tampering observations
+
+`collect()` also returns `tampering`: `{ version: 1, canvasReadbackAltered,
+audioRenderAltered }`, each `boolean | null`. It draws a fixed 16x16 canvas of flat
+colors and renders a constant 0.5 audio signal offline, and flags a result that does
+not read back exactly. Clean browsers read both exactly, while noise injection and
+resist-fingerprinting modes do not. This is common among privacy-conscious people:
+it is not an automation signal and the SDK adds no verdict. The probes never affect
+the identity hashes, make no network requests and return no pixel or sample data. The
+[API](../api/README.md#tampering-indicators) evaluates it.
+
 ### Challenge-bound identification
+
 
 Your backend first obtains a challenge from `POST /v1/challenges`, binding it to
 a random, server-stored session/action token and your exact browser origin.

@@ -422,6 +422,28 @@ traffic is introduced. Deploy the compatible API before upgrading the SDK;
 older servers reject version-2 evidence. `/v1/verify` accepts embedded automation but ignores it,
 retaining its status/schema/fingerprint-only response.
 
+#### Tampering indicators
+
+`collect()` also reports `signals.tampering`, and `/v1/check` returns its evaluation as
+`signals.tampering`, separate from `signals.automation` on purpose: privacy browsers
+and anti-fingerprinting extensions trigger it for ordinary people, so it must never
+read as automation. The response has the automation shape (`status`, `rule_version: 1`,
+`source: "client_reported"`, `indicators`, `unavailable_probes`) with these names:
+
+| Evidence field | Name | `true` means |
+| --- | --- | --- |
+| `canvasReadbackAltered` | `canvas_readback_altered` | A 16x16 canvas of opaque flat colors did not read back exactly. Clean engines always read it exactly; noise injection (Brave farbling, canvas-noise extensions) or Firefox resistFingerprinting changes it. |
+| `audioRenderAltered` | `audio_render_altered` | An offline render of a constant 0.5 signal returned any other sample. |
+
+Evidence accepts only `version: 1` and these two optional booleans; anything else is
+`invalid_input` with `reason: invalid_tampering`. Missing or throwing probes stay null
+(unknown), and null or omitted `signals.tampering` omits the section. The probes use
+fixed content, add no identity hash input and never change the fingerprint. A result
+shows that something altered readback in this browser, not who or why; a clean result
+does not rule out tampering that spares these two reads, such as a spoofed value.
+Deploy the API before upgrading the SDK: older servers reject the new `tampering`
+field in `signals`.
+
 #### Domain and IP boundaries
 
 Domains have at least two labels, each 1–63 ASCII letters/digits/hyphens, without
