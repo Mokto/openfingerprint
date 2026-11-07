@@ -11,7 +11,7 @@ Domain and country intelligence run locally against openly licensed datasets:
 | --- | --- |
 | `signals` | Canonical schema-4/5 verification and bounded evidence counts. |
 | `automation` | Versioned rules for client-reported observations, now included automatically inside SDK `signals`. |
-| `domain` | Disposable, free-subdomain, public-mailbox, email-relay and source-scoped referrer-spam evidence with provenance and expiry, typo suggestions, MX providers and registration dates. |
+| `domain` | Disposable, free-subdomain, public-mailbox, email-relay and source-scoped referrer-spam evidence with provenance and expiry, typo suggestions, MX providers, registration dates and SPF/DMARC status. |
 | `ip` | Local country estimate plus independent Tor-exit, ASN and published cloud-range evidence under `network`, with source provenance and expiry. Missing facts remain unknown. |
 
 The domain snapshot is bundled and can be overridden with a refreshed local file.
@@ -52,12 +52,16 @@ A separate operator updater refreshes public snapshots without rebuilding the
 image; the API re-reads an override file every minute and swaps in a changed
 snapshot only if it is valid.
 
-Every domain check except a bare public suffix (`co.uk`) sends one UDP MX query to
-one nameserver: a random transaction ID, resent once after a second without an
-answer, a two-second limit (the registry lookup that runs alongside has the same
-budget), no TCP fallback and no cache in the API. The nameserver sees the domains you
-check; use a resolver you trust, such as the cluster DNS, and allow only it on UDP
-53. Without DNS access, lookups report `unavailable` and everything else works.
+Every domain check except a bare public suffix (`co.uk`) sends one UDP MX query and
+up to three TXT queries (SPF at the domain, DMARC at `_dmarc.<domain>` and, for
+subdomains, at `_dmarc.<organisational domain>`) to one nameserver, all at once: a
+random transaction ID, resent once after a second without an answer, a two-second
+limit (the registry lookup that runs alongside has the same budget) and no cache in
+the API. A truncated answer is asked again over TCP; about a fifth of large
+organisations publish more TXT data than fits in UDP. The nameserver sees the
+domains you check; use a resolver you trust, such as the cluster DNS, and allow only
+it on UDP and TCP 53. Without DNS access, lookups report `unavailable` and everything
+else works.
 
 Every valid domain check also asks the registry for the creation date of the
 registered domain under its ICANN public suffix (`mail.example.co.uk` queries
@@ -261,6 +265,29 @@ Every valid domain section also has `registration`:
 A young registration is evidence, not a verdict: new businesses register domains
 too, and the date says nothing about when a mailbox was created. A domain that
 expired and was registered again shows the new date.
+
+`spf` and `dmarc` describe the domain's published sender authentication. Only the
+outcome is returned, never the record text:
+
+| `spf.status` | Meaning |
+| --- | --- |
+| `found` | Exactly one `v=spf1` TXT record. |
+| `multiple` | More than one, which receivers treat as an error (RFC 7208). |
+| `none` | No SPF record. |
+| `no_domain` | The domain does not exist in DNS. |
+| `not_needed` / `unavailable` | A public suffix / timeout or DNS error. |
+
+| `dmarc.status` | Meaning |
+| --- | --- |
+| `found` | One `v=DMARC1` record with `policy` `none`, `quarantine` or `reject`. `inherited: true` means it came from the organisational domain, whose `sp` (or `p`) applies. |
+| `invalid` | A DMARC record without a valid `p`. |
+| `none` | No DMARC record at the domain or its organisational domain (several records count as none). |
+| `not_needed` / `unavailable` | A public suffix / timeout or DNS error. |
+
+In a sample with live MX, 49% of listed disposable domains published neither SPF nor
+DMARC, against 4% of Tranco top-20,000 sites (DMARC found: 25% against 78%). Absence is
+still not a verdict: small businesses and personal domains often skip both, receiving
+mail does not need them, and large disposable services publish both.
 
 Free-subdomain operator apexes yield false with `provider_domain`; strict children
 can match. Reviewed allowlist overrides yield false with `allowlisted`. Conflicting
@@ -708,6 +735,8 @@ requests, domains or credentials:
 | `openfingerprint_network_data_source_expiry_timestamp_seconds{source}` | When each network source expires; 0 when absent. |
 | `openfingerprint_network_data_reload_failures_total` | Rejected reload attempts, retried so repaired sidecars can recover without editing the manifest. |
 | `openfingerprint_mx_lookups_total{result}` | MX lookups by `mx_lookup` outcome. |
+| `openfingerprint_txt_lookups_total{result}` | SPF and DMARC TXT lookups by outcome (`resolved`, `no_records`, `no_domain`, `unavailable`). |
+| `openfingerprint_dns_tcp_queries_total` | Truncated answers repeated over TCP. |
 | `openfingerprint_rdap_lookups_total{result}` | RDAP lookups by `registration.status` (not cache hits or `not_applicable`); `unsupported_tld` counts TLDs with neither RDAP nor WHOIS. |
 | `openfingerprint_whois_lookups_total{result}` | WHOIS lookups for TLDs without RDAP, by `registration.status`. |
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |

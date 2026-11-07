@@ -104,11 +104,12 @@ impl AppState {
             Err(invalid) => return *invalid,
         };
         let data = self.domains.current();
+        // A public suffix has no mailbox of its own; skipping it keeps it away from DNS.
+        let suffix = psl::suffix(domain.as_bytes()).is_some_and(|s| {
+            s.as_bytes() == domain.as_bytes() && s.typ() == Some(psl::Type::Icann)
+        });
         let mx = async {
-            // A public suffix has no mailbox of its own; skipping it keeps it away from DNS.
-            if psl::suffix(domain.as_bytes()).is_some_and(|s| {
-                s.as_bytes() == domain.as_bytes() && s.typ() == Some(psl::Type::Icann)
-            }) {
+            if suffix {
                 return (Vec::new(), "not_needed");
             }
             match self.dns.mx(&domain).await {
@@ -123,9 +124,21 @@ impl AppState {
                 self.rdap.lookup(&domain).await
             }
         };
-        let ((hosts, lookup), registration) = tokio::join!(mx, registration);
+        let mail_auth = async {
+            if suffix {
+                (
+                    crate::mailauth::Spf::status("not_needed"),
+                    crate::mailauth::Dmarc::status("not_needed"),
+                )
+            } else {
+                crate::mailauth::check(&self.dns, &domain).await
+            }
+        };
+        let ((hosts, lookup), registration, (spf, dmarc)) =
+            tokio::join!(mx, registration, mail_auth);
         data.check_with(&domain, &hosts, lookup)
             .with_registration(registration)
+            .with_mail_auth(spf, dmarc)
     }
     pub(crate) fn authorize(&self, headers: &HeaderMap) -> Result<&Site, ApiError> {
         let site = self.authenticate(headers)?;

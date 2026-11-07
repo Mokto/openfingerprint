@@ -140,7 +140,7 @@ render --set countryData.enabled=false > "$rendered"
 ruby -ryaml -e '
 docs = YAML.load_stream(File.read(ARGV[0])).compact
 policy = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]
-abort("Disabled country refresh must retain RDAP and Redis egress") unless policy["egress"].size == 3 && policy["egress"][0]["ports"] == [{"protocol" => "UDP", "port" => 53}]
+abort("Disabled country refresh must retain DNS (UDP and TCP), RDAP and Redis egress") unless policy["egress"].size == 3 && policy["egress"][0]["ports"] == [{"protocol" => "UDP", "port" => 53}, {"protocol" => "TCP", "port" => 53}]
 ' "$rendered"
 render --set domainData.refresh.enabled=false --set redis-ha.enabled=false --set-json 'networkPolicy.redisTo=[{"podSelector":{}}]' > "$rendered"
 ruby -ryaml -e '
