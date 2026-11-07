@@ -25,9 +25,12 @@ referrer-spam evidence, including recently monitored provider domains, provenanc
 expiry and exact reviewed disputes. The API looks up each unlisted domain's MX hosts to
 detect new domains whose mail is routed to a listed disposable provider, and the
 registration date of its registered domain over RDAP. Unlisted data stays
-unknown, not clean. IP
-country estimates use an optional local DB-IP Country Lite database, with provenance,
-expiry and automatic refresh in the Helm chart; they do not establish a person's location. The API does not collect browser signals,
+unknown, not clean. IP country estimates use an optional local DB-IP Country Lite
+database, with provenance, expiry and automatic refresh in the Helm chart; they
+do not establish a person's location. Optional local network snapshots add
+Tor-exit, ASN and published cloud-range evidence with independent source expiry.
+Collection derives the IP through configured trusted proxies, without retaining
+raw addresses. VPN/proxy classification remains unknown. The API does not collect browser signals,
 and the SDK does not depend on it. See the [data guide](api/data/README.md) for
 sources, licensing and refresh without image rebuilds.
 

@@ -81,6 +81,10 @@ spec:
             - name: OPENFINGERPRINT_COUNTRY_DATA
               value: /country-data/country.mmdb
             {{- end }}
+            {{- if .Values.networkData.existingClaim }}
+            - name: OPENFINGERPRINT_NETWORK_DATA
+              value: /network-data/network.json
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.existingSecret | quote }}
@@ -104,11 +108,16 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled }}
+          {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled .Values.networkData.existingClaim }}
           volumeMounts:
             {{- if .Values.domainData.refresh.enabled }}
             - name: domain-data
               mountPath: /domain-data
+              readOnly: true
+            {{- end }}
+            {{- if .Values.networkData.existingClaim }}
+            - name: network-data
+              mountPath: /network-data
               readOnly: true
             {{- end }}
             {{- if .Values.countryData.enabled }}
@@ -131,7 +140,7 @@ spec:
             - name: country-data
               mountPath: /country-data
         {{- end }}
-      {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled }}
+      {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled .Values.networkData.existingClaim }}
       volumes:
         {{- if .Values.countryData.enabled }}
         - name: country-data
@@ -144,6 +153,11 @@ spec:
           configMap:
             name: {{ include "of.dataName" . }}
             optional: true
+        {{- end }}
+        {{- if .Values.networkData.existingClaim }}
+        - name: network-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.networkData.existingClaim | quote }}
         {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}

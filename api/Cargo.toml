@@ -10,6 +10,8 @@ axum = "0.8.9"
 http-body-util = "0.1.5"
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "ring", "webpki-roots", "tls12"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
+
+ipnetwork = { version = "0.21.1", features = ["serde"] }
 maxminddb = "0.32.0"
 psl = "2.1.248"
 ring = "0.17.14"

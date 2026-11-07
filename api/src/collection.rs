@@ -268,6 +268,10 @@ pub async fn collect(
     {
         return Err(ApiError(StatusCode::FORBIDDEN, "credentials_not_allowed"));
     }
+    let peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .copied();
     let headers = request.headers().clone();
     let request_origin = text(&headers, "origin", 512)
         .filter(|value| origin(value))
@@ -310,6 +314,7 @@ pub async fn collect(
     if challenge.origin != request_origin {
         return Err(ApiError(StatusCode::FORBIDDEN, "origin_not_allowed"));
     }
+    let network = state.network.request_check(&headers, peer);
     let consistency = consistency(&input.context, &input.signals, &headers);
     let observed_headless = text(&headers, "user-agent", 512).map(headless);
     if observed_headless == Some(true) {
@@ -323,6 +328,7 @@ pub async fn collect(
             "event_id": id,
             "signals": check_signals(input.signals),
             "consistency": consistency,
+            "ip": network,
             "request": { "origin": request_origin, "headless_user_agent": observed_headless }
         })).map_err(|_| unavailable())?
     });
@@ -374,6 +380,7 @@ pub async fn consume(
     let mut event: Value =
         serde_json::from_str(record["event_json"].as_str().ok_or_else(unavailable)?)
             .map_err(|_| unavailable())?;
+    crate::network::expire_event(&mut event["ip"]);
     event["created_at_unix_ms"] = record["created_at_unix_ms"].clone();
     event["expires_at_unix_ms"] = record["expires_at_unix_ms"].clone();
     Ok(Json(event).into_response())

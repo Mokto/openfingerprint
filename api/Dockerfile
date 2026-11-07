@@ -23,9 +23,21 @@ RUN set -eu; \
     cp target/release/openfingerprint-api /out/openfingerprint-api
 COPY LICENSE /out/licenses/openfingerprint-api/LICENSE
 
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba AS network-updater
+LABEL org.opencontainers.image.source="https://github.com/Mokto/openfingerprint" \
+      org.opencontainers.image.description="Refreshes licensed local network intelligence for OpenFingerprint" \
+      org.opencontainers.image.licenses="MIT"
+WORKDIR /app
+COPY --from=build /out/openfingerprint-api /usr/local/bin/openfingerprint-api
+COPY --from=build /out/licenses /usr/share/licenses/openfingerprint-api
+COPY api/update-network-data.mjs /app/update-network-data.mjs
+ENV OPENFINGERPRINT_API_BINARY=/usr/local/bin/openfingerprint-api
+USER 65532:65532
+ENTRYPOINT ["/nodejs/bin/node", "/app/update-network-data.mjs"]
+
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 LABEL org.opencontainers.image.source="https://github.com/Mokto/openfingerprint" \
-      org.opencontainers.image.description="Browser verification, challenge-bound collection and open-data domain checks" \
+      org.opencontainers.image.description="Browser verification, challenge-bound collection and open-data domain/network checks" \
       org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

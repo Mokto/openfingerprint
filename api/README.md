@@ -12,14 +12,14 @@ Domain and country intelligence run locally against openly licensed datasets:
 | `signals` | Canonical schema-4/5 verification and bounded evidence counts. |
 | `automation` | Versioned rules for client-reported observations, now included automatically inside SDK `signals`. |
 | `domain` | Disposable-domain, free-subdomain and source-scoped referrer-spam evidence, with provenance and expiry. |
-| `ip` | IPv4/IPv6 country estimate from an optional local DB-IP Country Lite MMDB, with provenance and expiry. |
+| `ip` | Local country estimate plus independent Tor-exit, ASN and published cloud-range evidence under `network`, with source provenance and expiry. Missing facts remain unknown. |
 
 The domain snapshot is bundled and can be overridden with a refreshed local file.
 A valid input does not mean a domain is legitimate or an IP is clean. Unlisted or
 uncovered domains remain null, not false. The API looks up MX hosts to detect
 mail routed to a listed disposable provider, and reports when the registered
 domain was created, from its registry over RDAP.
-IP reputation, VPN/proxy detection and domain authority are not implemented. The spam scope is specifically **referrer spam**,
+VPN/proxy classification and domain authority are not implemented. The spam scope is specifically **referrer spam**,
 not email-sending reputation. See [sources, licenses and refresh](data/README.md). Older API releases, including 0.4.0, have a different
 `/v1/check` contract; this guide describes the next release, not a live upgrade.
 
@@ -37,13 +37,13 @@ answers keyed by SHA-256 hashes of registered domains. Raw collection user
 agents/platforms are discarded after evaluation; request evidence and credentials
 are not logged. Outbound traffic consists of MX DNS queries, at most one RDAP
 request to the domain's registry per uncached check, and Redis commands.
-The separate country updater downloads only the public database; it never
-receives checked IPs or application credentials.
+Country and network lookups use local datasets only. Their separate updaters
+download public datasets without receiving checked IPs or application credentials.
 Responses have `Cache-Control: no-store` and set no cookies. Domain/IP inputs are
-not echoed in responses. No browser/server IP is inferred from the connection or
-forwarded headers. Signals-only calls do not run domain/IP checks.
+not echoed in responses. Stateless checks never infer an IP from the connection or forwarded headers;
+collection derives it through the trusted-peer rules below. Signals-only calls do not run domain/IP checks.
 
-The process retains configured credential tags and read-only domain/country datasets;
+The process retains configured credential tags and read-only domain/country/network datasets;
 collection state and the RDAP cache are shared in Redis, not an in-memory fallback.
 There is no visitor history. Collection capacity limits are not rate limiting:
 apply quotas and request limits at your edge/gateway, including the public collector.
@@ -90,6 +90,8 @@ build arguments, command-line arguments or logs.
 | --- | --- |
 | `OPENFINGERPRINT_SITES` | JSON array of 1–16 site configurations, each with `id` and `secret_key`. |
 | `OPENFINGERPRINT_LISTEN_ADDR` | Optional listener, default `127.0.0.1:8180`. |
+| `OPENFINGERPRINT_NETWORK_DATA` | Optional network manifest path. Keep its content-addressed ASN files in the same directory. No bundled/live fallback; absent/invalid data is unknown. Checked every 60 seconds; invalid replacements retain last-good data without extending expiry. |
+| `OPENFINGERPRINT_TRUSTED_PROXIES` | Optional JSON array of canonical proxy CIDRs (maximum 128), default `[]`. Only these socket peers may supply `X-Forwarded-For` to collection. Do not trust entire networks unnecessarily; `/0` is rejected. |
 | `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL for collection state and the RDAP cache; the API does not start without it. Supports `rediss://` with certificate validation. Unreachable Redis yields HTTP 503 on collection routes and uncached RDAP lookups; checks keep working and there is no memory fallback. |
 | `OPENFINGERPRINT_REDIS_PASSWORD` | Optional Redis password, overriding one in the URL, so the URL can live outside a Secret. |
 | `OPENFINGERPRINT_COLLECTION_TTL_SECONDS` | Lifetime of each challenge and, separately, each published event: 1–300 seconds, default 120. Use identical settings on every replica. |
@@ -323,10 +325,120 @@ matching does use Mozilla's Public Suffix List to protect registry/private-suffi
 boundaries; this does not turn lexical input acceptance into domain validation. Lexical acceptance is not domain existence or mailbox validation.
 
 IPs must be literals, without ports, CIDR prefixes, brackets, zone IDs or surrounding
-whitespace. IPv4-mapped IPv6 and private/loopback literals are syntactically
-accepted, but receive no clean/public-network verdict. Use trusted proxy
-configuration to obtain the actual visitor IP; do not trust a browser-provided
-value or accidentally supply the application server's address.
+whitespace. IPv4-mapped IPv6 is normalized to IPv4. Private, loopback, multicast,
+documentation and other excluded special-use ranges return network `unknown` with
+`non_global_ip` under `ip.network`. Classification conservatively excludes special-purpose IPv6
+blocks rather than handling every IANA global exception.
+
+#### Local network intelligence
+
+`/v1/check` accepts `{"ip":"8.8.8.8"}` from an authenticated backend. Existing
+country fields (`ip.status`, `ip.reason`, `ip.country_code`, `ip.source`) retain
+their country-only meaning. Independent network evidence is returned under
+`ip.network`, with `source: "backend_supplied"`: the server credential authenticates the caller,
+not the IP's origin. Never pass a browser-provided IP or the application's own IP.
+
+For public addresses, the independent `tor`, `hosting` and `asn` facts contain
+`value`, `status` and `source` provenance. A Tor match is `true`; a hosting
+match is `{"providers":["AWS"],"scope":"published_cloud_range"}`; an ASN match
+is `{"number":15169,"organization":"Google LLC"}` (illustrative values).
+`ip.network.status: "ok"` means at least one network fact is known, not that the
+visitor is safe; it does not change `ip.status` or the country estimate.
+No match yields null, never false or a residential/human verdict. The independent
+`vpn` and `proxy` facts remain null/`not_configured`.
+
+Fact statuses include `matched`, `not_listed`, `not_in_database`,
+`not_configured`, `invalid_data`, `stale_data`, `clock_skew` and
+`lookup_failed`. Each loaded source includes its license, attribution, immutable
+revision/URL and updated/fetched/expiry timestamps. Failed refreshes never
+relabel old data as newly updated.
+
+| Source | Evidence and limitations | License | Maximum age |
+| --- | --- | --- | --- |
+| [Tor CollecTor exit lists](https://collector.torproject.org/recent/exit-lists/) | Recently measured exit addresses only, not relay listening addresses or proof of abuse. Observations older than 24 hours are discarded. Incomplete coverage, including IPv6; absence stays unknown. | [CC0](https://metrics.torproject.org/about.html) | 3 hours from the collected list timestamp. |
+| [Published cloud ranges](https://github.com/tobilg/public-cloud-provider-ip-ranges) | Source-labelled provider ranges, not a physical datacenter/device classifier. Includes shared/CDN infrastructure; not all hosting providers are covered. No organization-name or whole-ASN heuristics. | MIT; exact license pinned and retained in the manifest. | 7 days from the last commit changing the source data file. |
+| [DB-IP ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) | Monthly IPv4/IPv6 ASN number and organization, with reduced coverage/accuracy. ASN is not visitor identity, geolocation or hosting proof. | CC BY 4.0. | 45 days from the earlier of the release month and actual MMDB build time. |
+
+**DB-IP attribution:** pages that display or use its results must link to
+[DB-IP.com](https://db-ip.com/), for example `IP Geolocation by DB-IP`, and
+preserve the license/source attribution when redistributing data. Keep the cloud
+source's full MIT notice with redistributed manifests. Source licenses do not
+change this project's MIT license.
+
+Build the native validator, then refresh a directory outside the repository:
+
+```sh
+cargo build --manifest-path api/Cargo.toml --locked
+node api/update-network-data.mjs --output /var/lib/openfingerprint/network.json
+OPENFINGERPRINT_NETWORK_DATA=/var/lib/openfingerprint/network.json \
+  ./api/target/debug/openfingerprint-api
+```
+
+Run the updater hourly; ASN downloads are limited to daily when the existing
+artifact is valid. It uses HTTPS, bounded downloads/decompression and strict
+input validation. The native validator checks CIDRs, schema, source lifetime,
+ASN hash/type/tree and record semantics before atomic manifest publication.
+Failed sources retain their original evidence and expiry; partial failure exits
+nonzero so the job is observable. Invalid baselines are not silently discarded.
+An OS lock serializes writers and releases on process death; the empty `.lock`
+file remains intentionally. **Do not delete it while a writer may be running.**
+SIGTERM aborts downloads/validation and preserves the prior manifest.
+
+The manifest and immutable `asn-<sha256>.mmdb` files must travel together.
+Old ASN versions are retained for safe readers/rollback; prune unreferenced
+versions when needed. No visitor addresses are written to this directory.
+Override `OPENFINGERPRINT_API_BINARY` when the validator is not at the default
+debug-build path. The API image also accepts `--validate-network-data <path>`
+without server credentials or networking.
+
+#### Trusted request IPs in collection
+
+Collection automatically evaluates the socket peer, returning
+`source: "peer"`. It ignores all forwarding claims unless that peer matches
+`OPENFINGERPRINT_TRUSTED_PROXIES`. For a trusted peer, it walks
+`X-Forwarded-For` **right to left**, stopping at the first untrusted hop;
+untrusted prefixes are not parsed. It accepts at most 16 trusted hops and only
+bare IP literals. Missing, duplicate or invalid relevant headers return unknown,
+not the proxy's hosting verdict. `Forwarded` and `X-Real-IP` are ignored.
+
+Your public edge must overwrite untrusted forwarding headers, or append its
+observed peer through a fully configured trusted chain. Never copy an arbitrary
+browser header into an authoritative single-IP field. Configure the CIDRs the API
+actually sees, accounting for source NAT, and keep `networkPolicy.apiFrom`
+restricted to the intended callers/proxy.
+
+For example, with Nginx directly receiving browser connections:
+
+```nginx
+location = /fingerprint/collect {
+    access_log off;
+    limit_except POST { deny all; }
+    client_max_body_size 64k;
+    proxy_pass http://openfingerprint.openfingerprint.svc.cluster.local/v1/collect;
+    proxy_pass_request_headers off;
+    proxy_set_header Content-Type application/json;
+    proxy_set_header Origin $http_origin;
+    proxy_set_header User-Agent $http_user_agent;
+    proxy_set_header Sec-CH-UA-Platform $http_sec_ch_ua_platform;
+    proxy_set_header X-Forwarded-For $remote_addr;
+}
+```
+
+Trust only this proxy's address/CIDR in the API configuration. If Nginx is behind
+another proxy, configure its real-IP handling explicitly; this example does not
+authenticate upstream forwarding claims. Do not expose the private challenge or
+consume routes. Browser credentials are not forwarded. Review proxy/application
+error and access logs separately: the API's no-raw-IP retention does not control
+other infrastructure's logging.
+
+The browser still receives only an event ID. Its backend-consumed event includes
+`ip` network evidence (the same shape as `/v1/check`'s `ip.network`), without
+the raw address or forwarding chain; country estimates are not included in the
+collected event. Network facts are
+evaluated at collection and expired/future-dated matches are nulled again on
+consumption. Roll out all API replicas before relying on this behavior. Neither
+network facts nor missing evidence alone should authorize or automatically block
+a protected action.
 
 ### Challenge-bound collection
 
@@ -374,7 +486,8 @@ checks reported headless status against the submitted UA, and compares recognize
 Windows/macOS platform observations against Client Hints when present. Missing
 or unrecognized evidence stays unknown. A HeadlessChrome token observed in the
 request UA adds a headless indicator even if the submitted boolean denies it.
-Raw UA/platform values are discarded, not stored in the event.
+Raw UA/platform values are discarded, not stored in the event. The request IP is
+evaluated locally and discarded too; only derived network evidence is stored.
 
 Publishing the evaluated event and consuming the challenge is one atomic Redis
 operation. Only one concurrent request can succeed, across API replicas.
@@ -393,7 +506,8 @@ Consumption checks the credential scope, expected action binding and expiry,
 and atomically deletes the event before returning it. Concurrent consumption
 succeeds once. A wrong binding or credential does not destroy the rightful event.
 The response contains `event_id`, `created_at_unix_ms`, `expires_at_unix_ms`,
-evaluated `signals` (including `automation`), `consistency` and `request`.
+evaluated `signals` (including `automation`), `consistency`, `ip` network evidence
+and `request`.
 The latter contains the matched `origin` and nullable request-UA
 `headless_user_agent` observation, never raw UA/platform strings or an inferred IP.
 
@@ -505,6 +619,9 @@ requests, domains or credentials:
 | `openfingerprint_domain_data_source_entries{source}` | Listed domains per source. |
 | `openfingerprint_domain_data_loaded_timestamp_seconds` | When the current snapshot was loaded. |
 | `openfingerprint_domain_data_reload_failures_total` | Changed snapshot files that were rejected. |
+| `openfingerprint_network_data_source_fresh{source}` | Whether each network source is loaded, not future-dated and unexpired. |
+| `openfingerprint_network_data_source_expiry_timestamp_seconds{source}` | When each network source expires; 0 when absent. |
+| `openfingerprint_network_data_reload_failures_total` | Rejected reload attempts, retried so repaired sidecars can recover without editing the manifest. |
 | `openfingerprint_mx_lookups_total{result}` | MX lookups by `mx_lookup` outcome. |
 | `openfingerprint_rdap_lookups_total{result}` | Registry lookups by `registration.status` (not cache hits or `not_applicable`). |
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
@@ -551,6 +668,14 @@ OPENFINGERPRINT_TEST_REDIS_URL=redis://127.0.0.1:6379/15 node api/test-collectio
 They check racing publication/consumption, binding/tenant isolation, expiry,
 capacity, unknowns, input limits and Redis failures. Without that variable this
 suite explicitly skips; CI runs it against a Redis service.
+
+`node api/test-network.mjs` checks local facts, IPv4/IPv6, source failure,
+license guards, exclusive/crash-recoverable refresh and explicit unknowns. The
+Redis environment above additionally enables trusted-proxy, browser-IP rejection,
+single-use event and expiry-between-collection-and-consumption checks; CI sets it.
+Optionally set `OPENFINGERPRINT_TEST_NETWORK_DATA` to a freshly updated manifest
+to check real DB-IP IPv4/IPv6 lookups. Normal CI does not depend on live sources;
+release image smoke tests do.
 
 After release, images are published as `ghcr.io/mokto/openfingerprint-api:<version>`
 for linux/amd64 and linux/arm64. Pin a released manifest digest; publishing does

@@ -60,6 +60,11 @@ const bytes = database(now - 100);
 const digest = createHash('sha1').update(bytes).digest('hex');
 const url = 'https://download.db-ip.com/free/dbip-country-lite-2026-01.mmdb.gz';
 const page = `<dt>SHA1SUM</dt><dd class="small">${digest}</dd><a href='${url}'>MMDB</a>`;
+const networkPath = join(directory, 'network.json');
+await writeFile(networkPath, JSON.stringify({ version: 1, tor: {
+    metadata: { id: 'tor_exit', license: 'CC0-1.0', license_url: 'https://example.test/license', attribution: 'test source', url: 'https://example.test/source', revision: 'a'.repeat(64), updated_at_unix: now - 100, fetched_at_unix: now, expires_at_unix: now + 3600 },
+    entries: ['8.8.8.8']
+} }));
 const calls = [];
 const fetcher = (payload = gzipSync(bytes), html = page, headers = {}) => async (input, options) => {
     assert.equal(options.redirect, 'error');
@@ -73,6 +78,7 @@ async function start() {
         env: { ...process.env, OPENFINGERPRINT_SITES: JSON.stringify([{ id: 'test', secret_key: key }]),
             OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0',
             OPENFINGERPRINT_COUNTRY_DATA: path, OPENFINGERPRINT_COUNTRY_DATA_RELOAD_SECONDS: '1',
+            OPENFINGERPRINT_NETWORK_DATA: networkPath, OPENFINGERPRINT_TRUSTED_PROXIES: undefined,
             OPENFINGERPRINT_DOMAIN_DATA: join(directory, 'missing.json'),
             OPENFINGERPRINT_REDIS_URL: 'redis://127.0.0.1:1/0', OPENFINGERPRINT_REDIS_PASSWORD: undefined,
             OPENFINGERPRINT_DNS: '127.0.0.1:9' },
@@ -162,6 +168,8 @@ try {
     const expected = (await check(server, '8.8.8.8')).ip;
     assert.equal(expected.status, 'ok', JSON.stringify(expected));
     assert.equal(expected.country_code, 'DK');
+    assert.equal(expected.network.tor.value, true);
+    assert.equal(expected.network.source, 'backend_supplied');
     assert.equal(expected.source.license, 'CC-BY-4.0');
     assert.equal(expected.source.updated_at_unix, now - 100);
     assert.equal(expected.source.expires_at_unix, now - 100 + 62 * 86400);
@@ -205,6 +213,7 @@ try {
         assert.equal(result.status, 'unknown');
         assert.equal(result.reason, reason);
         assert(!('country_code' in result));
+        assert.equal(result.network.tor.value, true);
         await stop();
     }
     await rm(path);

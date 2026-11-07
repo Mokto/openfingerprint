@@ -1,0 +1,86 @@
+{{- if and .Values.networkData.refresh.enabled (not .Values.networkData.existingClaim) }}
+{{- fail "networkData.refresh requires networkData.existingClaim" }}
+{{- end }}
+{{- if .Values.networkData.refresh.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "of.name" . }}-network-data
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.networkData.refresh.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: openfingerprint-network-updater
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            {{- include "of.podSecurity" . | nindent 12 }}
+            fsGroup: 65532
+            fsGroupChangePolicy: OnRootMismatch
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: updater
+              image: {{ include "of.image" (dict "image" .Values.networkData.refresh.image "appVersion" .Chart.AppVersion) | quote }}
+              imagePullPolicy: {{ .Values.networkData.refresh.image.pullPolicy }}
+              args: ["--output", "/network-data/network.json"]
+              securityContext:
+                {{- include "of.containerSecurity" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.networkData.refresh.resources | nindent 16 }}
+              volumeMounts:
+                - name: network-data
+                  mountPath: /network-data
+          volumes:
+            - name: network-data
+              persistentVolumeClaim:
+                claimName: {{ .Values.networkData.existingClaim | quote }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "of.name" . }}-network-data
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openfingerprint-network-updater
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 443
+{{- end }}
+{{- end }}

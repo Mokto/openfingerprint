@@ -23,7 +23,7 @@ jobs:
     services:
       redis:
         image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
-        ports: [6379:6379]
+        ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -42,6 +42,9 @@ jobs:
       - run: node api/test.mjs
       - run: node api/test-country.mjs
       - run: node api/test-collection.mjs
+        env:
+          OPENFINGERPRINT_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+      - run: node api/test-network.mjs
         env:
           OPENFINGERPRINT_TEST_REDIS_URL: redis://127.0.0.1:6379/15
       - run: bash api/chart/test.sh

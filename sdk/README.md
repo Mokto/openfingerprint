@@ -136,7 +136,10 @@ const { eventId } = await identify({
 POST to the same-origin endpoint. Your proxy forwards it to the API's
 `POST /v1/collect`, preserving Origin, User-Agent and Sec-CH-UA-Platform, but no
 cookies or Authorization. The browser receives only an opaque event ID, not a
-server verdict. Send that ID with the business action; your backend consumes it
+server verdict. With network data configured, the API also derives Tor/ASN/cloud
+range evidence from the request, not from browser IP claims. Your proxy must
+sanitize forwarding headers and the API must trust only its actual proxy CIDRs;
+raw IPs are not retained. No extra SDK option is needed. Send that ID with the business action; your backend consumes it
 using `POST /v1/events/consume` and the expected server-stored binding.
 
 The endpoint must be same-origin HTTPS (HTTP is allowed on localhost/loopback).

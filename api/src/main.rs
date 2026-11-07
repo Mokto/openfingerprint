@@ -5,6 +5,7 @@ mod collection;
 mod country;
 mod domains;
 mod mx;
+mod network;
 mod rdap;
 
 use std::{sync::Arc, time::Duration};
@@ -38,7 +39,8 @@ async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::respon
         state.domains.metrics()
             + &state.dns.metrics()
             + &state.rdap.metrics()
-            + &state.countries.metrics(),
+            + &state.countries.metrics()
+            + &state.network.metrics(),
     )
 }
 
@@ -75,12 +77,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         return Ok(());
     }
+    if let [flag, path] = args.as_slice()
+        && flag == "--validate-network-data"
+    {
+        network::validate(std::path::Path::new(path))?;
+        println!("Network snapshot is valid.");
+        return Ok(());
+    }
+    if let [flag, path] = args.as_slice()
+        && flag == "--lock-network-data"
+    {
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(|_| "Network updater lock unavailable")?;
+        lock.try_lock()
+            .map_err(|_| "Network updater lock unavailable")?;
+        println!("Network updater lock acquired.");
+        std::io::copy(&mut std::io::stdin(), &mut std::io::sink())?;
+        return Ok(());
+    }
     if !args.is_empty() {
-        return Err(
-            "Usage: openfingerprint-api [--validate-country <candidate> [<previous>]]".into(),
-        );
+        return Err("Unknown arguments".into());
     }
     let state = Arc::new(check::AppState::from_env()?);
+    if state.network.reloads() {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let state = state.clone();
+                let _ = tokio::task::spawn_blocking(move || state.network.reload()).await;
+            }
+        });
+    }
     if state.domains.reloads() {
         let seconds = match std::env::var("OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS") {
             Err(_) => 60,
@@ -133,8 +167,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("OPENFINGERPRINT_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8180".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("listening on {}", listener.local_addr()?);
-    axum::serve(listener, app(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
