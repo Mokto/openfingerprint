@@ -320,7 +320,7 @@ outcome is returned, never the record text:
 
 | `spf.status` | Meaning |
 | --- | --- |
-| `found` | Exactly one `v=spf1` TXT record. |
+| `found` | Exactly one `v=spf1` TXT record. `policy` is how it treats senders it does not list, from its first `all` term: `fail` (`-all`), `softfail` (`~all`), `neutral` (`?all`, bare `all`) or `pass` (`+all`, anyone may send). Absent when the record has no `all` term, such as one that only redirects. |
 | `multiple` | More than one, which receivers treat as an error (RFC 7208). |
 | `none` | No SPF record. |
 | `no_domain` | The domain does not exist in DNS. |
