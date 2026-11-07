@@ -91,8 +91,9 @@ impl DomainCheck {
     }
 }
 
-/// An otherwise unlisted domain whose MX hosts all belong to one provider's consumer (or alias)
-/// infrastructure, so its addresses are like those at the provider's own domains.
+/// An otherwise unlisted domain whose MX hosts all belong to one provider's consumer or alias
+/// infrastructure, or to infrastructure that serves throwaway domains, so its addresses are like
+/// those at that provider's own domains.
 fn mx_inferred(fact: Fact, provider: Option<&str>) -> Fact {
     match provider {
         Some(_) if fact.status == "not_listed" => Fact {
@@ -419,7 +420,7 @@ impl DomainData {
                 status: "mx_listed",
                 ..host
             },
-            None => fact,
+            None => mx_inferred(fact, crate::providers::disposable_infrastructure(mx)),
         }
     }
 
