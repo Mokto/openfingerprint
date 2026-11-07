@@ -54,7 +54,7 @@ try {
             const request = requests.at(-1);
             assert.deepEqual(Object.keys(request.body).sort(), ['challenge', 'context', 'signals']);
             assert.equal(request.body.challenge, challenge);
-            assert.equal(request.body.signals.automation.version, 1);
+            assert.equal(request.body.signals.automation.version, 2);
             assert.equal(request.body.context.userAgent, request.headers['user-agent']);
             assert.equal(request.body.context.platform, await page.evaluate(() => navigator.platform));
             assert.equal(request.headers.origin, origin);

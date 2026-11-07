@@ -156,7 +156,7 @@ The JSON object accepts only these fields:
 | Field | Shape |
 | --- | --- |
 | `signals` | Optional SDK result object, as described below. |
-| `automation` | Optional version-1 SDK automation evidence, as described below. |
+| `automation` | Optional version-1 or version-2 SDK automation evidence, as described below. |
 | `domain` | Optional ASCII hostname, not a URL or complete email address. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
 
@@ -320,7 +320,7 @@ option or forwarding step is needed. Existing callers may still send standalone
 `automation` (including without a fingerprint):
 
 ```json
-{"automation":{"version":1,"webdriver":true,"headlessUserAgent":false,"seleniumArtifacts":false,"phantomArtifacts":null}}
+{"automation":{"version":2,"webdriver":true,"headlessUserAgent":false,"seleniumArtifacts":false,"phantomArtifacts":null,"cdpDetected":false}}
 ```
 
 The response contains:
@@ -329,22 +329,40 @@ The response contains:
 {
   "automation": {
     "status": "detected",
-    "rule_version": 1,
+    "rule_version": 2,
     "source": "client_reported",
     "indicators": ["webdriver"],
-    "unavailable_probes": ["phantom_artifacts"]
+    "unavailable_probes": ["phantom_artifacts", "platform_mismatch"]
   }
 }
 ```
 
-Evidence accepts only `version: 1` and four optional booleans:
-`webdriver`, `headlessUserAgent`, `seleniumArtifacts`, `phantomArtifacts`.
-Null or omitted observations remain unknown. Names in `indicators` and
-`unavailable_probes` are respectively `webdriver`, `headless_user_agent`,
-`selenium_artifacts`, `phantom_artifacts`, in that order.
+Evidence accepts `version: 1` with four optional booleans, or `version: 2` with
+those four plus ten more. Each version rejects any field it does not define, so a
+version-1 document cannot carry version-2 probes. `rule_version` echoes the
+evidence version. Null or omitted observations remain unknown. `indicators` and
+`unavailable_probes` list snake_case names in this order:
 
-Rule version 1 reports `detected` if any observation is true, `unknown` if none
-is true and any is unavailable, or `not_detected` only if all four are false.
+| Evidence field | Name | Since | `true` means |
+| --- | --- | --- | --- |
+| `webdriver` | `webdriver` | 1 | `navigator.webdriver` is true. |
+| `headlessUserAgent` | `headless_user_agent` | 1 | UA contains `HeadlessChrome/`. |
+| `seleniumArtifacts` | `selenium_artifacts` | 1 | A Selenium global exists on `document`. |
+| `phantomArtifacts` | `phantom_artifacts` | 1 | A Phantom global exists on `window`. |
+| `platformMismatch` | `platform_mismatch` | 2 | UA OS family contradicts `navigator.platform` or `userAgentData.platform`. |
+| `missingChromeObject` | `missing_chrome_object` | 2 | A Chromium UA (not WebView) without `window.chrome`. |
+| `notificationPermissionQuirk` | `notification_permission_quirk` | 2 | `Notification.permission` is `denied` while the Permissions API reports `prompt`. |
+| `emptyPlugins` | `empty_plugins` | 2 | Desktop Chromium with no `navigator.plugins`. |
+| `emptyLanguages` | `empty_languages` | 2 | `navigator.languages` is empty. |
+| `softwareRenderer` | `software_renderer` | 2 | Unmasked WebGL renderer is SwiftShader, llvmpipe, softpipe or similar. |
+| `zeroDimensions` | `zero_dimensions` | 2 | Screen or outer-window width/height is 0. |
+| `cdpDetected` | `cdp_detected` | 2 | A console-logged object's `stack` getter was read, as a CDP client or open DevTools does. |
+| `nativeFunctionTampering` | `native_function_tampering` | 2 | `Function.prototype.toString`, the `navigator.webdriver` getter or `Permissions.prototype.query` is not native. |
+| `workerUserAgentMismatch` | `worker_user_agent_mismatch` | 2 | A dedicated worker reports a different UA or platform than the main thread. |
+
+Rules for either version report `detected` if any observation is true, `unknown`
+if none is true and any is unavailable, or `not_detected` only if every
+observation the version defines is false.
 Malformed evidence, unknown keys, unsupported versions and non-boolean/non-null
 observations produce `invalid_input` with `reason: invalid_automation` and empty
 indicator/unavailable arrays. Other sections still run. Top-level
@@ -354,8 +372,8 @@ These rules interpret client reports, not attested browser execution. Evidence
 can be forged or hidden. `not_detected` is not proof of a human, and automation
 may be legitimate testing or assistive tooling, not malicious traffic. No
 good/bad bot classification, confidence, fraud score, retention or new outbound
-traffic is introduced. Deploy the compatible API before sending this field;
-older servers reject it. `/v1/verify` accepts embedded automation but ignores it,
+traffic is introduced. Deploy the compatible API before upgrading the SDK;
+older servers reject version-2 evidence. `/v1/verify` accepts embedded automation but ignores it,
 retaining its status/schema/fingerprint-only response.
 
 #### Domain and IP boundaries

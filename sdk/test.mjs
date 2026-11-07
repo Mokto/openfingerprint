@@ -93,7 +93,7 @@ const server = createServer((req, res) => {
 	res.setHeader('Cache-Control', 'no-store');
 	res.setHeader(
 		'Content-Security-Policy',
-		"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; frame-src 'self'"
+		"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; frame-src 'self'; worker-src blob:"
 	);
 	const name = (req.url || '').slice(1).replace('.js', '');
 	if ((req.url || '').endsWith('.js') && Object.hasOwn(sources, name)) {
@@ -173,7 +173,11 @@ try {
 		try {
 			await page.goto(`${origin}/custom`);
 			const automation = await page.evaluate(() => OpenFingerprint.collectAutomation());
-			assert.equal(automation.version, 1);
+			assert.equal(automation.version, 2);
+			for (const [key, value] of Object.entries(automation)) assert(key === 'version' || value === null || typeof value === 'boolean', key);
+			assert.equal(automation.softwareRenderer, null);
+			assert.equal(automation.notificationPermissionQuirk, null);
+			assert.equal(automation.workerUserAgentMismatch, null);
 			assert.equal(automation.webdriver, await page.evaluate(() =>
 				typeof navigator.webdriver === 'boolean' ? navigator.webdriver : null));
 			if (name === 'chromium' || name === 'chrome') assert.equal(automation.webdriver, true);
@@ -198,16 +202,46 @@ try {
 					}
 				}, scenario);
 				try {
-					assert.deepEqual(await p.evaluate(() => OpenFingerprint.collectAutomation()), {
-						version: 1,
-						webdriver: ['errors', 'unsupported', 'wrong_type'].includes(scenario) ? null : false,
-						headlessUserAgent: ['errors', 'unsupported', 'wrong_type'].includes(scenario) ? null : scenario === 'markers',
-						seleniumArtifacts: scenario === 'markers',
-						phantomArtifacts: scenario === 'markers'
-					});
+					const unreadable = ['errors', 'unsupported', 'wrong_type'].includes(scenario);
+					const observed = await p.evaluate(() => OpenFingerprint.collectAutomation());
+					assert.deepEqual(
+						Object.fromEntries(Object.entries(observed).slice(0, 5)),
+						{
+							version: 2,
+							webdriver: unreadable ? null : false,
+							headlessUserAgent: unreadable ? null : scenario === 'markers',
+							seleniumArtifacts: scenario === 'markers',
+							phantomArtifacts: scenario === 'markers'
+						}
+					);
+					if (unreadable) {
+						assert.equal(observed.platformMismatch, null);
+						assert.equal(observed.missingChromeObject, null);
+						assert.equal(observed.emptyPlugins, null);
+					}
 				} finally {
 					await p.close();
 				}
+			}
+			const spoof = await fresh(() => {
+				const define = (target, key, value) => Object.defineProperty(target, key, { configurable: true, get: () => value });
+				define(navigator, 'userAgent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/156.0.0.0 Safari/537.36');
+				define(navigator, 'platform', 'MacIntel');
+				define(navigator, 'languages', []);
+				define(navigator, 'plugins', []);
+				define(window, 'chrome', undefined);
+				define(screen, 'width', 0);
+				Function.prototype.toString = function toString() { return 'function toString() {}'; };
+			});
+			try {
+				const spoofed = await spoof.evaluate(() => OpenFingerprint.collectAutomation());
+				for (const key of ['platformMismatch', 'missingChromeObject', 'emptyPlugins', 'emptyLanguages', 'zeroDimensions', 'nativeFunctionTampering'])
+					assert.equal(spoofed[key], true, key);
+				const collected = await spoof.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
+				assert(['notificationPermissionQuirk', 'workerUserAgentMismatch'].every((key) => typeof collected.automation[key] === 'boolean'));
+				assert.equal(collected.automation.workerUserAgentMismatch, true);
+			} finally {
+				await spoof.close();
 			}
 			report.checks.push({
 				browser: name,
@@ -218,7 +252,11 @@ try {
 				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 5000 })
 			);
 			valid(a);
-			assert.deepEqual(a.automation, automation);
+			const { notificationPermissionQuirk, workerUserAgentMismatch, softwareRenderer, ...rest } = a.automation;
+			for (const [key, value] of Object.entries(rest))
+				if (key !== 'cdpDetected') assert.equal(value, automation[key], key);
+			for (const value of [notificationPermissionQuirk, workerUserAgentMismatch, softwareRenderer])
+				assert(value === null || typeof value === 'boolean');
 			assert(!('webdriver' in a.hints));
 			assert(
 				a.fingerprint,
@@ -971,7 +1009,7 @@ try {
 			assert(!diagnosticTimeout.excluded.includes('fonts'));
 			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
 			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
-			assert.equal(diagnosticTimeout.automation.version, 1);
+			assert.equal(diagnosticTimeout.automation.version, 2);
 			assert(diagnosticTimeout.components.canvas);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);
