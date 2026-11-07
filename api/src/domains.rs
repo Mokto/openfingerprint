@@ -61,6 +61,17 @@ pub struct DomainCheck {
     facts: Option<Facts>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mx_lookup: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registration: Option<crate::rdap::Registration>,
+}
+
+impl DomainCheck {
+    pub fn with_registration(self, registration: crate::rdap::Registration) -> Self {
+        Self {
+            registration: Some(registration),
+            ..self
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -224,6 +235,7 @@ impl DomainData {
                 reason: Some("invalid_domain"),
                 facts: None,
                 mx_lookup: None,
+                registration: None,
             })),
         }
     }
@@ -233,6 +245,18 @@ impl DomainData {
         self.fact(domain, now(), Category::Disposable, "disposable_domain")
             .status
             == "not_listed"
+    }
+
+    /// Tenants of a listed free-subdomain namespace: the registered domain belongs to its operator.
+    pub fn hosted_tenant(&self, domain: &str) -> bool {
+        self.fact(
+            domain,
+            now(),
+            Category::FreeSubdomain,
+            "free_subdomain_namespace",
+        )
+        .value
+            == Some(true)
     }
 
     pub fn check_with(&self, domain: &str, mx: &[String], mx_lookup: &'static str) -> DomainCheck {
@@ -276,6 +300,7 @@ impl DomainData {
             reason: self.reason,
             facts: Some(facts),
             mx_lookup: None,
+            registration: None,
         }
     }
 

@@ -63,8 +63,51 @@ domainData:
       limits:
         memory: 256Mi
 
-networkPolicy:
+# Redis is required: it holds collection state and caches RDAP answers (keys are SHA-256 hashes
+# of registered domains, always with a TTL). The chart deploys redis-ha by default. To use your
+# own Redis or Valkey, set redis-ha.enabled=false and put OPENFINGERPRINT_REDIS_URL (and
+# optionally OPENFINGERPRINT_REDIS_PASSWORD) in existingSecret.
+redis-ha:
   enabled: true
+  replicas: 3
+  # With auth, set existingSecret (key authKey); the API reads the same Secret. Sentinel
+  # failover is asynchronous: see "Redis" in the chart README before relying on collection.
+  auth: false
+  persistentVolume:
+    enabled: false
+  haproxy:
+    enabled: true
+    replicas: 2
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+  redis:
+    config:
+      maxmemory: 64mb
+      # Collection state must not be evicted: a full Redis rejects writes instead.
+      maxmemory-policy: noeviction
+      save: '""'
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        memory: 192Mi
+  sentinel:
+    resources:
+      requests:
+        cpu: 20m
+        memory: 32Mi
+      limits:
+        memory: 64Mi
+
+networkPolicy:
+  # Off by default. When enabled, apiFrom is required and the API may reach only cluster DNS,
+  # public HTTPS for RDAP and Redis.
+  enabled: false
   # Required peers (NetworkPolicy "from" entries) allowed to call the API on its HTTP port.
   apiFrom: []
   # Peers allowed to scrape the metrics port, for example Prometheus.
@@ -72,10 +115,12 @@ networkPolicy:
   # The updater needs DNS, HTTPS to GitHub and the Kubernetes API (often 6443 behind the
   # kubernetes Service).
   kubeApiServerPorts: [6443]
-  # MX lookups use UDP 53 through the pod's first resolv.conf nameserver,
-  # which these peers must include.
+  # Peers of your own Redis, required when redis-ha is disabled; the bundled one is allowed
+  # automatically.
   redisTo: []
   redisPort: 6379
+  # MX lookups use UDP 53 through the pod's first resolv.conf nameserver,
+  # which these peers must include.
   dnsTo:
     - namespaceSelector:
         matchLabels:
@@ -83,3 +128,12 @@ networkPolicy:
       podSelector:
         matchLabels:
           k8s-app: kube-dns
+  # Registries the API may query over HTTPS for RDAP registration dates. They are spread across
+  # the Internet, so the default is every public address and no private or link-local range.
+  rdapTo:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16]
+    - ipBlock:
+        cidr: ::/0
+        except: [fc00::/7, fe80::/10]

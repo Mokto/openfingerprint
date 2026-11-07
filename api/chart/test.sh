@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
+if [ ! -d charts ]; then
+  # A throwaway repository config: `helm dependency build` verifies Chart.lock but needs the repo.
+  helm_home=$(mktemp -d)
+  export HELM_REPOSITORY_CONFIG="$helm_home/repositories.yaml" HELM_REPOSITORY_CACHE="$helm_home/cache"
+  helm repo add dandydeveloper https://dandydeveloper.github.io/charts/ >/dev/null
+  helm dependency build . >/dev/null
+  rm -rf "$helm_home"
+  unset HELM_REPOSITORY_CONFIG HELM_REPOSITORY_CACHE
+fi
 digest=sha256:$(printf 'a%.0s' {1..64})
 render() {
   helm template openfingerprint . --namespace openfingerprint \
@@ -8,7 +17,7 @@ render() {
     --set "image.digest=$digest" --set "domainData.refresh.image.digest=$digest" \
     --set-json 'networkPolicy.apiFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"web"}},"podSelector":{"matchLabels":{"app.kubernetes.io/name":"users"}}}]' \
     --set-json 'networkPolicy.metricsFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"kube-system"}}}]' \
-    --set serviceMonitor.enabled=true --set prometheusRule.enabled=true "$@"
+    --set networkPolicy.enabled=true --set serviceMonitor.enabled=true --set prometheusRule.enabled=true "$@"
 }
 rendered=$(mktemp)
 trap 'rm -f "$rendered"' EXIT
@@ -16,7 +25,7 @@ render > "$rendered"
 ruby -ryaml -e '
 dup = ->(node) { node.is_a?(Psych::Nodes::Mapping) && (keys = node.children.each_slice(2).map { |k, _| k.value }).uniq.size != keys.size || node.children.to_a.any? { |c| dup.call(c) } }
 abort("Rendered YAML repeats a mapping key; strict parsers such as kubeconform reject it") if dup.call(Psych.parse_stream(File.read(ARGV[0])))
-docs = YAML.load_stream(File.read(ARGV[0])).compact
+docs = YAML.load_stream(File.read(ARGV[0])).compact.reject { |d| d["metadata"]["name"].start_with?("openfingerprint-redis-ha") }
 get = ->(kind, name = nil) { docs.find { |d| d["kind"] == kind && (name.nil? || d["metadata"]["name"] == name) } || abort("Missing #{kind} #{name}") }
 check = ->(ok, message) { abort(message) unless ok }
 api_labels = {"app.kubernetes.io/name" => "openfingerprint", "app.kubernetes.io/instance" => "openfingerprint"}
@@ -31,7 +40,7 @@ check.call(api["securityContext"] == {"readOnlyRootFilesystem" => true, "allowPr
 check.call(api["image"].end_with?("@sha256:" + "a" * 64) && api["image"].start_with?("ghcr.io/mokto/openfingerprint-api:"), "Pinned API image")
 check.call(api["envFrom"] == [{"secretRef" => {"name" => "openfingerprint-config"}}], "Credentials only via the Secret")
 env = api["env"].to_h { |e| [e["name"], e["value"]] }
-check.call(env == {"OPENFINGERPRINT_LISTEN_ADDR" => "0.0.0.0:8180", "OPENFINGERPRINT_METRICS_ADDR" => "0.0.0.0:9180", "OPENFINGERPRINT_DOMAIN_DATA" => "/domain-data/domains.json", "OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS" => "60"}, "API environment")
+check.call(env == {"OPENFINGERPRINT_LISTEN_ADDR" => "0.0.0.0:8180", "OPENFINGERPRINT_METRICS_ADDR" => "0.0.0.0:9180", "OPENFINGERPRINT_DOMAIN_DATA" => "/domain-data/domains.json", "OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS" => "60", "OPENFINGERPRINT_REDIS_URL" => "redis://openfingerprint-redis-ha-haproxy:6379/0"}, "API environment")
 check.call(pod["volumes"] == [{"name" => "domain-data", "configMap" => {"name" => "openfingerprint-domain-data", "optional" => true}}], "Optional snapshot ConfigMap volume")
 check.call(api["volumeMounts"] == [{"name" => "domain-data", "mountPath" => "/domain-data", "readOnly" => true}], "Read-only snapshot mount")
 %w[startupProbe readinessProbe livenessProbe].each { |p| check.call(api[p]["httpGet"] == {"path" => "/health", "port" => "http"}, "#{p} uses /health") }
@@ -43,7 +52,11 @@ check.call(docs.none? { |d| %w[Ingress IngressRoute].include?(d["kind"]) }, "No 
 policy = get.call("NetworkPolicy", "openfingerprint-api")["spec"]
 check.call(policy["podSelector"]["matchLabels"] == api_labels && policy["policyTypes"].sort == %w[Egress Ingress], "API policy isolates both directions")
 dns_peer = [{"namespaceSelector" => {"matchLabels" => {"kubernetes.io/metadata.name" => "kube-system"}}, "podSelector" => {"matchLabels" => {"k8s-app" => "kube-dns"}}}]
-check.call(policy["egress"] == [{"to" => dns_peer, "ports" => [{"protocol" => "UDP", "port" => 53}]}], "API egress is only MX lookups to cluster DNS on UDP 53")
+public = [{"ipBlock" => {"cidr" => "0.0.0.0/0", "except" => %w[10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16]}}, {"ipBlock" => {"cidr" => "::/0", "except" => %w[fc00::/7 fe80::/10]}}]
+# Psych reads the unquoted "::/0" as a Symbol; Kubernetes reads a string.
+plain = ->(x) { x.is_a?(Hash) ? x.transform_values { |v| plain.(v) } : x.is_a?(Array) ? x.map { |v| plain.(v) } : x.is_a?(Symbol) ? ":#{x}" : x }
+check.call(plain.(policy["egress"]) == [{"to" => dns_peer, "ports" => [{"protocol" => "UDP", "port" => 53}]}, {"to" => public, "ports" => [{"protocol" => "TCP", "port" => 443}]}, {"to" => [{"podSelector" => {"matchLabels" => {"app" => "redis-ha-haproxy", "release" => "openfingerprint"}}}], "ports" => [{"protocol" => "TCP", "port" => 6379}]}], "API egress: cluster DNS on UDP 53, public HTTPS for RDAP and the cache, nothing else private")
+check.call(pod["dnsConfig"] == {"options" => [{"name" => "ndots", "value" => "1"}]}, "Registry hosts skip cluster search domains")
 check.call(policy["ingress"].map { |r| r["ports"] } == [[{"protocol" => "TCP", "port" => 8180}], [{"protocol" => "TCP", "port" => 9180}]], "API and metrics ports only")
 check.call(policy["ingress"][0]["from"][0]["podSelector"] == {"matchLabels" => {"app.kubernetes.io/name" => "users"}}, "Configured API callers")
 cron = get.call("CronJob")
@@ -71,16 +84,42 @@ check.call(rules[2]["annotations"]["summary"].include?("{{ $labels.source }}"), 
 check.call(docs.all? { |d| d["metadata"]["namespace"].nil? || d["metadata"]["namespace"] == "openfingerprint" }, "No foreign namespaces")
 puts "Chart selectors, isolation, RBAC, refresh and monitoring checks passed."
 ' "$rendered"
-if render --set-json 'networkPolicy.dnsTo=[]' >/dev/null 2>&1; then echo "An empty DNS peer list must fail" >&2; exit 1; fi
-render --set-json 'networkPolicy.redisTo=[{"podSelector":{"matchLabels":{"app":"redis"}}}]' --set networkPolicy.redisPort=6380 > "$rendered"
+for empty in dnsTo rdapTo; do
+  if render --set-json "networkPolicy.$empty=[]" >/dev/null 2>&1; then echo "An empty $empty must fail" >&2; exit 1; fi
+done
+minimal=$(helm template openfingerprint . --namespace openfingerprint --set existingSecret=x)
+grep -q 'kind: NetworkPolicy' <<< "$minimal" && { echo "NetworkPolicies must be opt-in" >&2; exit 1; }
+grep -q 'value: "redis://openfingerprint-redis-ha-haproxy:6379/0"' <<< "$minimal" || { echo "The bundled Redis must be on by default" >&2; exit 1; }
+bundled=$(render --set redis-ha.auth=true --set redis-ha.existingSecret=cache-auth)
 ruby -ryaml -e '
-docs = YAML.load_stream(File.read(ARGV[0])).compact
+docs = YAML.load_stream(ARGF.read).compact
+api = docs.find { |d| d["kind"] == "Deployment" && d["metadata"]["name"] == "openfingerprint" }["spec"]["template"]["spec"]["containers"].first
+env = api["env"].to_h { |e| [e["name"], e["value"] || e["valueFrom"]] }
+abort("API must use the redis-ha HAProxy service") unless env["OPENFINGERPRINT_REDIS_URL"] == "redis://openfingerprint-redis-ha-haproxy:6379/0"
+abort("API must read the Redis password from the redis-ha Secret") unless env["OPENFINGERPRINT_REDIS_PASSWORD"] == {"secretKeyRef" => {"name" => "cache-auth", "key" => "auth"}}
+docs.find { |d| d["kind"] == "Service" && d["metadata"]["name"] == "openfingerprint-redis-ha-haproxy" } or abort("Missing HAProxy Service")
+haproxy = docs.find { |d| d["kind"] == "Deployment" && d["metadata"]["name"] == "openfingerprint-redis-ha-haproxy" }["spec"]["template"]["metadata"]["labels"]
+egress = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]["egress"].last
+abort("API egress to Redis must select the HAProxy pods on 6379") unless egress["ports"] == [{"protocol" => "TCP", "port" => 6379}] && egress["to"].first["podSelector"]["matchLabels"].all? { |k, v| haproxy[k] == v }
+config = docs.find { |d| d["kind"] == "ConfigMap" && d["metadata"]["name"] == "openfingerprint-redis-ha-configmap" }["data"]["redis.conf"]
+abort("Bundled Redis: bounded memory, no eviction of collection state, no snapshots") unless config.include?("maxmemory 64mb") && config.include?("maxmemory-policy noeviction") && config.include?(%q{save ""})
+abort("No persistent volumes") if docs.any? { |d| d["kind"] == "StatefulSet" && d["spec"]["volumeClaimTemplates"] }
+' <<< "$bundled"
+own=$(render --set redis-ha.enabled=false --set-json 'networkPolicy.redisTo=[{"podSelector":{"matchLabels":{"app":"redis"}}}]' --set networkPolicy.redisPort=6380)
+ruby -ryaml -e '
+docs = YAML.load_stream(ARGF.read).compact
+abort("Your own Redis must not deploy redis-ha") if docs.any? { |d| d["metadata"]["name"].include?("redis-ha") }
+env = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]["containers"].first["env"].map { |e| e["name"] }
+abort("With your own Redis, its URL comes from existingSecret only") if env.any? { |n| n.start_with?("OPENFINGERPRINT_REDIS") }
 policy = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]
 expected = {"to" => [{"podSelector" => {"matchLabels" => {"app" => "redis"}}}], "ports" => [{"protocol" => "TCP", "port" => 6380}]}
-abort("Redis egress must be scoped to configured peers/port") unless policy["egress"].size == 2 && policy["egress"][1] == expected
-puts "Optional Redis egress check passed."
-' "$rendered"
-static=$(render --set domainData.refresh.enabled=false)
+abort("Redis egress must be scoped to configured peers/port") unless policy["egress"].size == 3 && policy["egress"][2] == expected
+puts "Bundled and own Redis checks passed."
+' <<< "$own"
+if output=$(render --set redis-ha.enabled=false 2>&1) || ! grep -qF "networkPolicy.redisTo must list" <<< "$output"; then
+  echo "Policies without redis-ha must require redisTo" >&2; exit 1
+fi
+static=$(render --set domainData.refresh.enabled=false --set redis-ha.enabled=false --set-json 'networkPolicy.redisTo=[{"podSelector":{}}]')
 grep -q 'kind: CronJob\|OPENFINGERPRINT_DOMAIN_DATA\|kind: Role' <<< "$static" && { echo "Disabled refresh must render no updater or override" >&2; exit 1; }
 for bad in "existingSecret=" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short" "networkPolicy.redisTo=bad" "networkPolicy.redisPort=0" "networkPolicy.redisPort=65536" "networkPolicy.redisPort=6379.5"; do
   if render --set "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi

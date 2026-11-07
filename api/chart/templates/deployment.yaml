@@ -26,6 +26,11 @@ spec:
       {{- end }}
     spec:
       automountServiceAccountToken: false
+      # The API resolves only public registry hosts: skip the cluster search domains.
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
       terminationGracePeriodSeconds: 10
       securityContext:
         {{- include "of.podSecurity" . | nindent 8 }}
@@ -50,6 +55,18 @@ spec:
             {{- if .Values.metrics.enabled }}
             - name: OPENFINGERPRINT_METRICS_ADDR
               value: "0.0.0.0:{{ .Values.metrics.port }}"
+            {{- end }}
+            {{- $redis := index .Values "redis-ha" }}
+            {{- if $redis.enabled }}
+            - name: OPENFINGERPRINT_REDIS_URL
+              value: "redis://{{ include "of.redisName" . }}-haproxy:6379/0"
+            {{- if $redis.auth }}
+            - name: OPENFINGERPRINT_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $redis.existingSecret | default (include "of.redisName" .) | quote }}
+                  key: {{ $redis.authKey | default "auth" | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.domainData.refresh.enabled }}
             - name: OPENFINGERPRINT_DOMAIN_DATA

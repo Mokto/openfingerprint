@@ -30,17 +30,27 @@ pub struct AppState {
     pub collection: Option<crate::collection::Store>,
     pub domains: crate::domains::DomainStore,
     pub dns: crate::mx::Resolver,
+    pub rdap: crate::rdap::Rdap,
 }
 impl AppState {
     pub fn from_env() -> Result<Self, &'static str> {
         let config = std::env::var("OPENFINGERPRINT_SITES")
             .map_err(|_| "OPENFINGERPRINT_SITES is required")?;
-        let mut state = Self::configure(&config, crate::mx::Resolver::from_env()?)?;
+        let redis = crate::cache::client_from_env()?;
+        let mut state = Self::configure(
+            &config,
+            crate::mx::Resolver::from_env()?,
+            crate::rdap::Rdap::from_env(redis.clone())?,
+        )?;
         state.domains = crate::domains::DomainStore::from_env();
-        state.collection = crate::collection::Store::from_env()?;
+        state.collection = Some(crate::collection::Store::from_env(redis)?);
         Ok(state)
     }
-    fn configure(config: &str, dns: crate::mx::Resolver) -> Result<Self, &'static str> {
+    fn configure(
+        config: &str,
+        dns: crate::mx::Resolver,
+        rdap: crate::rdap::Rdap,
+    ) -> Result<Self, &'static str> {
         if config.len() > BODY_LIMIT {
             return Err("Invalid OPENFINGERPRINT_SITES");
         }
@@ -79,6 +89,7 @@ impl AppState {
                 "not_configured",
             )),
             dns,
+            rdap,
         })
     }
     async fn check_domain(&self, value: serde_json::Value) -> crate::domains::DomainCheck {
@@ -87,14 +98,26 @@ impl AppState {
             Err(invalid) => return *invalid,
         };
         let data = self.domains.current();
-        // Skipping lookups that cannot change the result also avoids sending those domains to DNS.
-        if !data.needs_mx(&domain) {
-            return data.check_with(&domain, &[], "not_needed");
-        }
-        match self.dns.mx(&domain).await {
-            crate::mx::Lookup::Hosts(hosts) => data.check_with(&domain, &hosts, "resolved"),
-            other => data.check_with(&domain, &[], other.status()),
-        }
+        let mx = async {
+            // Skipping lookups that cannot change the result also avoids sending those domains to DNS.
+            if !data.needs_mx(&domain) {
+                return (Vec::new(), "not_needed");
+            }
+            match self.dns.mx(&domain).await {
+                crate::mx::Lookup::Hosts(hosts) => (hosts, "resolved"),
+                other => (Vec::new(), other.status()),
+            }
+        };
+        let registration = async {
+            if data.hosted_tenant(&domain) {
+                crate::rdap::Registration::status("not_applicable")
+            } else {
+                self.rdap.lookup(&domain).await
+            }
+        };
+        let ((hosts, lookup), registration) = tokio::join!(mx, registration);
+        data.check_with(&domain, &hosts, lookup)
+            .with_registration(registration)
     }
     pub(crate) fn authorize(&self, headers: &HeaderMap) -> Result<&Site, ApiError> {
         let site = self.authenticate(headers)?;
@@ -465,8 +488,16 @@ mod tests {
     fn dns() -> crate::mx::Resolver {
         crate::mx::Resolver::new("127.0.0.1:9", None).unwrap()
     }
+    fn rdap() -> crate::rdap::Rdap {
+        crate::rdap::Rdap::new(
+            br#"{"services":[[["test"],["https://rdap.invalid/"]]]}"#,
+            false,
+            crate::cache::Cache::new(crate::cache::tests::client_for("127.0.0.1:9")),
+        )
+        .unwrap()
+    }
     fn state() -> AppState {
-        AppState::configure(&config(), dns()).unwrap()
+        AppState::configure(&config(), dns(), rdap()).unwrap()
     }
     fn signals() -> Signals {
         let mut s: Signals = serde_json::from_value(serde_json::json!({"version":4,"fingerprint":null,"coreFingerprint":null,"components":{"fontPreferences":sha256("fixture")},"hints":{},"unavailable":{},"excluded":[],"durationMs":1})).unwrap();
@@ -497,7 +528,7 @@ mod tests {
         let legacy = serde_json::json!([
             {"id":"alpha","secret_key":"s".repeat(32),"site_key":"p".repeat(32),"origins":["https://alpha.test"]}
         ]);
-        let legacy = AppState::configure(&legacy.to_string(), dns()).unwrap();
+        let legacy = AppState::configure(&legacy.to_string(), dns(), rdap()).unwrap();
         let minimal = state();
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -540,14 +571,16 @@ mod tests {
             serde_json::json!([{"id":"alpha","secret_key":"s".repeat(32),"site_key":"t".repeat(32)},{"id":"beta","secret_key":"t".repeat(32)}]).to_string(),
             "x".repeat(BODY_LIMIT + 1),
         ] {
-            let error = AppState::configure(&invalid, dns()).err().expect("reject invalid config");
+            let error = AppState::configure(&invalid, dns(), rdap()).err().expect("reject invalid config");
             assert!(!error.contains(&"s".repeat(32)));
             assert!(!error.contains(&"t".repeat(32)));
         }
         let too_many: Vec<_> = (0..17)
             .map(|i| serde_json::json!({"id":format!("site{i}"),"secret_key":format!("{i:032}")}))
             .collect();
-        assert!(AppState::configure(&serde_json::to_string(&too_many).unwrap(), dns()).is_err());
+        assert!(
+            AppState::configure(&serde_json::to_string(&too_many).unwrap(), dns(), rdap()).is_err()
+        );
     }
 
     #[test]

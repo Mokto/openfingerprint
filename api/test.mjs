@@ -4,6 +4,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { once } from 'node:events';
 import { createSocket } from 'node:dgram';
+import { createServer } from 'node:http';
+import { createServer as createTcpServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, chmodSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -88,6 +90,41 @@ dns.on('message', (msg, peer) => {
     else if (name !== 'dnsslow.example') reply(0);
 });
 await new Promise(resolve => dns.bind(0, container ? '0.0.0.0' : '127.0.0.1', resolve));
+const registered = '2026-11-01T00:00:00Z';
+const rdapRequests = [];
+const rdap = createServer((req, res) => {
+    const name = req.url.replace('/rdap/domain/', '');
+    rdapRequests.push(name);
+    if (req.headers.accept !== 'application/rdap+json') { res.writeHead(400).end(); return; }
+    const domain = (ldhName, events) => res.writeHead(200, { 'content-type': 'application/rdap+json' }).end(JSON.stringify({ objectClassName: 'domain', ldhName, events }));
+    if (name === 'rdapfound.example') domain('RDAPFOUND.EXAMPLE', [{ eventAction: 'expiration', eventDate: '2030-01-01T00:00:00Z' }, { eventAction: 'registration', eventDate: registered }]);
+    else if (name === 'rdapnodate.example') domain(name, [{ eventAction: 'last changed', eventDate: registered }]);
+    else if (name === 'rdapwrong.example') domain('other.example', [{ eventAction: 'registration', eventDate: registered }]);
+    else if (name === 'rdapbroken.example') res.writeHead(503).end();
+    else if (name === 'rdapmoved.example') res.writeHead(302, { location: '/rdap/domain/rdapfound.example' }).end();
+    else if (name !== 'rdapslow.example') res.writeHead(404).end();
+});
+await new Promise(resolve => rdap.listen(0, container ? '0.0.0.0' : '127.0.0.1', resolve));
+const redisStore = new Map();
+const redis = createTcpServer(socket => {
+    let buffer = '';
+    socket.on('data', chunk => {
+        buffer += chunk;
+        for (;;) {
+            const lines = buffer.split('\r\n');
+            const count = Number(lines[0]?.slice(1));
+            if (!count || lines.length < 1 + count * 2) return;
+            const args = Array.from({ length: count }, (_, i) => lines[2 + i * 2]);
+            buffer = lines.slice(1 + count * 2).join('\r\n');
+            if (args[0] === 'GET') { const v = redisStore.get(args[1]); socket.write(v === undefined ? '$-1\r\n' : `$${v.length}\r\n${v}\r\n`); }
+            else if (args[0] === 'SET' && args[3] === 'EX') { redisStore.set(args[1], args[2]); socket.write('+OK\r\n'); }
+            else socket.write('-ERR unsupported\r\n');
+        }
+    });
+    socket.on('error', () => {});
+});
+await new Promise(resolve => redis.listen(0, container ? '0.0.0.0' : '127.0.0.1', resolve));
+writeFileSync(join(directory, 'rdap.json'), JSON.stringify({ services: [[['example', 'test', 'org', 'io', 'uk'], [`http://${container ? 'dns.test' : '127.0.0.1'}:${rdap.address().port}/rdap/`]]] }), { mode: 0o644 });
 const args = container
 	? [
 			'run', '--rm', '--name', container, '--read-only', '--cap-drop=ALL',
@@ -98,13 +135,14 @@ const args = container
             '--env', 'OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS',
             '--env', 'OPENFINGERPRINT_DOMAIN_DATA',
             '--env', 'OPENFINGERPRINT_DNS', '--add-host', 'dns.test:host-gateway',
+            '--env', 'OPENFINGERPRINT_RDAP_BOOTSTRAP', '--env', 'OPENFINGERPRINT_REDIS_URL',
             '--mount', `type=bind,src=${directory},dst=/domain-data,readonly`,
 			...(values.platform ? ['--platform', values.platform] : []),
 			values.image
 		]
 	: [];
 delete process.env.OPENFINGERPRINT_SIGNING_KEY;
-delete process.env.OPENFINGERPRINT_REDIS_URL;
+delete process.env.OPENFINGERPRINT_REDIS_PASSWORD;
 const child = spawn(container ? 'docker' : values.binary, args, {
 	env: {
 		...process.env,
@@ -113,7 +151,9 @@ const child = spawn(container ? 'docker' : values.binary, args, {
         OPENFINGERPRINT_DOMAIN_DATA: container ? '/domain-data/domains.json' : dataPath,
         OPENFINGERPRINT_METRICS_ADDR: container ? '0.0.0.0:9180' : '127.0.0.1:0',
         OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS: '1',
-        OPENFINGERPRINT_DNS: `${container ? 'dns.test' : '127.0.0.1'}:${dns.address().port}`
+        OPENFINGERPRINT_DNS: `${container ? 'dns.test' : '127.0.0.1'}:${dns.address().port}`,
+        OPENFINGERPRINT_RDAP_BOOTSTRAP: container ? '/domain-data/rdap.json' : join(directory, 'rdap.json'),
+        OPENFINGERPRINT_REDIS_URL: `redis://${container ? 'dns.test' : '127.0.0.1'}:${redis.address().port}/`
 	},
 	stdio: ['ignore', 'pipe', 'pipe']
 });
@@ -203,11 +243,12 @@ function domainExpected(overrides = {}) {
         result[field] = fact;
     }
     result.mx_lookup = overrides.mx_lookup ?? (result.disposable.status === 'not_listed' ? 'no_records' : 'not_needed');
+    result.registration = overrides.registration ?? { status: 'not_found' };
     return result;
 }
 try {
     origin = await base;
-    phase = 'health and collection disabled without Redis';
+    phase = 'health and routes';
     const health = await request('/health', {}, undefined, 'GET');
     assert.equal(health.status, 200);
     assert.equal(await health.text(), 'ok');
@@ -215,14 +256,14 @@ try {
     assert.equal(health.headers.get('set-cookie'), null);
     for (const method of ['GET', 'POST', 'OPTIONS']) {
         const response = await request('/v1/collect', { Origin: 'https://alpha.test' }, undefined, method);
-        assert.equal(response.status, method === 'POST' ? 503 : 405);
+        assert.equal(response.status, method === 'POST' ? 400 : 405);
         assert.equal(response.headers.get('access-control-allow-origin'), null);
     }
     for (const path of ['/v1/check', '/v1/verify']) {
         assert.equal((await request(path, {}, undefined, 'GET')).status, 405);
         assert.equal((await request(path, {}, undefined, 'OPTIONS')).status, 405);
     }
-    console.log('Health, check and verification routes are available; collection fails closed without Redis.');
+    console.log('Health, check, verification and collection routes are available (Redis failures: test-collection.mjs).');
 
     phase = 'authentication before parsing and no browser CORS';
     for (const path of ['/v1/check', '/v1/verify']) {
@@ -378,11 +419,12 @@ try {
         ['child.good.mail.example', { disposable: false }],
         ['disputed.mail.example', { disposable: true, disputed: true }],
         ['child.disputed.mail.example', { disposable: true }],
-        ['tenant.free.example', { free_subdomain: true }], ['free.example', { free_subdomain: false }],
-        ['tenant.duckdns.org', { free_subdomain: true }], ['duckdns.org', { free_subdomain: false }],
+        ['tenant.free.example', { free_subdomain: true, ...(mode === 'fresh' ? { registration: { status: 'not_applicable' } } : {}) }], ['free.example', { free_subdomain: false }],
+        ['tenant.duckdns.org', { free_subdomain: true, registration: { status: 'not_applicable' } }], ['duckdns.org', { free_subdomain: false }],
         ['spam.example', { spam: true }], ['child.spam.example', { spam: true }],
         ['bad.customer.example', { spam: true }], ['customer.example', {}],
-        ['notbad.customer.example', {}], ['innocent.github.io', { public_suffix_excluded: true }], ['co.uk', {}]
+        ['notbad.customer.example', {}], ['innocent.github.io', { public_suffix_excluded: true, registration: { status: 'not_applicable' } }],
+        ['co.uk', { registration: { status: 'not_applicable' } }]
     ]) {
         const response = await request('/v1/check', authHeaders(sites[4]), { signals: signals(), domain });
         assert.equal(response.status, 200);
@@ -414,6 +456,27 @@ try {
         assert.deepEqual(dnsQueries, [], 'Looked up MX hosts without fresh domain data');
     }
     console.log(`MX lookups, provider inference and its blockers, timeouts, spoofed replies and lookup skipping passed (${mode}).`);
+
+    phase = `RDAP registration dates (${mode})`;
+    for (const [domain, registration] of [
+        ['rdapfound.example', { status: 'found', registered_at_unix: Date.parse(registered) / 1000 }],
+        ['mail.rdapfound.example', { status: 'found', registered_at_unix: Date.parse(registered) / 1000 }],
+        ['rdapnodate.example', { status: 'no_date' }], ['rdapwrong.example', { status: 'unavailable' }],
+        ['rdapbroken.example', { status: 'unavailable' }], ['rdapmoved.example', { status: 'unavailable' }],
+        ['rdapslow.example', { status: 'unavailable' }], ['example.zz', { status: 'unsupported_tld' }]
+    ]) {
+        const started = Date.now();
+        const response = await request('/v1/check', authHeaders(sites[9]), { domain });
+        assert(Date.now() - started < 3500);
+        assert.deepEqual((await response.json()).domain.registration, registration);
+    }
+    assert(rdapRequests.includes('mail.example') && !rdapRequests.some(name => name.split('.').length > 2), 'RDAP must query registrable domains only');
+    assert.equal(rdapRequests.filter(name => name === 'rdapfound.example').length, 1, 'Cached registrations must not reach the registry again');
+    assert.equal(rdapRequests.filter(name => name === 'rdapbroken.example').length, 1);
+    assert(redisStore.size > 0 && [...redisStore.keys()].every(k => /^openfingerprint:rdap:v1:[0-9a-f]{64}$/.test(k)), 'Cache keys are hashed registered domains');
+    assert(![...redisStore.values()].some(v => v === 'unavailable'), 'Unavailable answers are not cached');
+    assert(!rdapRequests.some(name => /github|co\.uk|duckdns\.org$/.test(name) && name !== 'duckdns.org'), 'Private-namespace tenants and public suffixes are not registrable');
+    console.log(`RDAP registration dates, cache, registrable-domain scope, redirects, timeouts and unsupported TLDs passed (${mode}).`);
 
     phase = 'independent field validation and bounded envelopes';
     for (const domain of ['', 'localhost', 'https://example.test', 'person@example.test', 'example.test:80', 'a..test', 'bücher.test', 'a'.repeat(64) + '.test', {}, 42]) {
@@ -512,13 +575,16 @@ try {
     assert.equal(await reloadedValue(), true);
     assert.equal(await metric('openfingerprint_domain_data_loaded'), 1);
     assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), mode === 'fresh' ? 6 : 0);
+    assert.equal(await metric('openfingerprint_rdap_lookups_total{result="found"}'), 1);
+    assert(await metric('openfingerprint_rdap_cache_total{result="hit"}') >= 1);
+    assert.equal(await metric('openfingerprint_rdap_cache_total{result="error"}'), 0);
     console.log(`Snapshot reload, last-good retention and metrics passed (${mode}).`);
     phase = 'no request or credential logging';
     for (const sensitive of [
         ...sites.flatMap(site => [site.secret_key, site.site_key].filter(Boolean)),
         signals().fingerprint, signals('same', 'same', 5).fingerprint,
         signals().components.fontPreferences, 'unsolicited', 'ExAmPlE.test.', '2001:db8::1', '192.0.2.1',
-        'mail.example', 'disputed.mail.example', 'child.disputed.mail.example', 'dnsmx.example', 'mx.other.example'
+        'mail.example', 'disputed.mail.example', 'child.disputed.mail.example', 'dnsmx.example', 'mx.other.example', 'rdapfound.example'
     ]) assert(!serverOutput.includes(sensitive));
     console.log('No request evidence, raw metadata or credentials appeared in server output.');
 	if (container) {
@@ -578,10 +644,20 @@ try {
 		]);
 	}
     dns.close();
+    rdap.closeAllConnections();
+    rdap.close();
+    redis.close();
     rmSync(directory, { recursive: true, force: true });
 }
 
 if (!values['domain-data-mode'] && !process.exitCode) {
+    const env = { ...process.env, OPENFINGERPRINT_SITES: JSON.stringify(sites), OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_DNS: '127.0.0.1:9' };
+    delete env.OPENFINGERPRINT_REDIS_URL;
+    const noRedis = container
+        ? spawnSync('docker', ['run', '--rm', '--env', 'OPENFINGERPRINT_SITES', '--env', 'OPENFINGERPRINT_LISTEN_ADDR', '--env', 'OPENFINGERPRINT_DNS', values.image], { env, encoding: 'utf8', timeout: 30000 })
+        : spawnSync(values.binary, [], { env, encoding: 'utf8', timeout: 30000 });
+    assert(noRedis.status !== 0 && noRedis.stderr.includes('OPENFINGERPRINT_REDIS_URL is required'), 'The API must refuse to start without Redis');
+    console.log('Startup without Redis refused.');
     await import('./test-domain-updater.mjs');
     for (const mode of ['stale', 'invalid', 'missing']) {
         const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2), '--domain-data-mode', mode], { stdio: 'inherit', timeout: 120000 });

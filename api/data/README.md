@@ -14,6 +14,7 @@ It contains no email addresses, browser profiles, account associations or IP his
 | [is-a.bot](https://github.com/free-domains/is-a.bot) | MIT | User registrations beneath `is-a.bot`; the apex is not a user subdomain. |
 | `reviewed-free-subdomains.json` | CC0-1.0 | First-party factual curation, currently DuckDNS, with primary-provider evidence and an explicit review expiry. No vendor API results are used. |
 | `reviewed-domain-disputes.json` | CC0-1.0 | Exact domains requiring review because first-party operator evidence conflicts with a blanket disposable classification. These return unknown/conflict, not clean or false. |
+| [IANA RDAP bootstrap](https://data.iana.org/rdap/dns.json) (`rdap-dns.json`) | IANA registry data | Which registry answers RDAP queries for each TLD. Not a domain list: the API uses it only to route registration-date lookups. Refreshed by the weekly data workflow. |
 | [Matomo referrer-spam-list](https://github.com/matomo-org/referrer-spam-list) | Public Domain declaration | Referrer-spam hostnames only. This is not an email-sending reputation database. |
 
 The `spam` result always carries `scope: referrer_spam`. It must not be advertised
@@ -113,8 +114,8 @@ self-hosters start from current data.
 
 A missing/malformed override produces unknown domain results, never a silent
 fallback to the bundled data. Browser verification remains available. `/health`
-is still process liveness, not a guarantee of dataset freshness. The API does no
-RDAP and has no domain-authority score. MX hosts from its DNS lookup are matched against the same fresh disposable sources (`mx_listed`);
+is still process liveness, not a guarantee of dataset freshness. The API has no
+domain-authority score. MX hosts from its DNS lookup are matched against the same fresh disposable sources (`mx_listed`);
 this covers new domains routed to listed providers, not providers absent from
 every source.
 

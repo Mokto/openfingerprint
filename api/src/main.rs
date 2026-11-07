@@ -1,8 +1,10 @@
 mod automation;
+mod cache;
 mod check;
 mod collection;
 mod domains;
 mod mx;
+mod rdap;
 
 use std::{sync::Arc, time::Duration};
 
@@ -32,7 +34,7 @@ fn app(state: Arc<check::AppState>) -> Router {
 async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::response::IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        state.domains.metrics() + &state.dns.metrics(),
+        state.domains.metrics() + &state.dns.metrics() + &state.rdap.metrics(),
     )
 }
 

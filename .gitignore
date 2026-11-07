@@ -6,3 +6,4 @@ api/target/
 .env
 .env.*
 .DS_Store
+api/chart/charts/

@@ -48,3 +48,8 @@ allowPrivilegeEscalation: false
 capabilities:
   drop: [ALL]
 {{- end }}
+
+{{/* redis-ha's fullname: the release name when it already contains "redis-ha". */}}
+{{- define "of.redisName" -}}
+{{- if contains "redis-ha" .Release.Name }}{{ .Release.Name | trunc 63 | trimSuffix "-" }}{{ else }}{{ printf "%s-redis-ha" .Release.Name | trunc 63 | trimSuffix "-" }}{{ end }}
+{{- end }}

@@ -35,13 +35,34 @@ spec:
   {{- if or (not (kindIs "slice" .Values.networkPolicy.dnsTo)) (empty .Values.networkPolicy.dnsTo) }}
   {{- fail "networkPolicy.dnsTo must list the DNS servers the API may query" }}
   {{- end }}
+  {{- if or (not (kindIs "slice" .Values.networkPolicy.rdapTo)) (empty .Values.networkPolicy.rdapTo) }}
+  {{- fail "networkPolicy.rdapTo must list the RDAP registries the API may reach" }}
+  {{- end }}
+  # MX and registry-host lookups through cluster DNS, RDAP over HTTPS, and Redis. Nothing else.
   egress:
     - to:
         {{- toYaml .Values.networkPolicy.dnsTo | nindent 8 }}
       ports:
         - protocol: UDP
           port: 53
-    {{- if .Values.networkPolicy.redisTo }}
+    - to:
+        {{- toYaml .Values.networkPolicy.rdapTo | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- if (index .Values "redis-ha" "enabled") }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis-ha-haproxy
+              release: {{ .Release.Name }}
+      ports:
+        - protocol: TCP
+          port: 6379
+    {{- else }}
+    {{- if empty .Values.networkPolicy.redisTo }}
+    {{- fail "networkPolicy.redisTo must list the peers of your Redis when redis-ha is disabled" }}
+    {{- end }}
     - to:
         {{- toYaml .Values.networkPolicy.redisTo | nindent 8 }}
       ports:

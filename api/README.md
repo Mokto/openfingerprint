@@ -17,7 +17,8 @@ Domain intelligence runs locally against openly licensed, versioned snapshots:
 The domain snapshot is bundled and can be overridden with a refreshed local file.
 A valid input does not mean a domain is legitimate or an IP is clean. Unlisted or
 uncovered domains remain null, not false. The API looks up MX hosts to detect
-mail routed to a listed disposable provider.
+mail routed to a listed disposable provider, and reports when the registered
+domain was created, from its registry over RDAP.
 IP intelligence, RDAP and domain authority are not implemented. The spam scope is specifically **referrer spam**,
 not email-sending reputation. See [sources, licenses and refresh](data/README.md). Older API releases, including 0.4.0, have a different
 `/v1/check` contract; this guide describes the next release, not a live upgrade.
@@ -30,18 +31,19 @@ forged, and matching hashes can collide or change with settings and updates.
 
 Stateless checks have no visitor database, observation cache, email processing or
 account history. Their evidence, domains and IPs are dropped after processing.
-With collection enabled, Redis temporarily holds random action bindings, origins,
-challenges and evaluated events, subject to TTL and capacity limits below. Raw
-collection user agents/platforms are discarded after evaluation; request evidence
-and credentials are not logged. Outbound traffic consists of MX DNS queries and,
-when configured, Redis commands.
+Redis temporarily holds random action bindings, origins, challenges and evaluated
+events for collection, subject to TTL and capacity limits below, and cached RDAP
+answers keyed by SHA-256 hashes of registered domains. Raw collection user
+agents/platforms are discarded after evaluation; request evidence and credentials
+are not logged. Outbound traffic consists of MX DNS queries, at most one RDAP
+request to the domain's registry per uncached check, and Redis commands.
 Responses have `Cache-Control: no-store` and set no cookies. Domain/IP inputs are
 not echoed in responses. No browser/server IP is inferred from the connection or
 forwarded headers. Signals-only calls do not run domain/IP checks.
 
 The process retains configured credential tags and a read-only domain snapshot;
-collection state is shared in Redis, not an in-memory fallback. There is no
-visitor-history or domain cache. Collection capacity limits are not rate limiting:
+collection state and the RDAP cache are shared in Redis, not an in-memory fallback.
+There is no visitor history. Collection capacity limits are not rate limiting:
 apply quotas and request limits at your edge/gateway, including the public collector.
 
 A separate operator updater refreshes public snapshots without rebuilding the
@@ -54,7 +56,19 @@ one-second limit, no retries, no TCP fallback and no cache in the API.
 Already-decided domains are never sent to DNS. The nameserver sees the domains you
 check; use a resolver you trust, such as the cluster DNS, and allow only it on UDP
 53. Without DNS access, lookups report `unavailable` and everything else works.
-RDAP and other live lookups are not implemented.
+
+Every valid domain check also asks the registry for the creation date of the
+registered domain under its ICANN public suffix (`mail.example.co.uk` queries
+`example.co.uk`). The registry comes from the IANA RDAP bootstrap bundled in the
+image (`data/rdap-dns.json`, refreshed weekly): one HTTPS GET, a two-second limit,
+a 256 KiB response cap, no redirects or retries. The registry sees the registered
+domains you check. Answers are cached in Redis for a day (an hour for `not_found`)
+under `openfingerprint:rdap:v1:<SHA-256 of the registered domain>`; unavailable
+answers are not cached. A slow or failing Redis (250 ms limit) only means asking the
+registry. The cache holds public registry dates, not who asked. Tenants of private namespaces (`name.github.io`, a
+listed free-subdomain service) are not looked up: their registered domain belongs
+to the namespace operator. The API needs HTTPS to public addresses for this; without
+it, results report `unavailable`.
 There are no lookup retries, remote-provider waits or visitor-history fallbacks.
 
 The SDK hashes identity signals locally and automatically includes bounded
@@ -74,12 +88,14 @@ build arguments, command-line arguments or logs.
 | --- | --- |
 | `OPENFINGERPRINT_SITES` | JSON array of 1–16 site configurations, each with `id` and `secret_key`. |
 | `OPENFINGERPRINT_LISTEN_ADDR` | Optional listener, default `127.0.0.1:8180`. |
-| `OPENFINGERPRINT_REDIS_URL` | Optional private Redis/Valkey connection URL; enables collection. Supports `rediss://` with certificate validation. Missing/unreachable Redis yields HTTP 503 on collection routes; no memory fallback. |
+| `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL for collection state and the RDAP cache; the API does not start without it. Supports `rediss://` with certificate validation. Unreachable Redis yields HTTP 503 on collection routes and uncached RDAP lookups; checks keep working and there is no memory fallback. |
+| `OPENFINGERPRINT_REDIS_PASSWORD` | Optional Redis password, overriding one in the URL, so the URL can live outside a Secret. |
 | `OPENFINGERPRINT_COLLECTION_TTL_SECONDS` | Lifetime of each challenge and, separately, each published event: 1–300 seconds, default 120. Use identical settings on every replica. |
 | `OPENFINGERPRINT_COLLECTION_CAPACITY` | Maximum outstanding challenges plus events per server credential: 1–100000, default 1024. Issuance at capacity returns 429. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
 | `OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS` | Seconds between checks of the override file, 1–86400, default 60. A changed file that fails to read or parse is rejected and the last valid snapshot stays until its sources expire. |
 | `OPENFINGERPRINT_DNS` | Nameserver for MX lookups, default `system` (the first `nameserver` in `/etc/resolv.conf`). Also accepts an IP, `IP:port` or `host:port` (resolved once at startup). Startup fails without a usable nameserver. |
+| `OPENFINGERPRINT_RDAP_BOOTSTRAP` | Optional path to an IANA RDAP bootstrap file replacing the bundled one; read at startup. It may contain `http://` servers, for local test registries. |
 | `OPENFINGERPRINT_METRICS_ADDR` | Optional listener for Prometheus `GET /metrics`, for example `0.0.0.0:9180`. Keep it off the API port so network policy can expose it separately. |
 
 IDs are 1–64 ASCII characters, start with a letter and otherwise contain letters,
@@ -161,6 +177,21 @@ Every valid domain section has `mx_lookup`:
 | `no_domain` | NXDOMAIN. Undeliverable now, which is not proof of abuse. |
 | `unavailable` | Timeout, SERVFAIL, truncated or malformed answer. Unknown, not clean. |
 | `not_needed` | MX hosts could not change the result (already listed, allowlisted, disputed, or no fresh data), so nothing was sent to DNS. |
+
+Every valid domain section also has `registration`:
+
+| `registration.status` | Meaning |
+| --- | --- |
+| `found` | `registered_at_unix` is the registry's `registration` event for the registered domain. |
+| `no_date` | The registry answered without a usable registration date (some redact it). |
+| `not_found` | The registry does not know the domain: unregistered or recently deleted. |
+| `unsupported_tld` | The TLD publishes no RDAP service in the IANA bootstrap (for example `.de` or `.io`). |
+| `not_applicable` | A public suffix, or a tenant of a private namespace. |
+| `unavailable` | Timeout, error status, redirect, oversized or inconsistent answer. Unknown, not clean. |
+
+A young registration is evidence, not a verdict: new businesses register domains
+too, and the date says nothing about when a mailbox was created. A domain that
+expired and was registered again shows the new date.
 
 Free-subdomain operator apexes yield false with `provider_domain`; strict children
 can match. Reviewed allowlist overrides yield false with `allowlisted`. Conflicting
@@ -276,7 +307,7 @@ value or accidentally supply the application server's address.
 
 ### Challenge-bound collection
 
-Enable these routes with `OPENFINGERPRINT_REDIS_URL`. Every API replica must
+These routes use the Redis at `OPENFINGERPRINT_REDIS_URL`. Every API replica must
 use the same authoritative Redis database, credentials and collection settings.
 There is no local-state fallback. A single Redis/Valkey primary is supported,
 not Redis Cluster (the atomic scripts operate on multiple keys).
@@ -452,6 +483,8 @@ requests, domains or credentials:
 | `openfingerprint_domain_data_loaded_timestamp_seconds` | When the current snapshot was loaded. |
 | `openfingerprint_domain_data_reload_failures_total` | Changed snapshot files that were rejected. |
 | `openfingerprint_mx_lookups_total{result}` | MX lookups by `mx_lookup` outcome. |
+| `openfingerprint_rdap_lookups_total{result}` | Registry lookups by `registration.status` (not cache hits or `not_applicable`). |
+| `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
 
 Alert on source expiry, not on `/health`: an expired source silently degrades
 domain checks to unknown while the process stays healthy.
@@ -459,7 +492,8 @@ domain checks to unknown while the process stays healthy.
 ## Kubernetes
 
 The [Helm chart](chart/README.md), published to `oci://ghcr.io/mokto/charts/openfingerprint`
-with each API release, runs the API with egress only to cluster DNS, refreshes the open snapshot
+with each API release, runs the API with optional NetworkPolicies (cluster DNS, public HTTPS for RDAP and
+Redis only), a bundled `redis-ha` or your own Redis, refreshes the open snapshot
 into a ConfigMap with a CronJob and ships optional Prometheus alerts.
 
 ## Checks and containers

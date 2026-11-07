@@ -18,11 +18,13 @@ shared Redis state. These protections prevent result replacement/replay, not
 forged browser observations or malicious traffic by themselves.
 
 Stateless API checks verify submitted evidence without visitor storage or history;
-the collection flow temporarily retains evaluated events in Redis. Open
+the collection flow temporarily retains evaluated events in the Redis the API
+requires, which also caches registry answers. Open
 domain snapshots provide independent disposable, free-subdomain and scoped
 referrer-spam evidence, including recently monitored provider domains, provenance,
 expiry and exact reviewed disputes. The API looks up each unlisted domain's MX hosts to
-detect new domains whose mail is routed to a listed disposable provider. Unlisted data stays
+detect new domains whose mail is routed to a listed disposable provider, and the
+registration date of its registered domain over RDAP. Unlisted data stays
 unknown, not clean. IP
 intelligence is not implemented yet. The API does not collect browser signals,
 and the SDK does not depend on it. See the [data guide](api/data/README.md) for
