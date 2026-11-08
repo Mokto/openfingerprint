@@ -85,7 +85,7 @@ const STEPS: [&str; 14] = [
 ];
 static STEP_TIMES: [Histogram; STEPS.len()] = [const { Histogram::new() }; STEPS.len()];
 
-pub const ROUTES: [&str; 4] = ["check", "verify", "rpc", "other"];
+pub const ROUTES: [&str; 3] = ["check", "rpc", "other"];
 const CLASSES: [&str; 4] = ["2xx", "4xx", "5xx", "other"];
 static REQUEST_TIMES: [[Histogram; CLASSES.len()]; ROUTES.len()] =
     [const { [const { Histogram::new() }; CLASSES.len()] }; ROUTES.len()];
@@ -93,9 +93,8 @@ static REQUEST_TIMES: [[Histogram; CLASSES.len()]; ROUTES.len()] =
 pub fn route(path: &str) -> usize {
     match path {
         "/v1/check" => 0,
-        "/v1/verify" => 1,
-        _ if crate::rpc::is_rpc(path) => 2,
-        _ => 3,
+        _ if crate::rpc::is_rpc(path) => 1,
+        _ => 2,
     }
 }
 pub fn observe_request(route: usize, status: u16, elapsed: Duration) {

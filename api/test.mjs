@@ -319,14 +319,13 @@ try {
     assert.equal(health.headers.get('set-cookie'), null);
     for (const path of ['/v1/challenges', '/v1/collect', '/v1/events/consume'])
         for (const method of ['GET', 'POST']) assert.equal((await request(path, {}, undefined, method)).status, 404, `${method} ${path} was removed`);
-    for (const path of ['/v1/check', '/v1/verify']) {
-        assert.equal((await request(path, {}, undefined, 'GET')).status, 405);
-        assert.equal((await request(path, {}, undefined, 'OPTIONS')).status, 405);
-    }
-    console.log('Health, check and verification routes are available; the challenge-bound collection routes are gone.');
+    assert.equal((await request('/v1/check', {}, undefined, 'GET')).status, 405);
+    assert.equal((await request('/v1/check', {}, undefined, 'OPTIONS')).status, 405);
+    for (const method of ['GET', 'POST']) assert.equal((await request('/v1/verify', {}, undefined, method)).status, 404, `${method} /v1/verify was removed`);
+    console.log('Health and check routes are available; /v1/verify and the challenge-bound collection routes are gone.');
 
     phase = 'no authentication and no browser access';
-    for (const path of ['/v1/check', '/v1/verify']) {
+    for (const path of ['/v1/check']) {
         for (const [index, headers] of [{}, { Authorization: 'Bearer ignored' }, { Authorization: 'Basic abc' }, { 'X-Site-Key': 'ignored' }].entries()) {
             phase = `credentials are neither required nor read: ${path} case ${index}`;
             const response = await request(path, headers, 'not-json');
@@ -347,43 +346,36 @@ try {
     assert(serverOutput.includes('OPENFINGERPRINT_SITES is ignored'), 'the old setting is reported, not silently dropped');
     console.log('Requests need no credentials, ignore any that are sent, and refuse browser origins.');
 
-    phase = 'canonical profiles for both supported schemas';
-    for (const version of [1]) {
-        const input = signals('same', 'same', version);
-        delete input.timings;
-        delete input.storageId;
-        for (const headers of [{}, { Authorization: 'Bearer ignored' }]) {
-            const response = await request('/v1/verify', headers, input);
-            assert.equal(response.status, 200);
-            assert.equal(response.headers.get('cache-control'), 'no-store');
-            assert.equal(response.headers.get('set-cookie'), null);
-            assert.equal(response.headers.get('access-control-allow-origin'), null);
-            assert.deepEqual(await response.json(), {
-                status: 'ok', schema_version: version, fingerprint: shortId(input.fingerprint)
-            });
-        }
-        assert.equal((await request('/v1/verify', {}, {
-            ...input, coreFingerprint: null
-        })).status, 200);
-        const different = signals('different', 'different', version);
-        await request('/v1/verify', {}, different);
-        const repeated = await request('/v1/verify', {}, input);
-        assert.deepEqual(await repeated.json(), {
-            status: 'ok', schema_version: version, fingerprint: shortId(input.fingerprint)
-        });
+    phase = 'canonical profiles';
+    const checked = async (input, headers = {}) => {
+        const response = await request('/v1/check', headers, { signals: input });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        assert.equal(response.headers.get('set-cookie'), null);
+        assert.equal(response.headers.get('access-control-allow-origin'), null);
+        return (await response.json()).signals;
+    };
+    for (const headers of [{}, { Authorization: 'Bearer ignored' }]) {
+        const input = signals('same', 'same', 1);
+        const profile = await checked(input, headers);
+        assert.equal(profile.status, 'ok');
+        assert.equal(profile.schema_version, 1);
+        assert.equal(profile.fingerprint, shortId(input.fingerprint));
     }
+    assert.equal((await checked({ ...signals('same', 'same', 1), coreFingerprint: null })).status, 'ok');
+    assert.equal((await checked(signals('same', 'same', 1))).fingerprint, (await checked(signals('same', 'same', 1))).fingerprint, 'the same identity gives the same ID in every collection');
+    assert.notEqual((await checked(signals('different', 'different', 1))).fingerprint, (await checked(signals('same', 'same', 1))).fingerprint);
     assert.notEqual(signals('same', 'same', 1).fingerprint, signals('same', 'same', 2).fingerprint);
     for (const insufficient of [
         { ...signals(), fingerprint: null },
         { ...signals(), fingerprint: null, coreFingerprint: null, components: {}, hints: {} }
     ]) {
-        const response = await request('/v1/verify', {}, insufficient);
-        assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), {
-            status: 'insufficient_signals', schema_version: null, fingerprint: null
-        });
+        const profile = await checked(insufficient);
+        assert.equal(profile.status, 'insufficient_signals');
+        assert.equal(profile.schema_version, null);
+        assert.equal(profile.fingerprint, null);
     }
-    console.log('Canonical schema-1 profiles, repeat verification and unknown/core-only identities passed.');
+    console.log('Canonical schema-1 profiles, repeat identities and unknown/core-only identities passed.');
 
     phase = 'token replay and age';
     const send = async (token) => (await fetch(origin + '/v1/check', {
@@ -407,13 +399,10 @@ try {
         assert.deepEqual(await send(seal({ ...signals(), collectedAt })), { fingerprint: null, invalid: ['signals'] });
     }
     assert.deepEqual(await send(seal({ nope: 1 })), { fingerprint: null, invalid: ['signals'] });
-    const verified = { ...signals('verify', 'verify'), collectedAt: Date.now() };
-    for (let i = 0; i < 2; i++) assert.equal((await request('/v1/verify', {}, verified)).status, 200);
-    assert.equal((await send(seal(verified))).replayed, false, '/v1/verify never marks a token');
     const detailed = await (await request('/v1/check', {}, { signals: { ...signals('detail', 'detail'), collectedAt: Date.now() } })).json();
     assert.equal(detailed.signals.replayed, false);
     assert(Number.isInteger(detailed.signals.tokenAgeMs));
-    console.log('Replayed tokens (even resealed), token age, old tokens, invalid collection times and verify isolation passed.');
+    console.log('Replayed tokens (even resealed), token age, old tokens and invalid collection times passed.');
 
     phase = 'independent requested checks and explicit unconfigured intelligence';
     const unknown = { status: 'unknown', reason: 'not_configured', network: { status: 'unknown', reason: 'non_global_ip', source: 'backend_supplied' } };
@@ -481,9 +470,6 @@ try {
     });
     const omittedAutomation = await request('/v1/check', {}, { automation: null, signals: signals() });
     assert.deepEqual(await omittedAutomation.json(), { signals: checkedProfile(signals()) });
-    const legacyAutomation = await request('/v1/verify', {}, { ...signals(), automation });
-    assert.equal(legacyAutomation.status, 200);
-    assert.deepEqual(await legacyAutomation.json(), { status: 'ok', schema_version: 1, fingerprint: shortId(signals().fingerprint) });
     const nestedAutomation = await request('/v1/check', {}, { signals: { ...signals(), automation } });
     assert.deepEqual(await nestedAutomation.json(), { signals: { ...checkedProfile(signals()), automation: automationExpected } });
     const invalidNested = await request('/v1/check', {}, { signals: { ...signals(), automation: false } });
@@ -804,9 +790,6 @@ try {
         )
     ];
     for (const body of invalid) {
-        const response = await request('/v1/verify', {}, body);
-        assert.equal(response.status, 400);
-        assert.deepEqual(await response.json(), { error: 'invalid_request' });
         const check = await request('/v1/check', {}, { signals: body, domain: 'example.test' });
         assert.equal(check.status, 200);
         assert.deepEqual(await check.json(), {
@@ -822,8 +805,8 @@ try {
             ip: unknown
         });
     }
-    assert.equal((await request('/v1/verify', {}, 'not-json')).status, 400);
-    assert.equal((await request('/v1/verify', {}, JSON.stringify({
+    assert.equal((await request('/v1/check', {}, 'not-json')).status, 400);
+    assert.equal((await request('/v1/check', {}, JSON.stringify({
         padding: 'x'.repeat(65536)
     }))).status, 413);
     console.log('Strict hashes, schema separation, unsolicited visitor-data rejection and body limits passed.');

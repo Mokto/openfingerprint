@@ -581,17 +581,6 @@ impl IntoResponse for ApiError {
     }
 }
 
-pub async fn verify(
-    State(state): State<std::sync::Arc<AppState>>,
-    request: Request,
-) -> Result<Response, ApiError> {
-    state.reject_browsers(request.headers())?;
-    let Json(signals) = Json::<Signals>::from_request(request, &())
-        .await
-        .map_err(json_error)?;
-    Ok(Json(signals.verified()?).into_response())
-}
-
 pub async fn check(
     State(state): State<std::sync::Arc<AppState>>,
     request: Request,
@@ -929,29 +918,6 @@ pub(crate) mod tests {
         s.fingerprint = None;
         s.core_fingerprint = None;
         assert!(s.valid());
-    }
-
-    #[tokio::test]
-    async fn verification_returns_only_status_and_hashes() {
-        let state = std::sync::Arc::new(state());
-        for _ in 0..2 {
-            let payload = payload();
-            let request = Request::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(payload.to_string()))
-                .unwrap();
-            let response = verify(State(std::sync::Arc::clone(&state)), request)
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            let bytes = axum::body::to_bytes(response.into_body(), 4096)
-                .await
-                .unwrap();
-            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(body.as_object().unwrap().len(), 3);
-            assert_eq!(body["status"], "ok");
-            assert!(body.get("components").is_none());
-        }
     }
 
     #[test]
