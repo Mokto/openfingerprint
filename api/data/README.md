@@ -135,7 +135,7 @@ pnpm api:check
 
 These use local fixtures, with no feed download in CI. The HTTP check exercises
 fresh, stale, invalid and missing snapshots and verifies that browser verification
-and legacy `/v1/verify` still work. License texts stay in the source snapshot and
+still works. License texts stay in the source snapshot and
 in the release image at `/usr/share/licenses/openfingerprint-api/domain-data.json`.
 The application's MIT license does not override any source's terms. The BSD
 copyright, redistribution conditions and no-endorsement clause are retained in

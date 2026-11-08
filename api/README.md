@@ -2,7 +2,7 @@
 
 A self-hosted, MIT-licensed backend companion to the browser SDK. The next release
 provides stateless `POST /v1/check` with independent browser, automation, domain
-and IP sections. `POST /v1/verify` remains a compatibility adapter.
+and IP sections.
 
 **The API has no authentication.** It is meant to sit on a private network behind
 your own backend, gateway or NetworkPolicy; see [Security](#security) before exposing it.
@@ -485,8 +485,7 @@ can be forged or hidden. `not_detected` is not proof of a human, and automation
 may be legitimate testing or assistive tooling, not malicious traffic. No
 good/bad bot classification, confidence, fraud score, retention or new outbound
 traffic is introduced. Deploy the compatible API before upgrading the SDK;
-older servers reject version-2 evidence. `/v1/verify` accepts embedded automation but ignores it,
-retaining its status/schema/fingerprint-only response.
+older servers reject version-2 evidence.
 
 #### Tampering indicators
 
@@ -673,8 +672,7 @@ your backend judge a token that arrives:
   content, with a TTL: nothing identifies a device, account or address. The first check
   of a token returns `false` and marks it; later ones return `true`. Hashing the
   content, not the sealed string, means re-sealing a captured token under a new random
-  prefix still counts as a replay. Invalid tokens leave no marker, and `/v1/verify`
-  never marks one. When Redis cannot answer, the field is absent, never `false`.
+  prefix still counts as a replay. Invalid tokens leave no marker. When Redis cannot answer, the field is absent, never `false`.
 - `tokenAgeMs` (`signals.tokenAgeMs`): milliseconds from the browser's `collectedAt` to
   now. It uses the browser's clock, which is often wrong: expect negative values and use
   a generous limit. Absent for tokens without `collectedAt`.
@@ -684,29 +682,14 @@ validation error, a signup validated twice), so treat `replayed` as a signal for
 own rules, not as a block. Neither field stops a forger who builds a fresh token for
 every request: both are cheap protection against reusing a captured one.
 
-### `POST /v1/verify` (compatibility)
+### Removed: `POST /v1/verify`
 
-Accepts the decoded, unwrapped SDK evidence object (not a token) and returns:
-
-```json
-{"status":"ok","schema_version":1,"fingerprint":"<21-character ID>"}
-```
-
-Without a full ID:
-
-```json
-{"status":"insufficient_signals","schema_version":null,"fingerprint":null}
-```
-
-Invalid evidence still returns HTTP 400 here, unlike field-level failures inside
-`/v1/check`. No evidence counts or additional keys are added to this legacy response.
-Both routes use the same canonical verifier.
-
-Deploy the compatible API first. Then update callers to send `result.token` as
-`signals` and read `response.fingerprint` (or `response.signals` with `detail: true`),
-not merely change the URL. Keep strict schema/ID matching and fail-closed identity writes. Retire
-`/v1/verify` only in a later coordinated release once all callers have migrated.
-This source change does not migrate or deploy any existing caller.
+Earlier releases had `POST /v1/verify`, which took the unwrapped evidence object and
+returned `{"status","schema_version","fingerprint"}`. It was removed after 0.14.0 and now
+answers 404. Send `result.token` as `signals` to `POST /v1/check` and read
+`response.fingerprint`, or `response.signals` with `detail: true` (`status`,
+`schema_version`, `fingerprint`, `evidence`). Keep strict schema/ID matching and
+fail-closed identity writes: a missing `fingerprint` means unknown.
 
 ### Connect, gRPC and gRPC-Web (`openfingerprint.v1.OpenFingerprint/Check`)
 
@@ -780,7 +763,7 @@ contents, domains, addresses or credentials:
 | `openfingerprint_whois_lookups_total{result}` | WHOIS lookups for TLDs without RDAP, by `registration.status`. |
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
 | `openfingerprint_replay_checks_total{result}` | Token replay checks: `new` (first sighting), `replayed` (seen before) and `error` (Redis could not answer, so `replayed` was left out). |
-| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `verify`, `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |
+| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |
 | `openfingerprint_check_step_duration_seconds{step}` | Histogram of where a `/v1/check` spends time. Sections: `automation`, `signals`, `domain`, `ip_country`, `ip_network`. The `domain` section runs `domain_mx`, `domain_registration` and `domain_mail_auth` concurrently, so it lasts as long as the slowest, not their sum. Beneath them: `dns_lookup` (each MX or TXT query), `redis_get` and `redis_set` (RDAP cache), `replay` (the token replay marker), `rdap_fetch` and `whois_fetch` (registry calls on a cache miss, including the wait for a per-registry slot). A step cut short by its timeout is recorded at the time it was cut. |
 | `openfingerprint_country_data_loaded` | 1 when a valid country database is loaded (not necessarily fresh). |
 | `openfingerprint_country_data_expiry_timestamp_seconds` | When the country database stops being used, or 0 when unavailable. |
