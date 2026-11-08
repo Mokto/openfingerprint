@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.12.0](https://github.com/Mokto/openfingerprint/compare/api-v0.11.0...api-v0.12.0) (2026-11-08)
+
+
+### Features
+
+* **api:** infer disposable domains from MX infrastructure that serves throwaway domains ([#69](https://github.com/Mokto/openfingerprint/issues/69)) ([9bf3f05](https://github.com/Mokto/openfingerprint/commit/9bf3f05f59fdee9829c60b4018d4e361639c721d))
+* **api:** recognise Mail2World's consumer mail servers as public mailboxes ([#70](https://github.com/Mokto/openfingerprint/issues/70)) ([8c7589c](https://github.com/Mokto/openfingerprint/commit/8c7589cc791ef7e22a3aa91560d4ce9c61434b68))
+* **api:** report the SPF policy from the record's all term ([#71](https://github.com/Mokto/openfingerprint/issues/71)) ([6d65005](https://github.com/Mokto/openfingerprint/commit/6d65005a3895a4e8b057f871d2b6758a1d197df2))
+* **api:** serve /v1/check over Connect, gRPC and gRPC-Web with reflection ([#73](https://github.com/Mokto/openfingerprint/issues/73)) ([d764b44](https://github.com/Mokto/openfingerprint/commit/d764b446c6df4775feb419b1833d302f334241ef))
+
 ## [0.11.0](https://github.com/Mokto/openfingerprint/compare/api-v0.10.1...api-v0.11.0) (2026-11-07)
 
 
