@@ -6,6 +6,9 @@ use crate::mx::{Lookup, Resolver};
 #[derive(Debug, PartialEq, Serialize)]
 pub struct Spf {
     status: &'static str,
+    /// What the record says about senders it does not list: its `all` term (RFC 7208 5.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy: Option<&'static str>,
 }
 
 /// The DMARC policy that applies to mail from the domain (RFC 7489 6.6.3).
@@ -21,7 +24,10 @@ pub struct Dmarc {
 
 impl Spf {
     pub fn status(status: &'static str) -> Self {
-        Self { status }
+        Self {
+            status,
+            policy: None,
+        }
     }
 }
 
@@ -50,21 +56,35 @@ pub async fn check(dns: &Resolver, domain: &str) -> (Spf, Dmarc) {
 }
 
 fn spf_of(lookup: Lookup) -> Spf {
-    Spf::status(match lookup {
+    match lookup {
         Lookup::Hosts(records) => {
-            match records
-                .iter()
-                .filter(|r| tag_value(r, "v=spf1", ' '))
-                .count()
-            {
-                0 => "none",
-                1 => "found",
-                _ => "multiple",
+            let mut found = records.iter().filter(|r| tag_value(r, "v=spf1", ' '));
+            match (found.next(), found.next()) {
+                (None, _) => Spf::status("none"),
+                (Some(record), None) => Spf {
+                    status: "found",
+                    policy: spf_policy(record),
+                },
+                _ => Spf::status("multiple"),
             }
         }
-        Lookup::NoRecords => "none",
-        Lookup::NoDomain => "no_domain",
-        Lookup::Unavailable => "unavailable",
+        Lookup::NoRecords => Spf::status("none"),
+        Lookup::NoDomain => Spf::status("no_domain"),
+        Lookup::Unavailable => Spf::status("unavailable"),
+    }
+}
+
+/// The first `all` mechanism ends evaluation, so later terms never apply.
+fn spf_policy(record: &str) -> Option<&'static str> {
+    record.split_ascii_whitespace().skip(1).find_map(|term| {
+        let term = term.to_ascii_lowercase();
+        match term.strip_suffix("all")? {
+            "-" => Some("fail"),
+            "~" => Some("softfail"),
+            "" | "?" => Some("neutral"),
+            "+" => Some("pass"),
+            _ => None,
+        }
     })
 }
 
@@ -166,6 +186,27 @@ mod tests {
         ] {
             assert_eq!(spf_of(lookup).status, want);
         }
+    }
+
+    #[test]
+    fn spf_policy_is_the_first_all_term() {
+        for (record, want) in [
+            ("v=spf1 include:_spf.example -all", Some("fail")),
+            ("v=spf1 mx ~all", Some("softfail")),
+            ("v=spf1 ?all", Some("neutral")),
+            ("v=spf1 all", Some("neutral")),
+            ("v=spf1 +all", Some("pass")),
+            ("V=SPF1 a -ALL", Some("fail")),
+            ("v=spf1 -all ~all", Some("fail")),
+            ("v=spf1 redirect=_spf.example", None),
+            ("v=spf1 include:small.example", None),
+            ("v=spf1 include:overall.example", None),
+            ("v=spf1", None),
+        ] {
+            assert_eq!(spf_policy(record), want, "{record}");
+        }
+        assert_eq!(spf_of(txt(&["v=spf1 -all"])).policy, Some("fail"));
+        assert_eq!(spf_of(txt(&["v=spf1 -all", "v=spf1 ~all"])).policy, None);
     }
 
     #[test]

@@ -642,11 +642,11 @@ try {
 
     phase = `SPF and DMARC (${mode})`;
     for (const [domain, spf, dmarc] of [
-        ['authmail.example', { status: 'found' }, { status: 'found', policy: 'reject' }],
+        ['authmail.example', { status: 'found', policy: 'fail' }, { status: 'found', policy: 'reject' }],
         ['news.authmail.example', { status: 'none' }, { status: 'found', policy: 'quarantine', inherited: true }],
         ['twospf.example', { status: 'multiple' }, { status: 'none' }],
-        ['badpolicy.example', { status: 'found' }, { status: 'invalid' }],
-        ['bigtxt.example', { status: 'found' }, { status: 'none' }]
+        ['badpolicy.example', { status: 'found', policy: 'fail' }, { status: 'invalid' }],
+        ['bigtxt.example', { status: 'found', policy: 'fail' }, { status: 'none' }]
     ]) {
         const body = await (await request('/v1/check', authHeaders(sites[9]), { domain })).json();
         assert.deepEqual([body.domain.spf, body.domain.dmarc], [spf, dmarc], domain);
