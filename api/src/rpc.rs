@@ -117,7 +117,7 @@ mod tests {
     fn every_compact_key_has_a_field_in_the_response_message() {
         let response: CheckResponse = serde_json::from_value(serde_json::json!({
             "fingerprint":"abc","automation":true,"tampering":false,"disposable":true,
-            "free":false,"spam":true,"relay":false,"mx":true,"country":"dk","vpn":true,
+            "free":false,"spam":true,"relay":false,"cheapTld":true,"mx":true,"country":"dk","vpn":true,
             "tor":false,"datacenter":true,"proxy":false,"invalid":["ip"]
         }))
         .unwrap();
@@ -131,6 +131,7 @@ mod tests {
                 response.free,
                 response.spam,
                 response.relay,
+                response.cheap_tld,
                 response.mx,
                 response.vpn,
                 response.tor,
@@ -144,6 +145,7 @@ mod tests {
                 Some(false),
                 Some(true),
                 Some(false),
+                Some(true),
                 Some(true),
                 Some(true),
                 Some(false),

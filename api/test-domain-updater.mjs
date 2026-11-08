@@ -4,6 +4,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { suffixMatcher, tally } from './mine-disposable-infra.mjs';
+import { derive } from './update-tld-prices.mjs';
 import { domains, liveServiceDomains, monitoredDomains, download, snapshot, update, unprotected, publish, kubernetes } from './update-domain-data.mjs';
 
 assert.deepEqual(domains('# note\nMAIL.example\nmail.example\nbücher.example\n'), ['mail.example', 'xn--bcher-kva.example']);
@@ -155,5 +156,9 @@ try {
 const registered = suffixMatcher('// ===BEGIN ICANN DOMAINS===\ncom\nuk\nco.uk\n*.ck\n!www.ck\n// ===END ICANN DOMAINS===\n');
 assert.deepEqual(['mx.a.example.com', 'a.co.uk', 'x.b.ck', 'www.ck', 'com', 'localhost'].map(registered), ['example.com', 'a.co.uk', 'x.b.ck', 'www.ck', null, null]);
 assert.deepEqual(tally({ 'one.test': ['mx1.a.example.com', 'mx2.a.example.com', 'mx.b.co.uk'], 'two.test': ['mx.a.example.com'], 'none.test': [] }, registered), { 'example.com': 2, 'b.co.uk': 1 });
+assert.deepEqual(
+    derive({ xyz: { registration: '2.04' }, top: { registration: '1.63' }, com: { registration: '11.81' }, de: { registration: '2.90' }, io: { registration: '28.12' }, 'xn--p1ai': { registration: '1.00' }, 'co.uk': { registration: '1.00' }, bad: { registration: 'n/a' }, info: { registration: '3.60' }, uk: { registration: '0.00' } }),
+    { cheap: ['top', 'xyz'], other: ['com', 'de', 'info', 'io', 'uk', 'xn--p1ai'] }
+);
 
 console.log('Open-data updater normalization, monitored freshness, license guards, protected mail domains, ConfigMap publishing and atomic preservation checks passed.');

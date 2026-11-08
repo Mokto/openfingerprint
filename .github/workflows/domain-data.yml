@@ -38,6 +38,7 @@ jobs:
             echo "::warning::IANA RDAP bootstrap looks invalid; keeping the bundled copy"
           fi
           node api/update-whois-servers.mjs || echo "::warning::WHOIS server list refresh failed; keeping the bundled copy"
+          node api/update-tld-prices.mjs || echo "::warning::TLD price list refresh failed; keeping the bundled copy"
           if git diff --quiet; then
             echo "Snapshot unchanged"
             exit 0
@@ -76,7 +77,7 @@ jobs:
             cat /tmp/update.log
             echo '```'
             echo
-            echo "The IANA RDAP bootstrap (api/data/rdap-dns.json) and WHOIS servers for TLDs without RDAP (api/data/whois-servers.json) are refreshed in the same commit when they changed."
+            echo "The IANA RDAP bootstrap (api/data/rdap-dns.json), WHOIS servers for TLDs without RDAP (api/data/whois-servers.json) and the cheap generic TLD list (api/data/tld-prices.json) are refreshed in the same commit when they changed."
             echo
             echo "Licenses are unchanged: the updater refuses changed source licenses. Reviewed sources keep their own review dates; renewing them needs a person to re-check the evidence."
           } > /tmp/body.md

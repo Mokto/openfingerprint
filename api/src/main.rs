@@ -13,6 +13,7 @@ mod providers;
 mod rdap;
 mod rpc;
 mod tampering;
+mod tld;
 mod whois;
 
 use std::{sync::Arc, time::Duration};
