@@ -290,7 +290,8 @@ consumer-only infrastructure yields `value: true, status: mx_listed`: Microsoft'
 consumer Outlook.com servers (`*.olc.protection.outlook.com`, not the
 `*.mail.protection.outlook.com` organisation tenants), Yahoo's servers for itself,
 AOL and partner ISPs (`yahoodns.net` except Yahoo Small Business `mx-biz`), GMX,
-WEB.DE and mail.com, whose vanity catalogue (`email.com`, `usa.com`...) is covered this way.
+WEB.DE and mail.com, whose vanity catalogue (`email.com`, `usa.com`...) is covered this way, and
+Mail2World's public hosts (`publicms1/2/3.mail2world.com`) for its roughly 2,000 `@mail2...` domains.
 In the Tranco top 20,000 this matched 25 domains, all shared consumer or ISP mail.
 Patterns that also serve organisations (Microsoft `mx.microsoft`, Yandex, Mail.ru)
 are deliberately not used. `relay` is true for reviewed forwarding-alias domains (Apple Hide My Email,
