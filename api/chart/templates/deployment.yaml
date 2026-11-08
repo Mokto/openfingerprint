@@ -1,4 +1,4 @@
-{{- if not .Values.existingSecret }}{{ fail "existingSecret must name the Secret holding OPENFINGERPRINT_SITES" }}{{ end }}
+{{- if and (not (index .Values "redis-ha").enabled) (not .Values.existingSecret) }}{{ fail "existingSecret must name the Secret holding OPENFINGERPRINT_REDIS_URL when redis-ha.enabled=false" }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -85,9 +85,11 @@ spec:
             - name: OPENFINGERPRINT_NETWORK_DATA
               value: /network-data/network.json
             {{- end }}
+          {{- if .Values.existingSecret }}
           envFrom:
             - secretRef:
                 name: {{ .Values.existingSecret | quote }}
+          {{- end }}
           securityContext:
             {{- include "of.containerSecurity" . | nindent 12 }}
           startupProbe:

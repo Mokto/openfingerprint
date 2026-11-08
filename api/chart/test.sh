@@ -13,7 +13,6 @@ fi
 digest=sha256:$(printf 'a%.0s' {1..64})
 render() {
   helm template openfingerprint . --namespace openfingerprint \
-    --set existingSecret=openfingerprint-config \
     --set "image.digest=$digest" --set "domainData.refresh.image.digest=$digest" \
     --set-json 'networkPolicy.apiFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"web"}},"podSelector":{"matchLabels":{"app.kubernetes.io/name":"users"}}}]' \
     --set-json 'networkPolicy.metricsFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"kube-system"}}}]' \
@@ -38,7 +37,7 @@ check.call(pod["automountServiceAccountToken"] == false, "API gets no Kubernetes
 check.call(pod["securityContext"]["runAsUser"] == 65532 && pod["securityContext"]["runAsNonRoot"], "Non-root API")
 check.call(api["securityContext"] == {"readOnlyRootFilesystem" => true, "allowPrivilegeEscalation" => false, "capabilities" => {"drop" => ["ALL"]}}, "API hardening")
 check.call(api["image"].end_with?("@sha256:" + "a" * 64) && api["image"].start_with?("ghcr.io/mokto/openfingerprint-api:"), "Pinned API image")
-check.call(api["envFrom"] == [{"secretRef" => {"name" => "openfingerprint-config"}}], "Credentials only via the Secret")
+check.call(api["envFrom"].nil?, "The API needs no Secret with the bundled Redis")
 env = api["env"].to_h { |e| [e["name"], e["value"]] }
 check.call(env == {"OPENFINGERPRINT_LISTEN_ADDR" => "0.0.0.0:8180", "OPENFINGERPRINT_METRICS_ADDR" => "0.0.0.0:9180", "OPENFINGERPRINT_DOMAIN_DATA" => "/domain-data/domains.json", "OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS" => "60", "OPENFINGERPRINT_REDIS_URL" => "redis://openfingerprint-redis-ha-haproxy:6379/0", "OPENFINGERPRINT_COUNTRY_DATA" => "/country-data/country.mmdb"}, "API environment")
 check.call(pod["volumes"] == [{"name" => "country-data", "emptyDir" => {"sizeLimit" => "96Mi"}}, {"name" => "domain-data", "configMap" => {"name" => "openfingerprint-domain-data", "optional" => true}}], "Country emptyDir and optional domain ConfigMap")
@@ -102,7 +101,7 @@ puts "Chart selectors, isolation, RBAC, refresh and monitoring checks passed."
 for empty in dnsTo rdapTo; do
   if render --set-json "networkPolicy.$empty=[]" >/dev/null 2>&1; then echo "An empty $empty must fail" >&2; exit 1; fi
 done
-minimal=$(helm template openfingerprint . --namespace openfingerprint --set existingSecret=x)
+minimal=$(helm template openfingerprint . --namespace openfingerprint)
 grep -q 'kind: NetworkPolicy' <<< "$minimal" && { echo "NetworkPolicies must be opt-in" >&2; exit 1; }
 grep -q 'value: "redis://openfingerprint-redis-ha-haproxy:6379/0"' <<< "$minimal" || { echo "The bundled Redis must be on by default" >&2; exit 1; }
 bundled=$(render --set redis-ha.auth=true --set redis-ha.existingSecret=cache-auth)
@@ -120,21 +119,23 @@ config = docs.find { |d| d["kind"] == "ConfigMap" && d["metadata"]["name"] == "o
 abort("Bundled Redis: bounded memory, no eviction of collection state, no snapshots") unless config.include?("maxmemory 64mb") && config.include?("maxmemory-policy noeviction") && config.include?(%q{save ""})
 abort("No persistent volumes") if docs.any? { |d| d["kind"] == "StatefulSet" && d["spec"]["volumeClaimTemplates"] }
 ' <<< "$bundled"
-own=$(render --set redis-ha.enabled=false --set-json 'networkPolicy.redisTo=[{"podSelector":{"matchLabels":{"app":"redis"}}}]' --set networkPolicy.redisPort=6380)
+own=$(render --set redis-ha.enabled=false --set existingSecret=redis-url --set-json 'networkPolicy.redisTo=[{"podSelector":{"matchLabels":{"app":"redis"}}}]' --set networkPolicy.redisPort=6380)
 ruby -ryaml -e '
 docs = YAML.load_stream(ARGF.read).compact
 abort("Your own Redis must not deploy redis-ha") if docs.any? { |d| d["metadata"]["name"].include?("redis-ha") }
 env = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]["containers"].first["env"].map { |e| e["name"] }
 abort("With your own Redis, its URL comes from existingSecret only") if env.any? { |n| n.start_with?("OPENFINGERPRINT_REDIS") }
+envFrom = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]["containers"].first["envFrom"]
+abort("The Secret must be loaded into the API") unless envFrom == [{"secretRef" => {"name" => "redis-url"}}]
 policy = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]
 expected = {"to" => [{"podSelector" => {"matchLabels" => {"app" => "redis"}}}], "ports" => [{"protocol" => "TCP", "port" => 6380}]}
 abort("Redis egress must be scoped to configured peers/port") unless policy["egress"].size == 4 && policy["egress"][3] == expected
 puts "Bundled and own Redis checks passed."
 ' <<< "$own"
-if output=$(render --set redis-ha.enabled=false 2>&1) || ! grep -qF "networkPolicy.redisTo must list" <<< "$output"; then
+if output=$(render --set redis-ha.enabled=false --set existingSecret=redis-url 2>&1) || ! grep -qF "networkPolicy.redisTo must list" <<< "$output"; then
   echo "Policies without redis-ha must require redisTo" >&2; exit 1
 fi
-static=$(render --set countryData.enabled=false --set domainData.refresh.enabled=false --set redis-ha.enabled=false --set-json 'networkPolicy.redisTo=[{"podSelector":{}}]')
+static=$(render --set countryData.enabled=false --set domainData.refresh.enabled=false --set redis-ha.enabled=false --set existingSecret=redis-url --set-json 'networkPolicy.redisTo=[{"podSelector":{}}]')
 grep -q 'kind: CronJob\|OPENFINGERPRINT_DOMAIN_DATA\|kind: Role\|country-updater\|OPENFINGERPRINT_COUNTRY_DATA' <<< "$static" && { echo "Disabled refresh must render no updater or override" >&2; exit 1; }
 render --set countryData.enabled=false > "$rendered"
 ruby -ryaml -e '
@@ -142,7 +143,7 @@ docs = YAML.load_stream(File.read(ARGV[0])).compact
 policy = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]
 abort("Disabled country refresh must retain DNS (UDP and TCP), RDAP and Redis egress") unless policy["egress"].size == 3 && policy["egress"][0]["ports"] == [{"protocol" => "UDP", "port" => 53}, {"protocol" => "TCP", "port" => 53}]
 ' "$rendered"
-render --set domainData.refresh.enabled=false --set redis-ha.enabled=false --set-json 'networkPolicy.redisTo=[{"podSelector":{}}]' > "$rendered"
+render --set domainData.refresh.enabled=false --set redis-ha.enabled=false --set existingSecret=redis-url --set-json 'networkPolicy.redisTo=[{"podSelector":{}}]' > "$rendered"
 ruby -ryaml -e '
 docs = YAML.load_stream(File.read(ARGV[0])).compact
 pod = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]
@@ -203,10 +204,10 @@ abort("Network alerts missing") unless groups.any? { |g| g["name"] == "openfinge
 done
 if grep -q 'network-updater' <<< "$(render)"; then echo "Network sidecar must be opt-in" >&2; exit 1; fi
 echo "Per-pod network sidecar, egress, isolation and alerts passed."
-for bad in "existingSecret=" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short" "networkPolicy.redisTo=bad" "networkPolicy.redisPort=0" "networkPolicy.redisPort=65536" "networkPolicy.redisPort=6379.5"; do
+for bad in "redis-ha.enabled=false" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short" "networkPolicy.redisTo=bad" "networkPolicy.redisPort=0" "networkPolicy.redisPort=65536" "networkPolicy.redisPort=6379.5"; do
   if render --set "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi
 done
 if render --set-json 'networkPolicy.apiFrom=[]' >/dev/null 2>&1; then echo "Empty API caller list must fail" >&2; exit 1; fi
-helm template openfingerprint . --set existingSecret=x --set networkPolicy.enabled=false | grep -q 'kind: NetworkPolicy' && { echo "Disabled policies must not render" >&2; exit 1; }
-helm lint . --strict --set existingSecret=x --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]' >/dev/null
+helm template openfingerprint . --set networkPolicy.enabled=false | grep -q 'kind: NetworkPolicy' && { echo "Disabled policies must not render" >&2; exit 1; }
+helm lint . --strict --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]' >/dev/null
 echo "Disabled refresh, required values and lint checks passed."

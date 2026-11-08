@@ -2,14 +2,16 @@
 
 A self-hosted, MIT-licensed backend companion to the browser SDK. The next release
 provides stateless `POST /v1/check` with independent browser, automation, domain
-and IP sections, plus a Redis-backed collection flow for single-use server-owned
-events. `POST /v1/verify` remains a compatibility adapter.
+and IP sections. `POST /v1/verify` remains a compatibility adapter.
+
+**The API has no authentication.** It is meant to sit on a private network behind
+your own backend, gateway or NetworkPolicy; see [Security](#security) before exposing it.
 
 Domain and country intelligence run locally against openly licensed datasets:
 
 | Requested check | Available behavior |
 | --- | --- |
-| `signals` | Schema-1 verification of the SDK's opaque `token`, with a 21-character fingerprint. |
+| `signals` | Schema-1 verification of the SDK's opaque `token`, with a 21-character fingerprint, whether the same evidence was checked before (`replayed`) and the token's age. |
 | `automation` | Versioned rules for client-reported observations, now included automatically inside SDK `signals`. |
 | `domain` | Disposable, free-subdomain, public-mailbox, email-relay and source-scoped referrer-spam evidence with provenance and expiry, typo suggestions, MX providers, registration dates and SPF/DMARC status. |
 | `email` | Role-account detection for a full address, plus every `domain` check for the address's domain. |
@@ -33,22 +35,22 @@ forged, and matching hashes can collide or change with settings and updates.
 Stateless checks have no visitor database, observation cache or account history.
 Their evidence, email addresses, domains and IPs are dropped after processing; an
 email address is never logged, cached, echoed or used as a metric label.
-Redis temporarily holds random action bindings, origins, challenges and evaluated
-events for collection, subject to TTL and capacity limits below, and cached RDAP
-answers keyed by SHA-256 hashes of registered domains. Raw collection user
-agents/platforms are discarded after evaluation; request evidence and credentials
-are not logged. Outbound traffic consists of MX DNS queries, at most one RDAP
+Redis holds two kinds of key, both with a TTL: cached RDAP answers keyed by SHA-256
+hashes of registered domains, and token replay markers keyed by a SHA-256 hash of the
+token's content (see [Replayed tokens](#replayed-tokens-and-token-age)). Neither
+stores a fingerprint, account, address or IP. Request evidence is not logged.
+Outbound traffic consists of MX DNS queries, at most one RDAP
 request to the domain's registry per uncached check, and Redis commands.
 Country and network lookups use local datasets only. Their separate updaters
 download public datasets without receiving checked IPs or application credentials.
 Responses have `Cache-Control: no-store` and set no cookies. Domain/IP inputs are
-not echoed in responses. Stateless checks never infer an IP from the connection or forwarded headers;
-collection derives it through the trusted-peer rules below. Signals-only calls do not run domain/IP checks.
+not echoed in responses. Checks never infer an IP from the connection or forwarded headers:
+only an `ip` your backend passes is evaluated. Signals-only calls do not run domain/IP checks.
 
-The process retains configured credential tags and read-only domain/country/network datasets;
-collection state and the RDAP cache are shared in Redis, not an in-memory fallback.
-There is no visitor history. Collection capacity limits are not rate limiting:
-apply quotas and request limits at your edge/gateway, including the public collector.
+The process retains read-only domain/country/network datasets; the RDAP cache and
+replay markers are shared in Redis, not an in-memory fallback. There is no visitor
+history. The API does no rate limiting: apply quotas and request limits at your
+edge/gateway.
 
 A separate operator updater refreshes public snapshots without rebuilding the
 image; the API re-reads an override file every minute and swaps in a changed
@@ -84,7 +86,7 @@ registered domains you check, and its terms of use apply. Answers are cached in 
 under `openfingerprint:rdap:v2:<SHA-256 of the registered domain>`; unavailable
 answers are not cached. Version 2 ignores older cached dates that may have been
 normalized from invalid calendar dates or timezone offsets; old keys expire
-without flushing Redis or touching collection state. A slow or failing Redis (250 ms limit) only means asking the
+without flushing Redis. A slow or failing Redis (250 ms limit) only means asking the
 registry. The cache holds public registry dates, not who asked. Tenants of private namespaces (`name.github.io`, a
 listed free-subdomain service) are not looked up: their registered domain belongs
 to the namespace operator. The API needs HTTPS and TCP 43 to public addresses for
@@ -92,10 +94,9 @@ this; without them, results report `unavailable`.
 There are no lookup retries, remote-provider waits or visitor-history fallbacks.
 
 The SDK hashes identity signals locally and automatically includes bounded
-automation evidence outside those hashes. `collect()` has no networking;
-`identify()` posts evidence plus bounded browser context to a configured same-origin
-collection proxy. Neither writes storage unless `collect()` opts into `storageKey`. Leave that option
-unset when sending results here. Hashes are pseudonymous, not anonymous. Your
+automation evidence outside those hashes. `collect()` has no networking: your
+backend sends the token. It writes no storage unless `collect()` opts into
+`storageKey`. Leave that option unset when sending results here. Hashes are pseudonymous, not anonymous. Your
 application and hosting proxy have their own logging, retention, disclosure and
 access-control responsibilities.
 
@@ -106,14 +107,12 @@ build arguments, command-line arguments or logs.
 
 | Variable | Meaning |
 | --- | --- |
-| `OPENFINGERPRINT_SITES` | JSON array of 1–16 site configurations, each with `id` and `secret_key`. |
+| `OPENFINGERPRINT_SITES` | No longer used. The API has no credentials; if the variable is set it is ignored and the API logs one warning at startup, so old deployments keep starting. |
 | `OPENFINGERPRINT_LISTEN_ADDR` | Optional listener, default `127.0.0.1:8180`. |
 | `OPENFINGERPRINT_NETWORK_DATA` | Optional network manifest path. Keep its content-addressed ASN files in the same directory. No bundled/live fallback; absent/invalid data is unknown. Checked every 60 seconds; invalid replacements retain last-good data without extending expiry. |
-| `OPENFINGERPRINT_TRUSTED_PROXIES` | Optional JSON array of canonical proxy CIDRs (maximum 128), default `[]`. Only these socket peers may supply `X-Forwarded-For` to collection. Do not trust entire networks unnecessarily; `/0` is rejected. |
-| `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL for collection state and the RDAP cache; the API does not start without it. Supports `rediss://` with certificate validation. Unreachable Redis yields HTTP 503 on collection routes and uncached RDAP lookups; checks keep working and there is no memory fallback. Each pod keeps one multiplexed connection for the RDAP cache and one for collection, replaced after any error, timeout or 60 s of idleness; commands are never retried. RDAP cache writes happen after the response (at most 64 in flight; extra writes are dropped and counted as cache errors). |
+| `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL for the RDAP cache and token replay markers; the API does not start without it. Supports `rediss://` with certificate validation. An unreachable Redis means uncached RDAP lookups and no `replayed` answer; checks keep working and there is no memory fallback. Each pod keeps one multiplexed connection for the RDAP cache and one for replay markers, replaced after any error, timeout or 60 s of idleness; commands are never retried. RDAP cache writes happen after the response (at most 64 in flight; extra writes are dropped and counted as cache errors). |
 | `OPENFINGERPRINT_REDIS_PASSWORD` | Optional Redis password, overriding one in the URL, so the URL can live outside a Secret. |
-| `OPENFINGERPRINT_COLLECTION_TTL_SECONDS` | Lifetime of each challenge and, separately, each published event: 1–300 seconds, default 120. Use identical settings on every replica. |
-| `OPENFINGERPRINT_COLLECTION_CAPACITY` | Maximum outstanding challenges plus events per server credential: 1–100000, default 1024. Issuance at capacity returns 429. |
+| `OPENFINGERPRINT_REPLAY_WINDOW_SECONDS` | How long a checked token is remembered: 1–604800 seconds, default 3600. Use identical settings on every replica. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
 | `OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS` | Seconds between checks of the override file, 1–86400, default 60. A changed file that fails to read or parse is rejected and the last valid snapshot stays until its sources expire. |
 | `OPENFINGERPRINT_COUNTRY_DATA` | Optional read-only DB-IP Country Lite MMDB path. Without it, IP checks return `unknown/not_configured`. Missing/invalid files yield unknown country results without disabling other checks. |
@@ -123,36 +122,35 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_RDAP_BOOTSTRAP` | Optional path to an IANA RDAP bootstrap file replacing the bundled one; read at startup. It may contain `http://` servers, for local test registries. |
 | `OPENFINGERPRINT_METRICS_ADDR` | Optional listener for Prometheus `GET /metrics`, for example `0.0.0.0:9180`. Keep it off the API port so network policy can expose it separately. |
 
-IDs are 1–64 ASCII characters, start with a letter and otherwise contain letters,
-digits, underscores or dots. Server keys are 32–128 URL-safe ASCII characters;
-generate them randomly. IDs and credentials must be unique. Startup rejects
-invalid configuration without echoing its values.
+## Security
 
-`OPENFINGERPRINT_SIGNING_KEY` is no longer read or required by this source.
-Existing configurations containing `site_key` and `origins` remain readable for
-rollout; those fields enable no browser endpoint or CORS. Legacy public keys must
-remain distinct from server keys and are never authentication. New configurations
-need only `id` and `secret_key`. Do not remove configuration required by an older
-running image before deploying the compatible release.
+The API has no authentication, no keys and no tenants. Whoever can reach it can use
+it, and each check makes DNS, RDAP and WHOIS requests from your server's addresses.
+Deploy it so that only your backend can connect:
 
-The process does not terminate TLS. Protect credential transport with TLS or an
-equivalent protected boundary; cluster-local HTTP and NetworkPolicy do not encrypt
-traffic. Restrict the deployment to its intended backend callers and do not forward
-browser Origin/cookies to private routes. Only the public collection proxy forwards
-Origin and the relevant browser headers; it must strip cookies and Authorization.
-No dashboard, SDK hosting, billing or tenant-management
-endpoint is provided.
+- Keep the Service private: no Ingress, no public load balancer. With the
+  [Helm chart](chart/README.md), enable `networkPolicy` and list your backend's pods
+  in `networkPolicy.apiFrom`; the chart's default allows any pod in the cluster.
+- If a gateway exposes it, put your own authentication, quotas and request limits there.
+- A request that carries an `Origin` header is refused (HTTP 403), so a web page cannot
+  call the API from a visitor's browser. There is no CORS and no preflight.
+- Every route requires `Content-Type: application/json`; bodies are limited to 64 KiB.
+
+The process does not terminate TLS. Terminate it in front if traffic leaves a trusted
+network; cluster-local HTTP and NetworkPolicy do not encrypt traffic. No dashboard,
+SDK hosting, billing or tenant-management endpoint is provided.
+
+Earlier releases required `Authorization: Bearer <secret>` and `OPENFINGERPRINT_SITES`.
+Both are ignored now, so callers may keep sending the header while they roll over.
 
 ## Endpoints
 
-Private POST routes require `Authorization: Bearer <server secret>` and
-`Content-Type: application/json`, with no `Origin` header. Authentication runs
-before JSON parsing. Only `POST /v1/collect` accepts browser-origin requests,
-authorized by a single-use challenge. No route enables cross-origin CORS.
+Routes require `Content-Type: application/json` and refuse any request with an `Origin`
+header. There is no authentication ([Security](#security)) and no CORS.
 
 ### `GET /health`
 
-No authentication or body. Returns HTTP 200 with plain text `ok`. This is process
+No body. Returns HTTP 200 with plain text `ok`. This is process
 liveness, not evidence quality, dataset coverage or identification accuracy.
 
 ### `POST /v1/check`
@@ -172,6 +170,8 @@ By default the response is one flat object of verdicts:
 
 ```json
 {"fingerprint":"_AJUXF4ttBmXt1N1es89S",
+ "replayed":false,
+ "tokenAgeMs":1830,
  "automation":true,
  "tampering":false,
  "disposable":false,
@@ -188,6 +188,7 @@ A key that is missing means unknown, so there are no `null` facts. Only the
 | Key | Meaning |
 | --- | --- |
 | `fingerprint` | From `signals`; `null` when the token is invalid or has no full ID. |
+| `replayed`, `tokenAgeMs` | From a valid `signals` token: whether the same evidence was checked before, and milliseconds since the browser sealed it. See [Replayed tokens](#replayed-tokens-and-token-age). |
 | `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
 | `disposable`, `free`, `spam`, `relay`, `cheapTld`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `cheapTld` says the TLD is one registrars sell at teaser prices; `mx` says the domain has mail servers. |
 | `country`, `vpn`, `tor`, `datacenter`, `proxy` | From `ip`. `country` is a lowercase ISO 3166-1 alpha-2 code. |
@@ -538,11 +539,12 @@ blocks rather than handling every IANA global exception.
 
 #### Local network intelligence
 
-`/v1/check` accepts `{"ip":"8.8.8.8"}` from an authenticated backend. Existing
+`/v1/check` accepts `{"ip":"8.8.8.8"}` from your backend. Existing
 country fields (`ip.status`, `ip.reason`, `ip.countryCode`, `ip.source`) retain
 their country-only meaning. Independent network evidence is returned under
-`ip.network`, with `source: "backend_supplied"`: the server credential authenticates the caller,
-not the IP's origin. Never pass a browser-provided IP or the application's own IP.
+`ip.network`, with `source: "backend_supplied"`: the API cannot tell where the address came from.
+Pass the visitor's address as your own trusted edge saw it, never a browser-provided IP or
+the application's own IP.
 
 For public addresses, the independent `tor`, `hosting`, `asn`, `vpn`, `datacenter` and `proxy` facts contain
 `value`, `status` and `source` provenance. A Tor match is `true`; a hosting
@@ -633,174 +635,9 @@ Override `OPENFINGERPRINT_API_BINARY` when the validator is not at the default
 debug-build path. The API image also accepts `--validate-network-data <path>`
 without server credentials or networking.
 
-#### Trusted request IPs in collection
-
-Collection automatically evaluates the socket peer, returning
-`source: "peer"`. It ignores all forwarding claims unless that peer matches
-`OPENFINGERPRINT_TRUSTED_PROXIES`. For a trusted peer, it walks
-`X-Forwarded-For` **right to left**, stopping at the first untrusted hop;
-untrusted prefixes are not parsed. It accepts at most 16 trusted hops and only
-bare IP literals. Missing, duplicate or invalid relevant headers return unknown,
-not the proxy's hosting verdict. `Forwarded` and `X-Real-IP` are ignored.
-
-Your public edge must overwrite untrusted forwarding headers, or append its
-observed peer through a fully configured trusted chain. Never copy an arbitrary
-browser header into an authoritative single-IP field. Configure the CIDRs the API
-actually sees, accounting for source NAT, and keep `networkPolicy.apiFrom`
-restricted to the intended callers/proxy.
-
-For example, with Nginx directly receiving browser connections:
-
-```nginx
-location = /fingerprint/collect {
-    access_log off;
-    limit_except POST { deny all; }
-    client_max_body_size 64k;
-    proxy_pass http://openfingerprint.openfingerprint.svc.cluster.local/v1/collect;
-    proxy_pass_request_headers off;
-    proxy_set_header Content-Type application/json;
-    proxy_set_header Origin $http_origin;
-    proxy_set_header User-Agent $http_user_agent;
-    proxy_set_header Sec-CH-UA-Platform $http_sec_ch_ua_platform;
-    proxy_set_header X-Forwarded-For $remote_addr;
-}
-```
-
-Trust only this proxy's address/CIDR in the API configuration. If Nginx is behind
-another proxy, configure its real-IP handling explicitly; this example does not
-authenticate upstream forwarding claims. Do not expose the private challenge or
-consume routes. Browser credentials are not forwarded. Review proxy/application
-error and access logs separately: the API's no-raw-IP retention does not control
-other infrastructure's logging.
-
-The browser still receives only an event ID. Its backend-consumed event includes
-`ip` network evidence (the same shape as `/v1/check`'s `ip.network`), without
-the raw address or forwarding chain; country estimates are not included in the
-collected event. Network facts are
-evaluated at collection and expired/future-dated matches are nulled again on
-consumption. Roll out all API replicas before relying on this behavior. Neither
-network facts nor missing evidence alone should authorize or automatically block
-a protected action.
-
-### Challenge-bound collection
-
-These routes use the Redis at `OPENFINGERPRINT_REDIS_URL`. Every API replica must
-use the same authoritative Redis database, credentials and collection settings.
-There is no local-state fallback. A single Redis/Valkey primary is supported,
-not Redis Cluster (the atomic scripts operate on multiple keys).
-
-#### 1. Your backend issues a challenge
-
-`POST /v1/challenges` requires the server credential and accepts only:
-
-```json
-{"binding":"<64 lowercase hexadecimal characters>","origin":"https://your-app.example"}
-```
-
-Generate a random 32-byte binding in your backend and retain it against the
-authenticated session and specific action. Never accept the expected binding from
-the browser, reuse one across unrelated actions, or send account/session data
-instead. Apply your application's authentication, CSRF and issuance limits.
-Origin must be an exact canonical HTTPS origin without path, credentials, query
-or fragment (HTTP loopback is allowed for development).
-
-The response is `{"challenge":"<random token>","expires_in_ms":120000}`.
-Give only the challenge to the browser; do not expose the binding or server key.
-
-#### 2. The SDK submits evidence to your same-origin proxy
-
-Call `identify({ endpoint: '/fingerprint/collect', challenge })`. Automation is
-included automatically. Expose only a bounded POST proxy to `POST /v1/collect`:
-preserve the browser's Origin, User-Agent and Sec-CH-UA-Platform; strip cookies,
-Authorization and other forwarded headers. Do not replace the browser's UA with
-the proxy's UA. Require HTTPS and appropriate CSP `connect-src`; cross-origin
-CORS and preflight are deliberately unsupported.
-
-The collection body accepts only `challenge`, the SDK's `signals` token (whose
-decoded result must contain valid `automation`), and `context`:
-`{"userAgent": "<up to 512 UTF-8 bytes or null>", "platform": "<up to 128 bytes or null>", "webrtc": {"addresses": ["<up to 8 IP literals>"]}}`.
-Context properties may be omitted; other metadata is rejected. The global 64 KiB
-body limit applies. Non-null `storageId` is still rejected. Origin must match
-the backend-issued challenge; cookies and Authorization are forbidden.
-
-The server validates evidence, compares submitted UA against the request header,
-checks reported headless status against the submitted UA, and compares recognized
-Windows/macOS platform observations against Client Hints when present. Missing
-or unrecognized evidence stays unknown. A HeadlessChrome token observed in the
-request UA adds a headless indicator even if the submitted boolean denies it.
-Raw UA/platform values are discarded, not stored in the event. The request IP is
-evaluated locally and discarded too; only derived network evidence is stored.
-
-Publishing the evaluated event and consuming the challenge is one atomic Redis
-operation. Only one concurrent request can succeed, across API replicas.
-The browser gets only `{"event_id":"<random token>"}`; it cannot overwrite the
-stored verdict. The SDK returns `{ eventId }`.
-
-#### 3. Your backend consumes the event with the protected action
-
-`POST /v1/events/consume` requires the server credential and accepts only:
-
-```json
-{"event_id":"<ID from the browser>","binding":"<expected server-stored action binding>"}
-```
-
-Consumption checks the credential scope, expected action binding and expiry,
-and atomically deletes the event before returning it. Concurrent consumption
-succeeds once. A wrong binding or credential does not destroy the rightful event.
-The response contains `event_id`, `created_at_unix_ms`, `expires_at_unix_ms`,
-evaluated `signals` (including `automation`), `consistency`, `ip` network evidence
-and `request`.
-The latter contains the matched `origin` and nullable request-UA
-`headless_user_agent` observation, never raw UA/platform strings or an inferred IP.
-
-`consistency` has `rule_version`, `status`, `indicators` and
-`unavailable_checks`. Check names are `user_agent_mismatch`,
-`headless_evidence_mismatch`, `platform_mismatch`. When the SDK sent
-`context.webrtc` (opt-in `webrtcStun`), `rule_version` is 2 and
-`webrtc_ip_mismatch` is added: the submitted public WebRTC addresses are compared
-with the request IP, on its address family only. A mismatch means none of the
-same-family addresses equals the request IP. The check is unknown when the request IP
-is not public or trusted, or no same-family address was submitted. Submitted
-addresses must be at most 8 IP literals, are never stored or returned, and a
-mismatch also occurs behind multi-egress NAT, so treat it as an indicator. Status is `detected` for
-any mismatch, `unknown` for incomplete checks without mismatches, otherwise
-`not_detected`. This is not a calibrated browser-tampering classifier.
-
-Use this server-owned response for protected decisions, not the browser's raw
-`signals`, fingerprint or boolean claims. Missing, mismatched, expired or used
-records return 409 `expired_used_or_mismatched`. Redis errors/timeouts return
-503 `collection_unavailable`; unavailable collection must not become a trusted
-or clean result. Do not retry ambiguous submissions/consumption automatically:
-a lost response may follow successful consumption. Restart with a new challenge
-and apply application-level action idempotency.
-
-#### Security and retention limits
-
-Challenges and events each expire after the configured TTL, independently.
-The per-credential capacity counts both, and expired entries are pruned during
-issuance. Redis time controls expiry timestamps, avoiding API-replica clock drift.
-No raw browser context, accounts, domains, IPs or visitor history are retained.
-Retained data is still pseudonymous and sensitive: configure Redis authentication,
-private access, `rediss://` where needed, memory limits and `noeviction`.
-Allow the scripting and key/sorted-set commands used by the collector.
-Disable persistence/backups when not needed; TTL is not backup erasure.
-
-Atomic single-use guarantees assume one authoritative Redis history. A rollback,
-restored backup or asynchronous failover can resurrect consumed state. After
-such a rollback, stop old API replicas and rotate affected server credentials
-before accepting protected actions; old records are then outside the new scope.
-Redis deletion/eviction instead loses pending flows and fails closed.
-
-This flow protects evaluated-result integrity and reuse, not honest execution of
-JavaScript. Attackers can still fabricate observations, forge HTTP headers outside
-a normal browser, or run fresh automated sessions. Origin checks are browser
-constraints, not bot authentication. Transport uses HTTPS, not a browser-held
-signing secret, custom encrypted SDK protocol, obfuscation or device attestation.
-Combine evidence with application controls; `not_detected` never means trusted.
-
 ### SDK evidence
 
-`/v1/check` and `/v1/collect` take the SDK's opaque `token`, not the readable
+`/v1/check` takes the SDK's opaque `token`, not the readable
 fields. The token is obfuscated, not encrypted: the scheme is public, so it hides
 evidence from casual inspection and makes repeat visits look different on the wire,
 nothing more. The decoded object is validated as follows:
@@ -816,6 +653,7 @@ nothing more. The decoded object is validated as follows:
 | `durationMs` | Finite number from 0 to 60000. |
 | `timings` | Optional object of `{ "durationMs": number, "blockingMs": number }` per probe, same numeric bounds. |
 | `storageId` | Omitted or null only. |
+| `collectedAt` | Optional finite number from 0 to 1e15: milliseconds since the Unix epoch on the browser's clock when the token was sealed. Older SDKs omit it. |
 
 Each map has at most 32 entries. Names are 1–64 ASCII characters, start with a
 letter and otherwise contain letters, digits, underscores or dots. `automation` is the only additional SDK field accepted and is evaluated separately
@@ -823,6 +661,28 @@ from identity; it may be omitted by older SDKs. Unknown fields and unsolicited
 visitor metadata are rejected. Non-null IDs must match the
 canonical hash for the reported schema; changing only the version does not
 translate an identity between schemas.
+
+#### Replayed tokens and token age
+
+The token is client-supplied and unsigned, so a script can build one. Two fields help
+your backend judge a token that arrives:
+
+- `replayed` (`signals.replayed` with `detail: true`): `true` when the same evidence was
+  already checked within `OPENFINGERPRINT_REPLAY_WINDOW_SECONDS` (default one hour). The
+  API stores one marker per token in Redis, keyed by a SHA-256 hash of the decoded
+  content, with a TTL: nothing identifies a device, account or address. The first check
+  of a token returns `false` and marks it; later ones return `true`. Hashing the
+  content, not the sealed string, means re-sealing a captured token under a new random
+  prefix still counts as a replay. Invalid tokens leave no marker, and `/v1/verify`
+  never marks one. When Redis cannot answer, the field is absent, never `false`.
+- `tokenAgeMs` (`signals.tokenAgeMs`): milliseconds from the browser's `collectedAt` to
+  now. It uses the browser's clock, which is often wrong: expect negative values and use
+  a generous limit. Absent for tokens without `collectedAt`.
+
+A legitimate token can be checked more than once (a form re-submitted after a
+validation error, a signup validated twice), so treat `replayed` as a signal for your
+own rules, not as a block. Neither field stops a forger who builds a fresh token for
+every request: both are cheap protection against reusing a captured one.
 
 ### `POST /v1/verify` (compatibility)
 
@@ -840,7 +700,7 @@ Without a full ID:
 
 Invalid evidence still returns HTTP 400 here, unlike field-level failures inside
 `/v1/check`. No evidence counts or additional keys are added to this legacy response.
-Both routes use the same canonical verifier and server authentication.
+Both routes use the same canonical verifier.
 
 Deploy the compatible API first. Then update callers to send `result.token` as
 `signals` and read `response.fingerprint` (or `response.signals` with `detail: true`),
@@ -850,21 +710,19 @@ This source change does not migrate or deploy any existing caller.
 
 ### Connect, gRPC and gRPC-Web (`openfingerprint.v1.OpenFingerprint/Check`)
 
-The compact `/v1/check` verdicts are also an RPC, on the same listener and with the
-same `Authorization: Bearer <server secret>` credential and no `Origin` header. It
-speaks the [Connect](https://connectrpc.com/) protocol, gRPC and gRPC-Web, so any of
+The compact `/v1/check` verdicts are also an RPC, on the same listener, without
+authentication and refusing any `Origin` header. It speaks the [Connect](https://connectrpc.com/) protocol, gRPC and gRPC-Web, so any of
 these work:
 
 ```sh
 # Connect: a plain POST, JSON or protobuf, over HTTP/1.1 or HTTP/2
-curl -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+curl -H 'Content-Type: application/json' \
   -d '{"email":"john@gmail.com","ip":"8.8.8.8"}' \
   http://localhost:8180/openfingerprint.v1.OpenFingerprint/Check
 
 # gRPC, with the schema from server reflection (HTTP/2 without TLS)
-grpcurl -plaintext -H "Authorization: Bearer $KEY" localhost:8180 list
-buf curl --reflect --reflect-header "Authorization: Bearer $KEY" \
-  -H "Authorization: Bearer $KEY" -d '{"domain":"gmail.com"}' \
+grpcurl -plaintext localhost:8180 list
+buf curl --reflect -d '{"domain":"gmail.com"}' \
   http://localhost:8180/openfingerprint.v1.OpenFingerprint/Check
 ```
 
@@ -872,7 +730,7 @@ buf curl --reflect --reflect-header "Authorization: Bearer $KEY" \
 `CheckRequest` has `signals` (the SDK `token`), `domain`, `email` and `ip`;
 `CheckResponse` has the same fields as the compact JSON, with an unset optional
 field meaning unknown. `detail` and standalone `automation` evidence are JSON-only.
-Reflection (`grpc.reflection.v1` and `v1alpha`) requires the same credential.
+Reflection (`grpc.reflection.v1` and `v1alpha`) is open like the rest.
 
 The listener speaks HTTP/2 without TLS (as it does HTTP/1.1), so terminate TLS in
 front of it and, for gRPC, route with your ingress's gRPC backend setting (for
@@ -882,7 +740,6 @@ special setting. Browsers cannot call it: there is no CORS, and `Origin` is refu
 | Connect HTTP status | gRPC status | Cause |
 | --- | --- | --- |
 | 400 | `INVALID_ARGUMENT` | No field set, both `domain` and `email`, or a malformed message. |
-| 401 | `UNAUTHENTICATED` | Missing or wrong credential. |
 | 403 | `PERMISSION_DENIED` | Browser `Origin` header present. |
 | 429 | `RESOURCE_EXHAUSTED` | Message over 64 KiB. |
 
@@ -891,13 +748,12 @@ A rejected field (such as an invalid `ip`) is not an error: it comes back in `in
 ### HTTP errors and application use
 
 Errors return
-`{"error":"<reason>"}`: 400 invalid envelope/evidence, 401 unauthorized, 403 browser
-Origin, or 413 oversized body. Unsupported methods return
-405. Collection preflight returns 405; collection is same-origin only.
+`{"error":"<reason>"}`: 400 invalid envelope/evidence, 403 browser
+Origin, or 413 oversized body. Unsupported methods return 405.
 
 Use a background flow where missing/failed verification leaves the ID unknown,
 not blocked authentication. Applications may save a full ID and schema alongside
-their own authenticated session/account after privacy review. Compare only within
+their own session/account after privacy review. Compare only within
 the same customer and schema; never use a core-only or network-based fallback.
 
 ## Metrics
@@ -923,8 +779,9 @@ contents, domains, addresses or credentials:
 | `openfingerprint_rdap_lookups_total{result}` | RDAP lookups by `registration.status` (not cache hits or `not_applicable`); `unsupported_tld` counts TLDs with neither RDAP nor WHOIS. |
 | `openfingerprint_whois_lookups_total{result}` | WHOIS lookups for TLDs without RDAP, by `registration.status`. |
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
-| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `verify`, `challenges`, `collect`, `consume`, `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |
-| `openfingerprint_check_step_duration_seconds{step}` | Histogram of where a `/v1/check` spends time. Sections: `automation`, `signals`, `domain`, `ip_country`, `ip_network`. The `domain` section runs `domain_mx`, `domain_registration` and `domain_mail_auth` concurrently, so it lasts as long as the slowest, not their sum. Beneath them: `dns_lookup` (each MX or TXT query), `redis_get` and `redis_set` (RDAP cache), `rdap_fetch` and `whois_fetch` (registry calls on a cache miss, including the wait for a per-registry slot). A step cut short by its timeout is recorded at the time it was cut. |
+| `openfingerprint_replay_checks_total{result}` | Token replay checks: `new` (first sighting), `replayed` (seen before) and `error` (Redis could not answer, so `replayed` was left out). |
+| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `verify`, `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |
+| `openfingerprint_check_step_duration_seconds{step}` | Histogram of where a `/v1/check` spends time. Sections: `automation`, `signals`, `domain`, `ip_country`, `ip_network`. The `domain` section runs `domain_mx`, `domain_registration` and `domain_mail_auth` concurrently, so it lasts as long as the slowest, not their sum. Beneath them: `dns_lookup` (each MX or TXT query), `redis_get` and `redis_set` (RDAP cache), `replay` (the token replay marker), `rdap_fetch` and `whois_fetch` (registry calls on a cache miss, including the wait for a per-registry slot). A step cut short by its timeout is recorded at the time it was cut. |
 | `openfingerprint_country_data_loaded` | 1 when a valid country database is loaded (not necessarily fresh). |
 | `openfingerprint_country_data_expiry_timestamp_seconds` | When the country database stops being used, or 0 when unavailable. |
 | `openfingerprint_country_data_reload_failures_total` | Changed country files rejected, including rollbacks to older builds. |
@@ -958,28 +815,16 @@ pnpm api:check
 ```
 
 This runs formatting, Clippy, unit tests and a real loopback HTTP self-check. It
-generates credentials in RAM, boots without a signing key, checks both schemas,
-all 15 input combinations, automatic/nested automation rules, partial failures, scoped domain matches, public-suffix
+boots with an old `OPENFINGERPRINT_SITES` value to prove it is ignored, checks both schemas,
+token replay and age, all 15 input combinations, automatic/nested automation rules, partial failures, scoped domain matches, public-suffix
 boundaries, fresh/stale/invalid/missing snapshots, strict metadata/body boundaries,
 compatibility and no request logging, then stops the
 server. Updater checks use local fixtures and verify license-change rejection and
 atomic failure preservation. Country checks exercise IPv4/IPv6, special-use ranges,
 provenance, expiry, invalid files and live reloads; CI does not download feeds. It prints no credentials or visitor payloads.
 
-With a disposable Redis database, run the cross-replica collection checks too:
-
-```sh
-OPENFINGERPRINT_TEST_REDIS_URL=redis://127.0.0.1:6379/15 node api/test-collection.mjs
-```
-
-They check racing publication/consumption, binding/tenant isolation, expiry,
-capacity, unknowns, input limits and Redis failures. Without that variable this
-suite explicitly skips; CI runs it against a Redis service.
-
 `node api/test-network.mjs` checks local facts, IPv4/IPv6, source failure,
-license guards, exclusive/crash-recoverable refresh and explicit unknowns. The
-Redis environment above additionally enables trusted-proxy, browser-IP rejection,
-single-use event and expiry-between-collection-and-consumption checks; CI sets it.
+license guards, exclusive/crash-recoverable refresh and explicit unknowns.
 Optionally set `OPENFINGERPRINT_TEST_NETWORK_DATA` to a freshly updated manifest
 to check real DB-IP IPv4/IPv6 lookups. Normal CI does not depend on live sources;
 release image smoke tests do.
@@ -1013,4 +858,4 @@ the same checks for its bot-created release PRs. After an API release, the image
 workflow builds and smoke-tests AMD64/ARM64 natively before publishing and creating
 the multi-architecture manifest. No visitor-store migration is needed; a refreshed
 public snapshot can be mounted read-only without rebuilding the image. The API remains experimental: add deployment-wide abuse protection,
-credential lifecycle controls and operational/privacy review before relying on it.
+access control and operational/privacy review before relying on it.

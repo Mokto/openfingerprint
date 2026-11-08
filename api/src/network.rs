@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     io::Read,
-    net::{IpAddr, SocketAddr},
+    net::IpAddr,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, RwLock,
@@ -10,7 +10,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use axum::{extract::ConnectInfo, http::HeaderMap};
 use ipnetwork::IpNetwork as IpNet;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -22,7 +21,7 @@ const DAY: u64 = 86400;
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all(serialize = "camelCase"))]
-// Snapshot files use snake_case; responses and stored collection events use camelCase.
+// Snapshot files use snake_case; responses use camelCase.
 struct Metadata {
     id: String,
     license: String,
@@ -434,7 +433,6 @@ pub struct Store {
     data: RwLock<Arc<Data>>,
     seen: Mutex<Option<String>>,
     failures: AtomicU64,
-    proxies: Vec<IpNet>,
 }
 impl Store {
     pub fn empty() -> Self {
@@ -443,26 +441,10 @@ impl Store {
             data: RwLock::new(Arc::new(Data::unavailable("not_configured"))),
             seen: Mutex::new(None),
             failures: AtomicU64::new(0),
-            proxies: Vec::new(),
         }
     }
     pub fn from_env() -> Result<Self, &'static str> {
         let mut store = Self::empty();
-        if let Ok(value) = std::env::var("OPENFINGERPRINT_TRUSTED_PROXIES") {
-            if value.len() > 8192 {
-                return Err("Invalid OPENFINGERPRINT_TRUSTED_PROXIES");
-            }
-            store.proxies = serde_json::from_str::<Vec<IpNet>>(&value)
-                .map_err(|_| "Invalid OPENFINGERPRINT_TRUSTED_PROXIES")?;
-            if store.proxies.len() > 128
-                || store
-                    .proxies
-                    .iter()
-                    .any(|p| p.prefix() == 0 || p.ip() != p.network())
-            {
-                return Err("Invalid OPENFINGERPRINT_TRUSTED_PROXIES");
-            }
-        }
         if let Ok(path) = std::env::var("OPENFINGERPRINT_NETWORK_DATA") {
             store.path = Some(PathBuf::from(path));
             store.reload();
@@ -509,64 +491,6 @@ impl Store {
             }
         }
     }
-    pub fn client_address(
-        &self,
-        headers: &HeaderMap,
-        peer: Option<ConnectInfo<SocketAddr>>,
-    ) -> Option<IpAddr> {
-        self.client_ip(headers, peer.map(|p| p.0.ip()))
-            .ok()
-            .map(|(ip, _)| ip)
-            .filter(|ip| public(*ip))
-    }
-    pub fn request_check(
-        &self,
-        headers: &HeaderMap,
-        peer: Option<ConnectInfo<SocketAddr>>,
-    ) -> Value {
-        match self.client_ip(headers, peer.map(|p| p.0.ip())) {
-            Ok((ip, source)) => self.current().check_at(ip, source, now()),
-            Err(reason) => json!({"status":"unknown", "reason":reason, "source":"request"}),
-        }
-    }
-    fn client_ip(
-        &self,
-        headers: &HeaderMap,
-        peer: Option<IpAddr>,
-    ) -> Result<(IpAddr, &'static str), &'static str> {
-        let peer = peer.ok_or("peer_unavailable")?.to_canonical();
-        let trusted = |ip: IpAddr| self.proxies.iter().any(|p| p.contains(ip));
-        if !trusted(peer) {
-            return Ok((peer, "peer"));
-        }
-        let values = headers.get_all("x-forwarded-for");
-        if values.iter().count() != 1 {
-            return Err("forwarded_ip_unavailable");
-        }
-        let value = values
-            .iter()
-            .next()
-            .and_then(|h| h.to_str().ok())
-            .ok_or("invalid_forwarded_ip")?;
-        let mut client = peer;
-        for (i, hop) in value.rsplit(',').enumerate() {
-            if !trusted(client) {
-                break;
-            }
-            if i >= 16 || hop.trim().len() > 64 {
-                return Err("invalid_forwarded_ip");
-            }
-            client = hop
-                .trim()
-                .parse::<IpAddr>()
-                .map_err(|_| "invalid_forwarded_ip")?
-                .to_canonical();
-        }
-        if trusted(client) {
-            return Err("forwarded_ip_unavailable");
-        }
-        Ok((client, "trusted_proxy"))
-    }
     pub fn metrics(&self) -> String {
         let data = self.current();
         let mut out = format!(
@@ -601,9 +525,6 @@ pub fn validate(path: &Path) -> Result<(), &'static str> {
     Data::load(path, &bytes)
         .map(|_| ())
         .map_err(|_| "Invalid network snapshot")
-}
-pub fn expire_event(check: &mut Value) {
-    expire_at(check, now());
 }
 const NAMES: [&str; 6] = ["tor", "hosting", "asn", "vpn", "datacenter", "proxy"];
 fn expire_at(check: &mut Value, now: u64) {
@@ -828,17 +749,14 @@ mod tests {
         let path = Path::new("/tmp/network.json");
         let data = Data::load(path, &serde_json::to_vec(&input).unwrap()).unwrap();
         let ip = "8.8.8.8".parse().unwrap();
-        let mut event = data.check_at(ip, "trusted_proxy", DAY + 2);
+        let event = data.check_at(ip, "backend_supplied", DAY + 2);
         assert_eq!(event["tor"]["value"], true);
         assert_eq!(event["tor"]["expiresAtUnix"], DAY + 3);
-        expire_at(&mut event, DAY + 3);
         let current = data.check_at(ip, "backend_supplied", DAY + 3);
-        for result in [&event, &current] {
-            assert!(result["tor"]["value"].is_null());
-            assert_eq!(result["tor"]["status"], "stale_data");
-            assert!(!result["hosting"]["value"].is_null());
-            assert_eq!(result["status"], "ok");
-        }
+        assert!(current["tor"]["value"].is_null());
+        assert_eq!(current["tor"]["status"], "stale_data");
+        assert!(!current["hosting"]["value"].is_null());
+        assert_eq!(current["status"], "ok");
         assert_eq!(
             data.check_at("2606:4700:4700::1111".parse().unwrap(), "peer", DAY + 3)["tor"]["value"],
             true
@@ -849,7 +767,7 @@ mod tests {
         }
     }
     #[test]
-    fn timestamp_free_tor_snapshots_and_events_stay_unknown() {
+    fn timestamp_free_tor_snapshots_stay_unknown() {
         let mut input = snapshot();
         input["tor"]["entries"] = json!(["8.8.8.8"]);
         let data = Data::load(
@@ -861,24 +779,6 @@ mod tests {
         assert!(legacy["tor"]["value"].is_null());
         assert_eq!(legacy["tor"]["status"], "observation_time_unavailable");
         assert!(!legacy["hosting"]["value"].is_null());
-        let mut event = fixture().check_at("8.8.8.8".parse().unwrap(), "trusted_proxy", 1500);
-        event["tor"]
-            .as_object_mut()
-            .unwrap()
-            .remove("expiresAtUnix");
-        expire_at(&mut event, 1501);
-        assert_eq!(event["tor"], legacy["tor"]);
-        assert!(!event["hosting"]["value"].is_null());
-    }
-    #[test]
-    fn stored_events_lose_expired_matches_before_consumption() {
-        let mut event = fixture().check_at("8.8.8.8".parse().unwrap(), "trusted_proxy", 1500);
-        expire_at(&mut event, 2500);
-        assert!(event["tor"]["value"].is_null());
-        assert_eq!(event["tor"]["status"], "stale_data");
-        assert_eq!(event["status"], "ok");
-        expire_at(&mut event, 3500);
-        assert_eq!(event["status"], "unknown");
     }
     #[test]
     fn invalid_replacements_keep_the_last_good_snapshot_without_extending_expiry() {
@@ -928,39 +828,5 @@ mod tests {
         store.reload();
         assert!(store.current().metadata.iter().any(Option::is_some));
         assert_eq!(store.failures.load(Ordering::Relaxed), 0);
-    }
-    #[test]
-    fn only_trusted_peers_can_forward_and_untrusted_prefixes_are_ignored() {
-        let mut store = Store::empty();
-        store.proxies = vec!["10.0.0.0/8".parse().unwrap()];
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            "1.1.1.1, 8.8.8.8, 10.0.0.2".parse().unwrap(),
-        );
-        let resolve =
-            |s: &Store, h: &HeaderMap, ip: &str| s.client_ip(h, Some(ip.parse().unwrap()));
-        assert_eq!(
-            resolve(&store, &headers, "10.0.0.1").unwrap(),
-            ("8.8.8.8".parse().unwrap(), "trusted_proxy")
-        );
-        assert_eq!(
-            resolve(&store, &headers, "9.9.9.9").unwrap(),
-            ("9.9.9.9".parse().unwrap(), "peer")
-        );
-        assert_eq!(
-            resolve(&store, &headers, "::ffff:10.0.0.1").unwrap().0,
-            "8.8.8.8".parse::<IpAddr>().unwrap()
-        );
-        headers.insert("x-forwarded-for", "unknown, 8.8.8.8".parse().unwrap());
-        assert_eq!(
-            resolve(&store, &headers, "10.0.0.1").unwrap().0,
-            "8.8.8.8".parse::<IpAddr>().unwrap()
-        );
-        headers.insert("x-forwarded-for", "8.8.8.8:80".parse().unwrap());
-        assert!(resolve(&store, &headers, "10.0.0.1").is_err());
-        headers.remove("x-forwarded-for");
-        assert!(resolve(&store, &headers, "10.0.0.1").is_err());
-        assert!(store.client_ip(&headers, None).is_err());
     }
 }

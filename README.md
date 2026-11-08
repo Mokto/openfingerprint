@@ -11,15 +11,16 @@ own licenses.
 
 The SDK has zero runtime dependencies, no telemetry, remote code, WASM or
 import-time collection. `collect()` hashes identity locally and automatically
-includes bounded automation observations, with no networking. `identify()` submits
-evidence through your same-origin collection proxy and returns an opaque event ID.
-The API binds events to short-lived challenges and consumes them once through
-shared Redis state. These protections prevent result replacement/replay, not
-forged browser observations or malicious traffic by themselves.
+includes bounded automation observations, with no networking: your backend sends
+the resulting token to the API. The token is unsigned, so the API reports whether the
+same evidence was checked before (`replayed`) and how old it is (`tokenAgeMs`). That
+limits reuse of a captured token; it does not stop forged browser observations or
+malicious traffic by itself.
 
-Stateless API checks verify submitted evidence without visitor storage or history;
-the collection flow temporarily retains evaluated events in the Redis the API
-requires, which also caches registry answers. Open
+The API has no authentication: run it on a private network behind your backend (see
+the [security notes](api/README.md#security)). Its checks verify submitted evidence
+without visitor storage or history; the Redis it requires holds cached registry
+answers and short-lived replay markers, nothing that identifies a person. Open
 domain snapshots provide independent disposable, free-subdomain, public-mailbox,
 email-relay and scoped referrer-spam evidence, including recently monitored provider
 domains, provenance, expiry and exact reviewed disputes, plus typo suggestions for
@@ -30,8 +31,8 @@ unknown, not clean. IP country estimates use an optional local DB-IP Country Lit
 database, with provenance, expiry and automatic refresh in the Helm chart; they
 do not establish a person's location. Optional local network snapshots add
 Tor-exit, ASN and published cloud-range evidence with independent source expiry.
-Collection derives the IP through configured trusted proxies, without retaining
-raw addresses. VPN/proxy classification remains unknown. The API does not collect browser signals,
+Only an IP your backend passes is evaluated, and it is not retained. VPN/proxy
+classification remains unknown. The API does not collect browser signals,
 and the SDK does not depend on it. See the [data guide](api/data/README.md) for
 sources, licensing and refresh without image rebuilds.
 
