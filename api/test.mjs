@@ -510,11 +510,12 @@ try {
         fingerprint: null, invalid: ['signals', 'ip']
     });
     assert.deepEqual(await compactCall({ signals: signals(), domain: 'mail.example' }), { fingerprint: null, invalid: ['signals'], ...await compactCall({ domain: 'mail.example' }) });
-    const grpcCall = (fields, key = sites[4].secret_key) => new Promise((resolve, reject) => {
+    const rpcCheck = '/openfingerprint.v1.OpenFingerprint/Check';
+    const grpcCall = (fields, key = sites[4].secret_key, path = rpcCheck) => new Promise((resolve, reject) => {
         const session = connect(origin);
         session.on('error', reject);
         const stream = session.request({
-            ':method': 'POST', ':path': '/openfingerprint.v1.OpenFingerprint/Check',
+            ':method': 'POST', ':path': path,
             'content-type': 'application/grpc', te: 'trailers', ...(key ? { authorization: `Bearer ${key}` } : {})
         });
         const message = Buffer.concat(Object.entries(fields).map(([tag, text]) => {
@@ -532,9 +533,10 @@ try {
         stream.on('trailers', (t) => { trailers = { ...trailers, ...t }; });
         stream.on('end', () => {
             session.close();
-            const body = Buffer.concat(chunks).subarray(5);
+            const raw = Buffer.concat(chunks);
+            const body = raw.subarray(5);
             const decoded = {};
-            for (let i = 0; i < body.length;) {
+            for (let i = 0; path === rpcCheck && i < body.length;) {
                 const tag = body[i] >> 3;
                 if ((body[i++] & 7) === 0) { decoded[tag] = body[i++] === 1; continue; }
                 const length = body[i++];
@@ -543,7 +545,7 @@ try {
                 i += length;
                 decoded[tag] = tag === 14 ? [...(decoded[tag] ?? []), text] : text;
             }
-            resolve({ status: Number(trailers?.['grpc-status'] ?? NaN), decoded });
+            resolve({ status: Number(trailers?.['grpc-status'] ?? NaN), decoded, raw });
         });
         stream.on('error', reject);
         stream.end(frame);
@@ -557,6 +559,21 @@ try {
     assert.deepEqual(grpcResult.decoded[14], ['ip']);
     assert.equal((await grpcCall({ 2: 'mail.example' }, null)).status, 16);
     assert.equal((await grpcCall({}, sites[4].secret_key)).status, 3);
+    const reflection = '/grpc.reflection.v1.ServerReflection/ServerReflectionInfo';
+    const listed = await grpcCall({ 7: '*' }, sites[4].secret_key, reflection);
+    assert.equal(listed.status, 0);
+    assert(listed.raw.includes('openfingerprint.v1.OpenFingerprint'));
+    assert.equal((await grpcCall({ 7: '*' }, null, reflection)).status, 16);
+    const connectCheck = (body, key = sites[4].secret_key) => fetch(origin + rpcCheck, {
+        method: 'POST', headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
+        body: JSON.stringify(body)
+    });
+    const viaConnect = await connectCheck({ signals: seal({ ...signals(), automation: { version: 1, webdriver: true } }), domain: 'mail.example', ip: 'nope' });
+    assert.equal(viaConnect.status, 200);
+    assert.deepEqual(await viaConnect.json(), { fingerprint: shortId(signals().fingerprint), automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'] });
+    assert.equal((await connectCheck({ ip: '8.8.8.8' }, null)).status, 401);
+    assert.equal((await connectCheck({})).status, 400);
+    assert.equal((await fetch(origin + rpcCheck, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${sites[4].secret_key}`, origin: 'https://evil.test' }, body: '{"ip":"8.8.8.8"}' })).status, 403);
     console.log('All 15 input combinations, requested-only results, evidence counts and domain data state passed.');
     phase = `domain classification and source scope (${mode})`;
     for (const [domain, expected] of [

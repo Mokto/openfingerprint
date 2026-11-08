@@ -1,6 +1,7 @@
 FROM rust:1.99.1-slim-bookworm@sha256:ed2c95ca377d6571b124b05e75e01207973ded639dce7d5542eb7bcd797e32aa AS build
 WORKDIR /build
-COPY api/Cargo.toml api/Cargo.lock ./
+COPY api/Cargo.toml api/Cargo.lock api/build.rs ./
+COPY api/proto ./proto
 COPY api/src ./src
 COPY api/data ./data
 ENV CARGO_BUILD_JOBS=2
@@ -14,7 +15,16 @@ RUN set -eu; \
     (cd /vendor; while IFS= read -r crate; do \
         find "$crate" -type f \( -iname 'LICENSE*' -o -iname 'LICENCE*' -o -iname 'COPYING*' -o -iname 'COPYRIGHT*' -o -iname 'NOTICE*' -o -iname 'UNLICENSE*' \) \
             -print -exec cp --parents -t /out/licenses/dependencies {} + > /tmp/license-files; \
-        test -s /tmp/license-files || { printf 'Missing license files for %s\n' "$crate" >&2; exit 1; }; \
+        if ! test -s /tmp/license-files; then \
+            case "$crate" in \
+                buffa-descriptor-*) donor="$(ls -d buffa-[0-9]* | head -n 1)" ;; \
+                connectrpc-reflection-*) donor="$(ls -d connectrpc-[0-9]* | head -n 1)" ;; \
+                *) donor= ;; \
+            esac; \
+            test -n "$donor" -a -s "$donor/LICENSE" || { printf 'Missing license files for %s\n' "$crate" >&2; exit 1; }; \
+            mkdir -p "/out/licenses/dependencies/$crate"; \
+            cp "$donor/LICENSE" "/out/licenses/dependencies/$crate/LICENSE"; \
+        fi; \
     done < /tmp/dependencies); \
     cp -a "$(rustc --print sysroot)/share/doc/rust" /out/licenses/rust; \
     cp Cargo.lock /out/licenses/Cargo.lock; \

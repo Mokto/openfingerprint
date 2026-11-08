@@ -5,13 +5,13 @@ mod collection;
 mod country;
 mod domains;
 mod email;
-mod grpc;
 mod mailauth;
 mod metrics;
 mod mx;
 mod network;
 mod providers;
 mod rdap;
+mod rpc;
 mod tampering;
 mod whois;
 
@@ -31,11 +31,11 @@ fn app(state: Arc<check::AppState>) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/v1/check", post(check::check))
-        .route(grpc::PATH, post(grpc::check))
         .route("/v1/verify", post(check::verify))
         .route("/v1/challenges", post(collection::challenge))
         .route("/v1/collect", post(collection::collect))
         .route("/v1/events/consume", post(collection::consume))
+        .merge(rpc::routes(state.clone()))
         .layer(DefaultBodyLimit::max(check::BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
         .layer(middleware::from_fn(observe))
