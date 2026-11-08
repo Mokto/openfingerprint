@@ -89,7 +89,7 @@ pub const ROUTES: [&str; 7] = [
     "challenges",
     "collect",
     "consume",
-    "grpc",
+    "rpc",
     "other",
 ];
 const CLASSES: [&str; 4] = ["2xx", "4xx", "5xx", "other"];
@@ -103,7 +103,7 @@ pub fn route(path: &str) -> usize {
         "/v1/challenges" => 2,
         "/v1/collect" => 3,
         "/v1/events/consume" => 4,
-        crate::grpc::PATH => 5,
+        _ if crate::rpc::is_rpc(path) => 5,
         _ => 6,
     }
 }

@@ -2,8 +2,10 @@ syntax = "proto3";
 
 package openfingerprint.v1;
 
-// The same compact verdicts as POST /v1/check, on the same listener (HTTP/2
-// without TLS). Authenticate with the metadata `authorization: Bearer <key>`.
+// The same compact verdicts as POST /v1/check, on the same listener, over
+// Connect (JSON or protobuf, any HTTP version), gRPC and gRPC-Web. gRPC needs
+// HTTP/2 without TLS here. Authenticate with `authorization: Bearer <key>`.
+// Server reflection is available and requires the same key.
 service OpenFingerprint {
   rpc Check(CheckRequest) returns (CheckResponse);
 }

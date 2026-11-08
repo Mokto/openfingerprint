@@ -839,25 +839,43 @@ not merely change the URL. Keep strict schema/ID matching and fail-closed identi
 `/v1/verify` only in a later coordinated release once all callers have migrated.
 This source change does not migrate or deploy any existing caller.
 
-### gRPC (`openfingerprint.v1.OpenFingerprint/Check`)
+### Connect, gRPC and gRPC-Web (`openfingerprint.v1.OpenFingerprint/Check`)
 
-The compact `/v1/check` verdicts are also served over gRPC, on the same listener
-and credentials: send `authorization: Bearer <server secret>` as metadata. The
-listener speaks HTTP/2 without TLS (as it does HTTP/1.1), so terminate TLS in front
-of it and route gRPC with your ingress's gRPC backend setting (for example
-`nginx.ingress.kubernetes.io/backend-protocol: "GRPC"`).
+The compact `/v1/check` verdicts are also an RPC, on the same listener and with the
+same `Authorization: Bearer <server secret>` credential and no `Origin` header. It
+speaks the [Connect](https://connectrpc.com/) protocol, gRPC and gRPC-Web, so any of
+these work:
+
+```sh
+# Connect: a plain POST, JSON or protobuf, over HTTP/1.1 or HTTP/2
+curl -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"email":"john@gmail.com","ip":"8.8.8.8"}' \
+  http://localhost:8180/openfingerprint.v1.OpenFingerprint/Check
+
+# gRPC, with the schema from server reflection (HTTP/2 without TLS)
+grpcurl -plaintext -H "Authorization: Bearer $KEY" localhost:8180 list
+buf curl --reflect --reflect-header "Authorization: Bearer $KEY" \
+  -H "Authorization: Bearer $KEY" -d '{"domain":"gmail.com"}' \
+  http://localhost:8180/openfingerprint.v1.OpenFingerprint/Check
+```
 
 [`proto/openfingerprint.proto`](proto/openfingerprint.proto) is the contract.
 `CheckRequest` has `signals` (the SDK `token`), `domain`, `email` and `ip`;
 `CheckResponse` has the same fields as the compact JSON, with an unset optional
 field meaning unknown. `detail` and standalone `automation` evidence are JSON-only.
+Reflection (`grpc.reflection.v1` and `v1alpha`) requires the same credential.
 
-| gRPC status | Cause |
-| --- | --- |
-| `INVALID_ARGUMENT` | No field set, both `domain` and `email`, or a malformed message. |
-| `UNAUTHENTICATED` | Missing or wrong credential. |
-| `PERMISSION_DENIED` | Browser `origin` metadata present. |
-| `RESOURCE_EXHAUSTED` | Message over 64 KiB. |
+The listener speaks HTTP/2 without TLS (as it does HTTP/1.1), so terminate TLS in
+front of it and, for gRPC, route with your ingress's gRPC backend setting (for
+example `nginx.ingress.kubernetes.io/backend-protocol: "GRPC"`). Connect needs no
+special setting. Browsers cannot call it: there is no CORS, and `Origin` is refused.
+
+| Connect HTTP status | gRPC status | Cause |
+| --- | --- | --- |
+| 400 | `INVALID_ARGUMENT` | No field set, both `domain` and `email`, or a malformed message. |
+| 401 | `UNAUTHENTICATED` | Missing or wrong credential. |
+| 403 | `PERMISSION_DENIED` | Browser `Origin` header present. |
+| 429 | `RESOURCE_EXHAUSTED` | Message over 64 KiB. |
 
 A rejected field (such as an invalid `ip`) is not an error: it comes back in `invalid`.
 
@@ -896,7 +914,7 @@ contents, domains, addresses or credentials:
 | `openfingerprint_rdap_lookups_total{result}` | RDAP lookups by `registration.status` (not cache hits or `not_applicable`); `unsupported_tld` counts TLDs with neither RDAP nor WHOIS. |
 | `openfingerprint_whois_lookups_total{result}` | WHOIS lookups for TLDs without RDAP, by `registration.status`. |
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
-| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `verify`, `challenges`, `collect`, `consume`, `grpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. gRPC failures are HTTP 200, so `grpc` is always `2xx`. Buckets run from 1 ms to 5 s. |
+| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `verify`, `challenges`, `collect`, `consume`, `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |
 | `openfingerprint_check_step_duration_seconds{step}` | Histogram of where a `/v1/check` spends time. Sections: `automation`, `signals`, `domain`, `ip_country`, `ip_network`. The `domain` section runs `domain_mx`, `domain_registration` and `domain_mail_auth` concurrently, so it lasts as long as the slowest, not their sum. Beneath them: `dns_lookup` (each MX or TXT query), `redis_get` and `redis_set` (RDAP cache), `rdap_fetch` and `whois_fetch` (registry calls on a cache miss, including the wait for a per-registry slot). A step cut short by its timeout is recorded at the time it was cut. |
 | `openfingerprint_country_data_loaded` | 1 when a valid country database is loaded (not necessarily fresh). |
 | `openfingerprint_country_data_expiry_timestamp_seconds` | When the country database stops being used, or 0 when unavailable. |
