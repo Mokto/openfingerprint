@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/Mokto/openfingerprint/compare/api-v0.12.0...api-v0.13.0) (2026-11-08)
+
+
+### Features
+
+* **api:** report cheapTld for generic TLDs that registrars sell at teaser prices ([#74](https://github.com/Mokto/openfingerprint/issues/74)) ([711e847](https://github.com/Mokto/openfingerprint/commit/711e8470ec7e421b86d7219f5e72f34644d319a2))
+
 ## [0.12.0](https://github.com/Mokto/openfingerprint/compare/api-v0.11.0...api-v0.12.0) (2026-11-08)
 
 
