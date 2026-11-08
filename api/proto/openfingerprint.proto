@@ -30,6 +30,9 @@ message CheckResponse {
   optional bool spam = 6;
   optional bool relay = 7;
   optional bool mx = 8;
+  // The domain is on a generic TLD that registrars sell at teaser prices (a first-year price of 3 USD
+  // or less). Context for review, not a verdict on the site. Unset for a TLD without a known price.
+  optional bool cheap_tld = 15;
   // Lowercase ISO 3166-1 alpha-2 code.
   optional string country = 9;
   optional bool vpn = 10;

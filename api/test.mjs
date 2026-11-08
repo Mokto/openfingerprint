@@ -300,6 +300,7 @@ function domainExpected(overrides = {}) {
         });
         result[camelKey(field)] = fact;
     }
+    result.cheapTld = { value: null, status: 'unknown_tld', ...overrides.cheapTld, scope: 'tld_registration_price' };
     result.suggestedDomain = overrides.did_you_mean ?? null;
     result.mxLookup = overrides.mx_lookup ?? 'no_records';
     if (overrides.mx_providers) result.mxProviders = overrides.mx_providers;
@@ -583,11 +584,11 @@ try {
         ['disputed.mail.example', { disposable: true, disputed: true }],
         ['child.disputed.mail.example', { disposable: true }],
         ['tenant.free.example', { free_subdomain: true, ...(mode === 'fresh' ? { registration: { status: 'not_applicable' } } : {}) }], ['free.example', { free_subdomain: false }],
-        ['tenant.duckdns.org', { free_subdomain: true, registration: { status: 'not_applicable' } }], ['duckdns.org', { free_subdomain: false }],
+        ['tenant.duckdns.org', { free_subdomain: true, cheapTld: { value: false, status: 'not_cheap' }, registration: { status: 'not_applicable' } }], ['duckdns.org', { free_subdomain: false, cheapTld: { value: false, status: 'not_cheap' } }],
         ['spam.example', { spam: true }], ['child.spam.example', { spam: true }],
         ['bad.customer.example', { spam: true }], ['customer.example', {}],
-        ['notbad.customer.example', {}], ['innocent.github.io', { public_suffix_excluded: true, registration: { status: 'not_applicable' } }],
-        ['co.uk', { registration: { status: 'not_applicable' }, mx_lookup: 'not_needed' }]
+        ['notbad.customer.example', {}], ['innocent.github.io', { public_suffix_excluded: true, cheapTld: { value: false, status: 'not_cheap' }, registration: { status: 'not_applicable' } }],
+        ['co.uk', { cheapTld: { value: false, status: 'not_cheap' }, registration: { status: 'not_applicable' }, mx_lookup: 'not_needed' }]
     ]) {
         const response = await request('/v1/check', authHeaders(sites[4]), { signals: signals(), domain });
         assert.equal(response.status, 200);
@@ -640,6 +641,18 @@ try {
         assert.deepEqual(await response.json(), { domain: want }, domain);
     }
     console.log(`Public mailboxes (exact and consumer MX), relays (with subdomains), typo suggestions and MX providers passed (${mode}).`);
+
+    phase = `cheap TLDs (${mode})`;
+    for (const [domain, cheapTld] of [
+        ['shop.xyz', { value: true, status: 'cheap' }], ['a.b.top', { value: true, status: 'cheap' }],
+        ['shop.com', { value: false, status: 'not_cheap' }], ['shop.de', { value: false, status: 'not_cheap' }]
+    ]) {
+        const response = await request('/v1/check', authHeaders(sites[9]), { domain });
+        const { registration: _, ...got } = (await response.json()).domain;
+        const { registration: __, ...want } = domainExpected({ cheapTld });
+        assert.deepEqual(got, want, domain);
+    }
+    console.log(`Cheap TLD verdicts passed (${mode}).`);
 
     phase = `full email addresses and role accounts (${mode})`;
     for (const [email, role, expected] of [

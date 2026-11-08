@@ -189,7 +189,7 @@ A key that is missing means unknown, so there are no `null` facts. Only the
 | --- | --- |
 | `fingerprint` | From `signals`; `null` when the token is invalid or has no full ID. |
 | `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
-| `disposable`, `free`, `spam`, `relay`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `mx` says the domain has mail servers. |
+| `disposable`, `free`, `spam`, `relay`, `cheapTld`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `cheapTld` says the TLD is one registrars sell at teaser prices; `mx` says the domain has mail servers. |
 | `country`, `vpn`, `tor`, `datacenter`, `proxy` | From `ip`. `country` is a lowercase ISO 3166-1 alpha-2 code. |
 | `invalid` | Only present when an input was rejected: a list of `signals`, `automation`, `tampering`, `domain`, `email` and/or `ip`. |
 
@@ -326,6 +326,15 @@ Every valid domain section also has `registration`:
 A young registration is evidence, not a verdict: new businesses register domains
 too, and the date says nothing about when a mailbox was created. A domain that
 expired and was registered again shows the new date.
+
+`cheapTld` says what the domain cost to create. It is true when the last label is a
+generic TLD that a public registrar price list sells for 3 USD or less in the first
+year (`.xyz`, `.top`, `.online`, `.site`, about 90 of them), false for other priced TLDs
+including country codes such as `.de`, whose registries are cheap at every price level, and
+absent when the TLD has no price. `status` is `cheap`, `not_cheap` or `unknown_tld`. It
+describes the TLD, not the site: many real businesses use these TLDs, and a spam
+domain on `.com` is false. Use it as context next to registration age, never as a block.
+The list comes from `data/tld-prices.json` and is refreshed weekly with the other bundled data.
 
 `spf` and `dmarc` describe the domain's published sender authentication. Only the
 outcome is returned, never the record text:

@@ -507,6 +507,7 @@ fn compact(response: &mut serde_json::Value) {
             ("free", "publicMailbox"),
             ("spam", "spam"),
             ("relay", "relay"),
+            ("cheapTld", "cheapTld"),
         ] {
             put(&mut out, name, &domain[key]);
         }
@@ -978,6 +979,7 @@ pub(crate) mod tests {
             "domain": {"status":"ok","disposable":{"value":true,"status":"listed","scope":"s","sources":[]},
                 "spam":{"value":null,"status":"unknown"},
                 "publicMailbox":{"value":false,"status":"not_listed"},
+                "cheapTld":{"value":true,"status":"cheap"},
                 "mxLookup":"resolved","registration":{"status":"found"}},
             "ip": {"status":"ok","countryCode":"DK","source":{},
                 "network":{"status":"ok","source":"x","tor":{"value":false,"status":"ok","source":null},
@@ -988,7 +990,7 @@ pub(crate) mod tests {
             response,
             serde_json::json!({
                 "fingerprint":"abc","automation":true,"tampering":false,
-                "disposable":true,"free":false,"mx":true,
+                "disposable":true,"free":false,"cheapTld":true,"mx":true,
                 "country":"dk","tor":false
             })
         );

@@ -113,6 +113,7 @@ struct Facts {
     spam: Fact,
     public_mailbox: Fact,
     relay: Fact,
+    cheap_tld: crate::tld::CheapTld,
     #[serde(rename(serialize = "suggestedDomain"))]
     did_you_mean: Option<String>,
 }
@@ -325,6 +326,7 @@ impl DomainData {
                 self.fact(domain, now, Category::Relay, "email_relay"),
                 crate::providers::relay(mx),
             ),
+            cheap_tld: crate::tld::CheapTld::of(domain),
             did_you_mean: None,
         };
         let facts = Facts {
