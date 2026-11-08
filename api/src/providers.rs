@@ -41,6 +41,50 @@ struct Entry {
     ownership: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Infrastructure {
+    #[allow(dead_code)]
+    license: String,
+    #[allow(dead_code)]
+    reviewed_at_unix: u64,
+    #[allow(dead_code)]
+    method: String,
+    entries: Vec<InfrastructureEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InfrastructureEntry {
+    suffix: String,
+    #[allow(dead_code)]
+    listed_domains: u32,
+    #[allow(dead_code)]
+    popular_sites: u32,
+    #[allow(dead_code)]
+    #[serde(default)]
+    evidence_url: Option<String>,
+}
+
+static INFRASTRUCTURE: LazyLock<Infrastructure> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../data/disposable-infrastructure.json"))
+        .expect("bundled disposable infrastructure is validated by tests")
+});
+
+/// Mail servers whose customers are throwaway domains: every one of these MX hosts is under a
+/// suffix that public disposable lists cluster on and popular sites do not use.
+pub fn disposable_infrastructure(hosts: &[String]) -> Option<&'static str> {
+    let suffix = |host: &String| {
+        INFRASTRUCTURE
+            .entries
+            .iter()
+            .find(|e| under(host, &e.suffix))
+            .map(|e| e.suffix.as_str())
+    };
+    let first = suffix(hosts.first()?)?;
+    hosts.iter().all(|h| suffix(h).is_some()).then_some(first)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Provider {
     slug: &'static str,
@@ -225,6 +269,70 @@ mod tests {
             &[],
         ] {
             assert_eq!(consumer(&hosts(not)), None, "{not:?}");
+        }
+    }
+
+    #[test]
+    fn bundled_disposable_infrastructure_is_well_formed() {
+        let known: Vec<&str> = TABLE
+            .iter()
+            .flat_map(|e| e.suffixes.iter().map(String::as_str))
+            .collect();
+        let entries = &INFRASTRUCTURE.entries;
+        assert!(!entries.is_empty());
+        for e in entries {
+            assert!(
+                e.suffix.contains('.')
+                    && e.suffix.bytes().all(|b| b.is_ascii_lowercase()
+                        || b.is_ascii_digit()
+                        || b == b'.'
+                        || b == b'-'),
+                "{}",
+                e.suffix
+            );
+            assert!(
+                e.listed_domains >= 20 && e.popular_sites <= 3,
+                "{}",
+                e.suffix
+            );
+            assert!(
+                !known
+                    .iter()
+                    .any(|k| under(&e.suffix, k) || under(k, &e.suffix)),
+                "{} overlaps a mail provider",
+                e.suffix
+            );
+            assert!(
+                e.evidence_url
+                    .as_deref()
+                    .is_none_or(|u| u.starts_with("https://")),
+                "{}",
+                e.suffix
+            );
+        }
+        let mut names: Vec<_> = entries.iter().map(|e| e.suffix.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), entries.len());
+    }
+
+    #[test]
+    fn disposable_infrastructure_needs_every_mx_host() {
+        let hosts = |h: &[&str]| h.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(
+            disposable_infrastructure(&hosts(&["mail.wabblywabble.com", "mail.wallywatts.com"]))
+                .is_some()
+        );
+        assert!(disposable_infrastructure(&hosts(&["mail.wabblywabble.com"])).is_some());
+        assert!(disposable_infrastructure(&hosts(&["fr.priyohost.net"])).is_some());
+        for not in [
+            &["mail.wabblywabble.com", "mx.example.com"][..],
+            &["mail.priyohost.net"],
+            &["notwabblywabble.com"],
+            &["aspmx.l.google.com"],
+            &[],
+        ] {
+            assert_eq!(disposable_infrastructure(&hosts(not)), None, "{not:?}");
         }
     }
 

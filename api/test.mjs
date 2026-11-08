@@ -67,6 +67,10 @@ const mxAnswers = {
     'ispmail.example': [[10, 'mx-rogers.mail.am0.yahoodns.net']],
     'aliasmx.example': [[10, 'mx1.simplelogin.co'], [20, 'mx2.simplelogin.co']],
     'halfalias.example': [[10, 'mx1.simplelogin.co'], [20, 'mx.other.example']],
+    'throwaway.example': [[10, 'mail.wabblywabble.com'], [20, 'mail.wallywatts.com']],
+    'halfthrow.example': [[10, 'mail.wabblywabble.com'], [20, 'mx.other.example']],
+    'priyo.example': [[10, 'fr.priyohost.net']],
+    'priyohost-other.example': [[10, 'mail.priyohost.net']],
     'yahoobiz.example': [[10, 'mx-biz.mail.am0.yahoodns.net']],
     'workspace.example': [[5, 'eu-smtp-inbound-1.mimecast.com'], [1, 'smtp.google.com'], [9, 'eu-smtp-inbound-2.mimecast.com']]
 };
@@ -603,11 +607,15 @@ try {
         ['ispmail.example', { mx_lookup: 'resolved', mx_providers: [{ slug: 'yahoo', type: 'mailbox' }], ...(mode === 'fresh' ? { public_mailbox: true, consumer_mx: true } : {}) }],
         ['aliasmx.example', { mx_lookup: 'resolved', mx_providers: [{ slug: 'simplelogin', type: 'forwarding' }], ...(mode === 'fresh' ? { relay: true, relay_mx: true } : {}) }],
         ['halfalias.example', { mx_lookup: 'resolved', mx_providers: [{ slug: 'simplelogin', type: 'forwarding' }] }],
+        ['throwaway.example', { mx_lookup: 'resolved', mx_providers: [], ...(mode === 'fresh' ? { disposable: true, infra_mx: true } : {}) }],
+        ['priyo.example', { mx_lookup: 'resolved', mx_providers: [], ...(mode === 'fresh' ? { disposable: true, infra_mx: true } : {}) }],
+        ['halfthrow.example', { mx_lookup: 'resolved', mx_providers: [] }],
+        ['priyohost-other.example', { mx_lookup: 'resolved', mx_providers: [] }],
         ['yahoobiz.example', { mx_lookup: 'resolved', mx_providers: [{ slug: 'yahoo', type: 'mailbox' }] }]
     ]) {
         const response = await request('/v1/check', authHeaders(sites[9]), { domain });
         const want = domainExpected(expected);
-        for (const [flag, field] of [['consumer_mx', 'publicMailbox'], ['relay_mx', 'relay']]) {
+        for (const [flag, field] of [['consumer_mx', 'publicMailbox'], ['relay_mx', 'relay'], ['infra_mx', 'disposable']]) {
             if (!expected[flag]) continue;
             want[field].status = 'mx_listed';
             for (const source of want[field].sources) source.status = 'not_listed';
@@ -770,7 +778,7 @@ try {
     assert.equal(await metric('openfingerprint_domain_data_reload_failures_total'), 1);
     assert.equal(await reloadedValue(), true);
     assert.equal(await metric('openfingerprint_domain_data_loaded'), 1);
-    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), 12);
+    assert.equal(await metric('openfingerprint_mx_lookups_total{result="resolved"}'), 16);
     assert.equal(await metric('openfingerprint_whois_lookups_total{result="found"}'), 1);
     assert.equal(await metric('openfingerprint_dns_tcp_queries_total'), 2, 'bigtxt (TXT) and dnstrunc (MX, truncated over TCP too)');
     assert(await metric('openfingerprint_txt_lookups_total{result="resolved"}') >= 6);

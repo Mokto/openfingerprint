@@ -247,6 +247,17 @@ MX host or parent domain blocks the inference; direct listings, allowlists and
 disputes always take precedence. MX hosts are never echoed. They describe mail
 routing at check time, not mailbox validation.
 
+The same `mx_listed` result applies when every MX host is under infrastructure that
+public disposable lists cluster on and popular sites do not use
+([`disposable-infrastructure.json`](data/disposable-infrastructure.json)): a service that
+rotates through thousands of throwaway domains, such as the ones temporary-mail sites
+register, brings fresh and even years-old domains onto the same mail servers faster than any
+list notices them. An entry needs at least 50 listed domains, at most 3 of the Tranco top
+300,000, no overlap with a known mail provider, and either an independent check that at least
+90% of a sample of at least 8 such domains is disposable or the operator's own site advertising
+a temporary inbox. [`api/mine-disposable-infra.mjs`](mine-disposable-infra.mjs) lists the
+candidates. A domain with any other MX host is not matched.
+
 Every valid domain section has `mxLookup`:
 
 | `mxLookup` | Meaning |

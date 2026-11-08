@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { suffixMatcher, tally } from './mine-disposable-infra.mjs';
 import { domains, liveServiceDomains, monitoredDomains, download, snapshot, update, unprotected, publish, kubernetes } from './update-domain-data.mjs';
 
 assert.deepEqual(domains('# note\nMAIL.example\nmail.example\nbücher.example\n'), ['mail.example', 'xn--bcher-kva.example']);
@@ -151,4 +152,8 @@ try {
     globalThis.fetch = realFetch;
     await rm(account, { recursive: true, force: true });
 }
+const registered = suffixMatcher('// ===BEGIN ICANN DOMAINS===\ncom\nuk\nco.uk\n*.ck\n!www.ck\n// ===END ICANN DOMAINS===\n');
+assert.deepEqual(['mx.a.example.com', 'a.co.uk', 'x.b.ck', 'www.ck', 'com', 'localhost'].map(registered), ['example.com', 'a.co.uk', 'x.b.ck', 'www.ck', null, null]);
+assert.deepEqual(tally({ 'one.test': ['mx1.a.example.com', 'mx2.a.example.com', 'mx.b.co.uk'], 'two.test': ['mx.a.example.com'], 'none.test': [] }, registered), { 'example.com': 2, 'b.co.uk': 1 });
+
 console.log('Open-data updater normalization, monitored freshness, license guards, protected mail domains, ConfigMap publishing and atomic preservation checks passed.');
