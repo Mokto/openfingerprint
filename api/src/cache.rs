@@ -20,11 +20,11 @@ const RESULTS: [&str; 3] = ["hit", "miss", "error"];
 const MAX_PENDING_WRITES: usize = 64;
 const IDLE: Duration = Duration::from_secs(60);
 
-/// The Redis shared by collection state and the RDAP cache. Required: the API does not start
+/// The Redis shared by the RDAP cache and the token replay markers. Required: the API does not start
 /// without it, but each feature handles an unreachable Redis on its own.
 pub fn client_from_env() -> Result<redis::Client, &'static str> {
     let url = std::env::var("OPENFINGERPRINT_REDIS_URL").map_err(|_| {
-        "OPENFINGERPRINT_REDIS_URL is required: the Redis for collection state and the RDAP cache"
+        "OPENFINGERPRINT_REDIS_URL is required: the Redis for the RDAP cache and token replay markers"
     })?;
     client(&url, std::env::var("OPENFINGERPRINT_REDIS_PASSWORD").ok())
 }
@@ -61,8 +61,7 @@ struct Slot {
 /// One lazily opened Redis connection shared by every request of a consumer, so a command
 /// costs a round trip instead of a TCP (and TLS) handshake plus one. The connection is
 /// multiplexed: concurrent commands do not queue behind each other. It is replaced after any
-/// error or timeout, and when idle longer than `IDLE`; commands are never retried, because
-/// the collection scripts are single-use.
+/// error or timeout, and when idle longer than `IDLE`; commands are never retried.
 pub struct Link {
     client: redis::Client,
     slot: Mutex<Option<Slot>>,
@@ -239,7 +238,7 @@ pub mod tests {
         client(&format!("redis://{addr}/"), None).unwrap()
     }
 
-    /// An in-memory RESP server for GET, SET … EX and AUTH; other commands get an error reply.
+    /// An in-memory RESP server for GET, SET … EX, SET … NX EX and AUTH; other commands get an error reply.
     pub async fn fake_redis(
         password: Option<&'static str>,
     ) -> (String, Arc<Mutex<HashMap<String, (String, String)>>>) {
@@ -301,6 +300,18 @@ pub mod tests {
                                 Some((v, _)) => format!("${}\r\n{v}\r\n", v.len()),
                                 None => "$-1\r\n".to_owned(),
                             },
+                            "SET" if args.len() == 6 && args[3] == "NX" && args[4] == "EX" => {
+                                let mut store = store.lock().unwrap();
+                                if store.contains_key(&args[1]) {
+                                    "$-1\r\n".to_owned()
+                                } else {
+                                    store.insert(
+                                        args[1].clone(),
+                                        (args[2].clone(), args[5].clone()),
+                                    );
+                                    "+OK\r\n".to_owned()
+                                }
+                            }
                             "SET" if args.len() == 5 && args[3] == "EX" => {
                                 store
                                     .lock()

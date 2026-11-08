@@ -24,12 +24,8 @@ const { values } = parseArgs({
 		}
 	}
 });
-const key = () => randomBytes(32).toString('hex');
-const sites = ['alpha', 'beta', 'quota', 'malformed', 'check', 'check_invalid', 'shared', 'invalid_signals', 'reload', 'dns'].map((id) => ({
-    id,
-    secret_key: key(),
-    ...(id === 'alpha' ? { site_key: key(), origins: ['https://alpha.test'] } : {})
-}));
+// The API has no authentication and ignores this old setting; it is passed to prove that.
+const legacySites = JSON.stringify([{ id: 'legacy', secret_key: randomBytes(32).toString('hex') }]);
 assert(!values.platform || values.image, '--platform requires --image');
 const container = values.image ? `openfingerprint-test-${randomBytes(8).toString('hex')}` : null;
 const mode = values['domain-data-mode'] ?? 'fresh';
@@ -155,6 +151,10 @@ const redis = createTcpServer(socket => {
             const args = Array.from({ length: count }, (_, i) => lines[2 + i * 2]);
             buffer = lines.slice(1 + count * 2).join('\r\n');
             if (args[0] === 'GET') { const v = redisStore.get(args[1]); socket.write(v === undefined ? '$-1\r\n' : `$${v.length}\r\n${v}\r\n`); }
+            else if (args[0] === 'SET' && args[3] === 'NX' && args[4] === 'EX') {
+                if (redisStore.has(args[1])) socket.write('$-1\r\n');
+                else { redisStore.set(args[1], args[2]); socket.write('+OK\r\n'); }
+            }
             else if (args[0] === 'SET' && args[3] === 'EX') { redisStore.set(args[1], args[2]); socket.write('+OK\r\n'); }
             else socket.write('-ERR unsupported\r\n');
         }
@@ -191,12 +191,11 @@ delete process.env.OPENFINGERPRINT_SIGNING_KEY;
 delete process.env.OPENFINGERPRINT_REDIS_PASSWORD;
 delete process.env.OPENFINGERPRINT_REDIS_URL;
 delete process.env.OPENFINGERPRINT_NETWORK_DATA;
-delete process.env.OPENFINGERPRINT_TRUSTED_PROXIES;
 const child = spawn(container ? 'docker' : values.binary, args, {
 	env: {
 		...process.env,
 		OPENFINGERPRINT_LISTEN_ADDR: container ? '0.0.0.0:8180' : '127.0.0.1:0',
-		OPENFINGERPRINT_SITES: JSON.stringify(sites),
+		OPENFINGERPRINT_SITES: legacySites,
         OPENFINGERPRINT_DOMAIN_DATA: container ? '/domain-data/domains.json' : dataPath,
         OPENFINGERPRINT_METRICS_ADDR: container ? '0.0.0.0:9180' : '127.0.0.1:0',
         OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS: '1',
@@ -243,6 +242,7 @@ const base = new Promise((resolve, reject) => {
 child.stderr.on('data', data => { serverOutput += data.toString(); });
 const shortId = (hex) => Buffer.from(hex, 'hex').subarray(0, 16).toString('base64url').slice(0, 21);
 const digest = (s) => createHash('sha256').update(s).digest('hex');
+let tokenCounter = 0;
 function signals(locale = 'same', font = 'same', version = 1) {
 	const components = { fontFallbacks: digest('fallback'), fontPreferences: digest(font) };
 	const hints = { locale: digest(locale) };
@@ -260,7 +260,8 @@ function signals(locale = 'same', font = 'same', version = 1) {
 		excluded: ['audio', 'canvas', 'screen'],
 		unavailable: { audio: 'unstable', canvas: 'unsupported', screen: 'timeout' },
 		storageId: null,
-		durationMs: 5,
+		// Each call is a new collection: identical content would count as a replayed token.
+		durationMs: 5 + (tokenCounter++ % 1000) / 1000,
 		timings: { fontPreferences: { durationMs: 1, blockingMs: 0.1 } }
 	};
 }
@@ -279,7 +280,6 @@ async function request(path, headers, body, method = 'POST') {
 	});
 }
 
-const authHeaders = (site) => ({ Authorization: `Bearer ${site.secret_key}` });
 const camelKey = k => k.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
 const camel = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [camelKey(k), v]));
 function domainExpected(overrides = {}) {
@@ -317,50 +317,43 @@ try {
     assert.equal(await health.text(), 'ok');
     assert.equal(health.headers.get('cache-control'), 'no-store');
     assert.equal(health.headers.get('set-cookie'), null);
-    for (const method of ['GET', 'POST', 'OPTIONS']) {
-        const response = await request('/v1/collect', { Origin: 'https://alpha.test' }, undefined, method);
-        assert.equal(response.status, method === 'POST' ? 400 : 405);
-        assert.equal(response.headers.get('access-control-allow-origin'), null);
-    }
+    for (const path of ['/v1/challenges', '/v1/collect', '/v1/events/consume'])
+        for (const method of ['GET', 'POST']) assert.equal((await request(path, {}, undefined, method)).status, 404, `${method} ${path} was removed`);
     for (const path of ['/v1/check', '/v1/verify']) {
         assert.equal((await request(path, {}, undefined, 'GET')).status, 405);
         assert.equal((await request(path, {}, undefined, 'OPTIONS')).status, 405);
     }
-    console.log('Health, check, verification and collection routes are available (Redis failures: test-collection.mjs).');
+    console.log('Health, check and verification routes are available; the challenge-bound collection routes are gone.');
 
-    phase = 'authentication before parsing and no browser CORS';
+    phase = 'no authentication and no browser access';
     for (const path of ['/v1/check', '/v1/verify']) {
-        for (const [index, headers] of [
-            {},
-            authHeaders({ secret_key: key() }),
-            authHeaders({ secret_key: sites[0].site_key }),
-            { 'X-Site-Key': sites[0].site_key },
-            { Authorization: 'Bearer short' }
-        ].entries()) {
-            phase = `authentication before parsing: ${path} case ${index}`;
+        for (const [index, headers] of [{}, { Authorization: 'Bearer ignored' }, { Authorization: 'Basic abc' }, { 'X-Site-Key': 'ignored' }].entries()) {
+            phase = `credentials are neither required nor read: ${path} case ${index}`;
             const response = await request(path, headers, 'not-json');
-            assert.equal(response.status, 401);
-            assert.deepEqual(await response.json(), { error: 'unauthorized' });
+            assert.equal(response.status, 400, 'parsed, not authenticated');
+            assert.deepEqual(await response.json(), { error: 'invalid_request' });
         }
-        phase = `unauthorized oversized body: ${path}`;
-        assert.equal((await request(path, {}, 'x'.repeat(65537))).status, 401);
+        phase = `oversized body: ${path}`;
+        assert.equal((await request(path, {}, 'x'.repeat(65537))).status, 413);
         phase = `browser Origin rejection: ${path}`;
-        const forbidden = await request(path, {
-            ...authHeaders(sites[0]), Origin: 'https://alpha.test'
-        }, 'not-json');
-        assert.equal(forbidden.status, 403);
-        assert.equal(forbidden.headers.get('access-control-allow-origin'), null);
-        assert.equal(forbidden.headers.get('cache-control'), 'no-store');
+        for (const headers of [{ Origin: 'https://alpha.test' }, { Origin: 'https://alpha.test', Authorization: 'Bearer ignored' }]) {
+            const forbidden = await request(path, headers, 'not-json');
+            assert.equal(forbidden.status, 403);
+            assert.deepEqual(await forbidden.json(), { error: 'origin_not_allowed' });
+            assert.equal(forbidden.headers.get('access-control-allow-origin'), null);
+            assert.equal(forbidden.headers.get('cache-control'), 'no-store');
+        }
     }
-    console.log('Server-key compatibility, public-key rejection and browser-origin boundaries passed.');
+    assert(serverOutput.includes('OPENFINGERPRINT_SITES is ignored'), 'the old setting is reported, not silently dropped');
+    console.log('Requests need no credentials, ignore any that are sent, and refuse browser origins.');
 
     phase = 'canonical profiles for both supported schemas';
     for (const version of [1]) {
         const input = signals('same', 'same', version);
         delete input.timings;
         delete input.storageId;
-        for (const site of sites.slice(0, 2)) {
-            const response = await request('/v1/verify', authHeaders(site), input);
+        for (const headers of [{}, { Authorization: 'Bearer ignored' }]) {
+            const response = await request('/v1/verify', headers, input);
             assert.equal(response.status, 200);
             assert.equal(response.headers.get('cache-control'), 'no-store');
             assert.equal(response.headers.get('set-cookie'), null);
@@ -369,12 +362,12 @@ try {
                 status: 'ok', schema_version: version, fingerprint: shortId(input.fingerprint)
             });
         }
-        assert.equal((await request('/v1/verify', authHeaders(sites[0]), {
+        assert.equal((await request('/v1/verify', {}, {
             ...input, coreFingerprint: null
         })).status, 200);
         const different = signals('different', 'different', version);
-        await request('/v1/verify', authHeaders(sites[0]), different);
-        const repeated = await request('/v1/verify', authHeaders(sites[0]), input);
+        await request('/v1/verify', {}, different);
+        const repeated = await request('/v1/verify', {}, input);
         assert.deepEqual(await repeated.json(), {
             status: 'ok', schema_version: version, fingerprint: shortId(input.fingerprint)
         });
@@ -384,7 +377,7 @@ try {
         { ...signals(), fingerprint: null },
         { ...signals(), fingerprint: null, coreFingerprint: null, components: {}, hints: {} }
     ]) {
-        const response = await request('/v1/verify', authHeaders(sites[0]), insufficient);
+        const response = await request('/v1/verify', {}, insufficient);
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {
             status: 'insufficient_signals', schema_version: null, fingerprint: null
@@ -392,15 +385,46 @@ try {
     }
     console.log('Canonical schema-1 profiles, repeat verification and unknown/core-only identities passed.');
 
+    phase = 'token replay and age';
+    const send = async (token) => (await fetch(origin + '/v1/check', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ signals: token })
+    })).json();
+    const collection = { ...signals('replay', 'replay'), collectedAt: Date.now() - 90000 };
+    const token = seal(collection);
+    const first = await send(token);
+    assert.equal(first.fingerprint, shortId(collection.fingerprint));
+    assert.equal(first.replayed, false);
+    assert(first.tokenAgeMs >= 90000 && first.tokenAgeMs < 100000, 'age by the browser clock');
+    assert.equal((await send(token)).replayed, true, 'the same token again');
+    assert.equal((await send(seal(collection))).replayed, true, 'the same evidence under a new random prefix');
+    assert.equal((await send(seal({ ...collection, durationMs: collection.durationMs + 1 }))).replayed, false, 'new evidence is new');
+    const ahead = await send(seal({ ...signals('ahead', 'ahead'), collectedAt: Date.now() + 5000 }));
+    assert(ahead.tokenAgeMs < 0 && ahead.tokenAgeMs > -6000, 'a browser clock that is ahead gives a negative age');
+    const old = await send(seal(signals('old', 'old')));
+    assert.equal(old.replayed, false);
+    assert.equal(old.tokenAgeMs, undefined, 'tokens from SDKs without a collection time have no age');
+    for (const collectedAt of [-1, 2e15, 'now']) {
+        assert.deepEqual(await send(seal({ ...signals(), collectedAt })), { fingerprint: null, invalid: ['signals'] });
+    }
+    assert.deepEqual(await send(seal({ nope: 1 })), { fingerprint: null, invalid: ['signals'] });
+    const verified = { ...signals('verify', 'verify'), collectedAt: Date.now() };
+    for (let i = 0; i < 2; i++) assert.equal((await request('/v1/verify', {}, verified)).status, 200);
+    assert.equal((await send(seal(verified))).replayed, false, '/v1/verify never marks a token');
+    const detailed = await (await request('/v1/check', {}, { signals: { ...signals('detail', 'detail'), collectedAt: Date.now() } })).json();
+    assert.equal(detailed.signals.replayed, false);
+    assert(Number.isInteger(detailed.signals.tokenAgeMs));
+    console.log('Replayed tokens (even resealed), token age, old tokens, invalid collection times and verify isolation passed.');
+
     phase = 'independent requested checks and explicit unconfigured intelligence';
     const unknown = { status: 'unknown', reason: 'not_configured', network: { status: 'unknown', reason: 'non_global_ip', source: 'backend_supplied' } };
     const checkedProfile = input => ({
         status: 'ok', schema_version: input.version, fingerprint: shortId(input.fingerprint),
-        evidence: { includedComponents: 2, includedHints: 1, unavailableProbes: 3, excludedProbes: 3 }
+        evidence: { includedComponents: 2, includedHints: 1, unavailableProbes: 3, excludedProbes: 3 },
+        replayed: false
     });
     for (const version of [1]) {
         const input = signals('same', 'same', version);
-        const response = await request('/v1/check', authHeaders(sites[4]), { signals: input });
+        const response = await request('/v1/check', {}, { signals: input });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { signals: checkedProfile(input) });
     }
@@ -412,7 +436,8 @@ try {
     const fields = { signals: signals(), domain: 'ExAmPlE.test.', ip: '2001:db8::1', automation };
     for (let mask = 1; mask < 16; mask++) {
         const selected = Object.fromEntries(Object.entries(fields).filter((_, i) => mask & (1 << i)));
-        const response = await request('/v1/check', authHeaders(sites[4]), selected);
+        if ('signals' in selected) selected.signals = signals();
+        const response = await request('/v1/check', {}, selected);
         assert.equal(response.status, 200);
         assert.equal(response.headers.get('cache-control'), 'no-store');
         assert.equal(response.headers.get('set-cookie'), null);
@@ -433,7 +458,7 @@ try {
         [{ ...automation, webdriver: false, headlessUserAgent: true }, 'detected', ['headless_user_agent'], []],
         [{ version: 2, softwareRenderer: true, cdpDetected: false }, 'detected', ['software_renderer'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'zero_dimensions', 'native_function_tampering', 'worker_user_agent_mismatch']]
     ]) {
-        const response = await request('/v1/check', authHeaders(sites[4]), { automation: observations, signals: signals() });
+        const response = await request('/v1/check', {}, { automation: observations, signals: signals() });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {
             automation: { status, ruleVersion: observations.version, source: 'client_reported', indicators, unavailableProbes: unavailable },
@@ -441,27 +466,27 @@ try {
         });
     }
     for (const invalid of [false, [], 'browser', {}, { version: 3 }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
-        const response = await request('/v1/check', authHeaders(sites[4]), { ...fields, automation: invalid });
+        const response = await request('/v1/check', {}, { ...fields, signals: signals(), automation: invalid });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {
             automation: { ...automationExpected, status: 'invalid_input', indicators: [], reason: 'invalid_automation' },
             signals: checkedProfile(signals()), domain: domainExpected(), ip: unknown
         });
     }
-    const invalidSignals = await request('/v1/check', authHeaders(sites[4]), { automation, signals: false });
+    const invalidSignals = await request('/v1/check', {}, { automation, signals: false });
     assert.equal(invalidSignals.status, 200);
     assert.deepEqual(await invalidSignals.json(), {
         automation: automationExpected,
         signals: { status: 'invalid_input', reason: 'invalid_signals', schema_version: null, fingerprint: null, evidence: null }
     });
-    const omittedAutomation = await request('/v1/check', authHeaders(sites[4]), { automation: null, signals: signals() });
+    const omittedAutomation = await request('/v1/check', {}, { automation: null, signals: signals() });
     assert.deepEqual(await omittedAutomation.json(), { signals: checkedProfile(signals()) });
-    const legacyAutomation = await request('/v1/verify', authHeaders(sites[4]), { ...signals(), automation });
+    const legacyAutomation = await request('/v1/verify', {}, { ...signals(), automation });
     assert.equal(legacyAutomation.status, 200);
     assert.deepEqual(await legacyAutomation.json(), { status: 'ok', schema_version: 1, fingerprint: shortId(signals().fingerprint) });
-    const nestedAutomation = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), automation } });
+    const nestedAutomation = await request('/v1/check', {}, { signals: { ...signals(), automation } });
     assert.deepEqual(await nestedAutomation.json(), { signals: { ...checkedProfile(signals()), automation: automationExpected } });
-    const invalidNested = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), automation: false } });
+    const invalidNested = await request('/v1/check', {}, { signals: { ...signals(), automation: false } });
     assert.deepEqual(await invalidNested.json(), { signals: { ...checkedProfile(signals()), automation: { ...automationExpected, status: 'invalid_input', indicators: [], reason: 'invalid_automation' } } });
     phase = 'tampering evidence stays separate from automation and identity';
     const profile = checkedProfile(signals());
@@ -470,29 +495,29 @@ try {
         [{ version: 1, canvasReadbackAltered: true, audioRenderAltered: null }, { status: 'detected', indicators: ['canvas_readback_altered'], unavailable_probes: ['audio_render_altered'] }],
         [{ version: 1 }, { status: 'unknown', indicators: [], unavailable_probes: ['canvas_readback_altered', 'audio_render_altered'] }]
     ]) {
-        const response = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), automation, tampering } });
+        const response = await request('/v1/check', {}, { signals: { ...signals(), automation, tampering } });
         assert.deepEqual(await response.json(), { signals: { ...profile, automation: automationExpected, tampering: { rule_version: 1, source: 'client_reported', ...expected } } });
     }
     for (const invalid of [false, [], { version: 2 }, { version: 1, extra: true }, { version: 1, audioRenderAltered: 'true' }]) {
-        const response = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), tampering: invalid } });
+        const response = await request('/v1/check', {}, { signals: { ...signals(), tampering: invalid } });
         assert.deepEqual(await response.json(), { signals: { ...profile, tampering: { status: 'invalid_input', rule_version: 1, source: 'client_reported', indicators: [], unavailable_probes: [], reason: 'invalid_tampering' } } });
     }
-    const withTampering = await request('/v1/check', authHeaders(sites[4]), { signals: { ...signals(), tampering: { version: 1, canvasReadbackAltered: true, audioRenderAltered: true } } });
+    const withTampering = await request('/v1/check', {}, { signals: { ...signals(), tampering: { version: 1, canvasReadbackAltered: true, audioRenderAltered: true } } });
     assert.equal((await withTampering.json()).signals.fingerprint, profile.fingerprint);
     console.log('Automation rules, all 15 input combinations, unknowns, stable identities and independent failures passed.');
-    const coreOnly = await request('/v1/check', authHeaders(sites[4]), {
+    const coreOnly = await request('/v1/check', {}, {
         signals: { ...signals(), fingerprint: null }, domain: 'example.test'
     });
     assert.deepEqual(await coreOnly.json(), {
         signals: { ...checkedProfile(signals()), status: 'insufficient_signals', schema_version: null, fingerprint: null },
         domain: domainExpected()
     });
-    const nulls = await request('/v1/check', authHeaders(sites[4]), {
+    const nulls = await request('/v1/check', {}, {
         signals: null, domain: null, ip: '192.0.2.1'
     });
     assert.deepEqual(await nulls.json(), { ip: unknown });
     const compactCall = async (body) => (await fetch(origin + '/v1/check', {
-        method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders(sites[4]) }, body: JSON.stringify(body)
+        method: 'POST', headers: { 'content-type': 'application/json', ...{} }, body: JSON.stringify(body)
     })).json();
     const compactResult = await compactCall({
         signals: seal({ ...signals(), automation: { version: 1, webdriver: true } }),
@@ -512,12 +537,12 @@ try {
     });
     assert.deepEqual(await compactCall({ signals: signals(), domain: 'mail.example' }), { fingerprint: null, invalid: ['signals'], ...await compactCall({ domain: 'mail.example' }) });
     const rpcCheck = '/openfingerprint.v1.OpenFingerprint/Check';
-    const grpcCall = (fields, key = sites[4].secret_key, path = rpcCheck) => new Promise((resolve, reject) => {
+    const grpcCall = (fields, path = rpcCheck, headers = {}) => new Promise((resolve, reject) => {
         const session = connect(origin);
         session.on('error', reject);
         const stream = session.request({
             ':method': 'POST', ':path': path,
-            'content-type': 'application/grpc', te: 'trailers', ...(key ? { authorization: `Bearer ${key}` } : {})
+            'content-type': 'application/grpc', te: 'trailers', ...headers
         });
         const message = Buffer.concat(Object.entries(fields).map(([tag, text]) => {
             const value = Buffer.from(text);
@@ -537,10 +562,24 @@ try {
             const raw = Buffer.concat(chunks);
             const body = raw.subarray(5);
             const decoded = {};
-            for (let i = 0; path === rpcCheck && i < body.length;) {
-                const tag = body[i] >> 3;
-                if ((body[i++] & 7) === 0) { decoded[tag] = body[i++] === 1; continue; }
-                const length = body[i++];
+            let i = 0;
+            const varint = () => {
+                let value = 0n;
+                for (let shift = 0n; ; shift += 7n) {
+                    const byte = body[i++];
+                    value |= BigInt(byte & 127) << shift;
+                    if (!(byte & 128)) return value;
+                }
+            };
+            while (path === rpcCheck && i < body.length) {
+                const field = Number(varint());
+                const tag = field >> 3;
+                if ((field & 7) === 0) {
+                    const value = varint();
+                    decoded[tag] = tag === 17 ? Number(BigInt.asIntN(64, value)) : value === 1n;
+                    continue;
+                }
+                const length = Number(varint());
                 assert(length < 128);
                 const text = body.subarray(i, i + length).toString();
                 i += length;
@@ -557,24 +596,26 @@ try {
     assert.equal(grpcResult.decoded[2], true);
     assert.equal(grpcResult.decoded[4], mode === 'fresh' ? true : undefined);
     assert.equal(grpcResult.decoded[8], false);
+    assert.equal(grpcResult.decoded[16], false, 'replayed');
+    assert.equal(grpcResult.decoded[17], undefined, 'no collection time, no age');
     assert.deepEqual(grpcResult.decoded[14], ['ip']);
-    assert.equal((await grpcCall({ 2: 'mail.example' }, null)).status, 16);
-    assert.equal((await grpcCall({}, sites[4].secret_key)).status, 3);
+    assert.equal((await grpcCall({ 2: 'mail.example' })).status, 0, 'no credentials needed');
+    assert.equal((await grpcCall({ 2: 'mail.example' }, rpcCheck, { authorization: 'Bearer ignored' })).status, 0, 'and none read');
+    assert.equal((await grpcCall({})).status, 3);
     const reflection = '/grpc.reflection.v1.ServerReflection/ServerReflectionInfo';
-    const listed = await grpcCall({ 7: '*' }, sites[4].secret_key, reflection);
+    const listed = await grpcCall({ 7: '*' }, reflection);
     assert.equal(listed.status, 0);
     assert(listed.raw.includes('openfingerprint.v1.OpenFingerprint'));
-    assert.equal((await grpcCall({ 7: '*' }, null, reflection)).status, 16);
-    const connectCheck = (body, key = sites[4].secret_key) => fetch(origin + rpcCheck, {
-        method: 'POST', headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
+    const connectCheck = (body) => fetch(origin + rpcCheck, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body)
     });
     const viaConnect = await connectCheck({ signals: seal({ ...signals(), automation: { version: 1, webdriver: true } }), domain: 'mail.example', ip: 'nope' });
     assert.equal(viaConnect.status, 200);
-    assert.deepEqual(await viaConnect.json(), { fingerprint: shortId(signals().fingerprint), automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'] });
-    assert.equal((await connectCheck({ ip: '8.8.8.8' }, null)).status, 401);
+    assert.deepEqual(await viaConnect.json(), { fingerprint: shortId(signals().fingerprint), replayed: false, automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'] });
+    assert.equal((await connectCheck({ ip: '8.8.8.8' })).status, 200);
     assert.equal((await connectCheck({})).status, 400);
-    assert.equal((await fetch(origin + rpcCheck, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${sites[4].secret_key}`, origin: 'https://evil.test' }, body: '{"ip":"8.8.8.8"}' })).status, 403);
+    assert.equal((await fetch(origin + rpcCheck, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.test' }, body: '{"ip":"8.8.8.8"}' })).status, 403);
     console.log('All 15 input combinations, requested-only results, evidence counts and domain data state passed.');
     phase = `domain classification and source scope (${mode})`;
     for (const [domain, expected] of [
@@ -590,7 +631,7 @@ try {
         ['notbad.customer.example', {}], ['innocent.github.io', { public_suffix_excluded: true, cheapTld: { value: false, status: 'not_cheap' }, registration: { status: 'not_applicable' } }],
         ['co.uk', { cheapTld: { value: false, status: 'not_cheap' }, registration: { status: 'not_applicable' }, mx_lookup: 'not_needed' }]
     ]) {
-        const response = await request('/v1/check', authHeaders(sites[4]), { signals: signals(), domain });
+        const response = await request('/v1/check', {}, { signals: signals(), domain });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { signals: checkedProfile(signals()), domain: domainExpected(expected) });
     }
@@ -606,7 +647,7 @@ try {
         ['dnsspoof.example', 'no_records']
     ]) {
         const started = Date.now();
-        const response = await request('/v1/check', authHeaders(sites[9]), { domain });
+        const response = await request('/v1/check', {}, { domain });
         assert(Date.now() - started < 3000);
         const want = domainExpected({ mx_lookup: lookup, ...(lookup === 'resolved' ? { mx_providers: [] } : {}), ...(mode === 'fresh' && disposable ? { disposable } : {}) });
         if (mode === 'fresh' && disposable) want.disposable.status = 'mx_listed';
@@ -631,7 +672,7 @@ try {
         ['priyohost-other.example', { mx_lookup: 'resolved', mx_providers: [] }],
         ['yahoobiz.example', { mx_lookup: 'resolved', mx_providers: [{ slug: 'yahoo', type: 'mailbox' }] }]
     ]) {
-        const response = await request('/v1/check', authHeaders(sites[9]), { domain });
+        const response = await request('/v1/check', {}, { domain });
         const want = domainExpected(expected);
         for (const [flag, field] of [['consumer_mx', 'publicMailbox'], ['relay_mx', 'relay'], ['infra_mx', 'disposable']]) {
             if (!expected[flag]) continue;
@@ -647,7 +688,7 @@ try {
         ['shop.xyz', { value: true, status: 'cheap' }], ['a.b.top', { value: true, status: 'cheap' }],
         ['shop.com', { value: false, status: 'not_cheap' }], ['shop.de', { value: false, status: 'not_cheap' }]
     ]) {
-        const response = await request('/v1/check', authHeaders(sites[9]), { domain });
+        const response = await request('/v1/check', {}, { domain });
         const { registration: _, ...got } = (await response.json()).domain;
         const { registration: __, ...want } = domainExpected({ cheapTld });
         assert.deepEqual(got, want, domain);
@@ -660,11 +701,11 @@ try {
         ['no-reply@relay.example', true, { relay: true }],
         ['zq.person-7@relay.example', false, { relay: true }]
     ]) {
-        const body = await (await request('/v1/check', authHeaders(sites[9]), { email })).json();
+        const body = await (await request('/v1/check', {}, { email })).json();
         assert.deepEqual(body, { domain: domainExpected(expected), email: { status: 'checked', roleAccount: role } }, 'email case');
     }
     for (const email of ['publicmail.example', 'a@b@publicmail.example', 'a..b@publicmail.example', '"a b"@publicmail.example', 'a@localhost', 42, {}]) {
-        const body = await (await request('/v1/check', authHeaders(sites[9]), { email, ip: '192.0.2.1' })).json();
+        const body = await (await request('/v1/check', {}, { email, ip: '192.0.2.1' })).json();
         assert.deepEqual(Object.keys(body).sort(), ['email', 'ip'], 'Invalid addresses run no domain check');
         assert.deepEqual(body.email, { status: 'invalid_input', reason: 'invalid_email' });
     }
@@ -678,7 +719,7 @@ try {
         ['badpolicy.example', { status: 'found', policy: 'fail' }, { status: 'invalid' }],
         ['bigtxt.example', { status: 'found', policy: 'fail' }, { status: 'none' }]
     ]) {
-        const body = await (await request('/v1/check', authHeaders(sites[9]), { domain })).json();
+        const body = await (await request('/v1/check', {}, { domain })).json();
         assert.deepEqual([body.domain.spf, body.domain.dmarc], [spf, dmarc], domain);
     }
     assert(txtQueries.includes('bigtxt.example') && txtQueries.includes('tcp:bigtxt.example'), 'Truncated TXT answers are repeated over TCP');
@@ -698,14 +739,15 @@ try {
         ['new.wtest', { status: 'not_found' }], ['busy.wtest', { status: 'unavailable' }]
     ]) {
         const started = Date.now();
-        const response = await request('/v1/check', authHeaders(sites[9]), { domain });
+        const response = await request('/v1/check', {}, { domain });
         assert(Date.now() - started < 3500);
         assert.deepEqual((await response.json()).domain.registration, registration);
     }
     assert(rdapRequests.includes('mail.example') && !rdapRequests.some(name => name.split('.').length > 2), 'RDAP must query registrable domains only');
     assert.equal(rdapRequests.filter(name => name === 'rdapfound.example').length, 1, 'Cached registrations must not reach the registry again');
     assert.equal(rdapRequests.filter(name => name === 'rdapbroken.example').length, 1);
-    assert(redisStore.size > 0 && [...redisStore.keys()].every(k => /^openfingerprint:rdap:v2:[0-9a-f]{64}$/.test(k)), 'Cache keys are hashed registered domains');
+    const rdapKeys = [...redisStore.keys()].filter(k => !k.startsWith('openfingerprint:replay:'));
+    assert(rdapKeys.length > 0 && rdapKeys.every(k => /^openfingerprint:rdap:v2:[0-9a-f]{64}$/.test(k)), 'Cache keys are hashed registered domains');
     assert(![...redisStore.values()].some(v => v === 'unavailable'), 'Unavailable answers are not cached');
     assert(!rdapRequests.some(name => /github|co\.uk|duckdns\.org$/.test(name) && name !== 'duckdns.org'), 'Private-namespace tenants and public suffixes are not registrable');
     assert.deepEqual(whoisQueries, ['old.wtest', 'new.wtest', 'busy.wtest'], 'WHOIS gets the registrable domain once, then the cache answers');
@@ -713,7 +755,7 @@ try {
 
     phase = 'independent field validation and bounded envelopes';
     for (const domain of ['', 'localhost', 'https://example.test', 'person@example.test', 'example.test:80', 'a..test', 'bücher.test', 'a'.repeat(64) + '.test', {}, 42]) {
-        const response = await request('/v1/check', authHeaders(sites[5]), {
+        const response = await request('/v1/check', {}, {
             signals: signals(), domain, ip: '192.0.2.1'
         });
         assert.equal(response.status, 200);
@@ -722,7 +764,7 @@ try {
         });
     }
     for (const ip of ['', 'example.test', '192.0.2.1:80', '[2001:db8::1]', '192.0.2.0/24', 'fe80::1%eth0', [], true]) {
-        const response = await request('/v1/check', authHeaders(sites[5]), { domain: 'example.test', ip });
+        const response = await request('/v1/check', {}, { domain: 'example.test', ip });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { domain: domainExpected(), ip: { status: 'invalid_input', reason: 'invalid_ip', network: { status: 'invalid_input', reason: 'invalid_ip', source: 'backend_supplied' } } });
     }
@@ -730,11 +772,11 @@ try {
         { mx: ['mx.mail.example'] }, { domain: 'example.test', mx: ['mx.mail.example'] },
         { domain: 'example.test', email: 'a@example.test' },
         ...['visitor_token', 'account_id', 'userAgent', 'storageId'].map(k => ({ domain: 'example.test', [k]: 'unsolicited' }))]) {
-        const response = await request('/v1/check', authHeaders(sites[5]), body);
+        const response = await request('/v1/check', {}, body);
         assert.equal(response.status, 400);
         assert.deepEqual(await response.json(), { error: 'invalid_request' });
     }
-    assert.equal((await request('/v1/check', authHeaders(sites[5]), { domain: 'x'.repeat(65536) })).status, 413);
+    assert.equal((await request('/v1/check', {}, { domain: 'x'.repeat(65536) })).status, 413);
     console.log('Invalid fields preserve other results; malformed, empty, unsolicited and oversized envelopes are rejected.');
 
     phase = 'strict evidence and metadata validation';
@@ -762,10 +804,10 @@ try {
         )
     ];
     for (const body of invalid) {
-        const response = await request('/v1/verify', authHeaders(sites[0]), body);
+        const response = await request('/v1/verify', {}, body);
         assert.equal(response.status, 400);
         assert.deepEqual(await response.json(), { error: 'invalid_request' });
-        const check = await request('/v1/check', authHeaders(sites[7]), { signals: body, domain: 'example.test' });
+        const check = await request('/v1/check', {}, { signals: body, domain: 'example.test' });
         assert.equal(check.status, 200);
         assert.deepEqual(await check.json(), {
             signals: { status: 'invalid_input', reason: 'invalid_signals', schema_version: null, fingerprint: null, evidence: null },
@@ -773,15 +815,15 @@ try {
         });
     }
     for (const signals of [false, [], 'not evidence']) {
-        const response = await request('/v1/check', authHeaders(sites[7]), { signals, ip: '192.0.2.1' });
+        const response = await request('/v1/check', {}, { signals, ip: '192.0.2.1' });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {
             signals: { status: 'invalid_input', reason: 'invalid_signals', schema_version: null, fingerprint: null, evidence: null },
             ip: unknown
         });
     }
-    assert.equal((await request('/v1/verify', authHeaders(sites[0]), 'not-json')).status, 400);
-    assert.equal((await request('/v1/verify', authHeaders(sites[0]), JSON.stringify({
+    assert.equal((await request('/v1/verify', {}, 'not-json')).status, 400);
+    assert.equal((await request('/v1/verify', {}, JSON.stringify({
         padding: 'x'.repeat(65536)
     }))).status, 413);
     console.log('Strict hashes, schema separation, unsolicited visitor-data rejection and body limits passed.');
@@ -794,7 +836,7 @@ try {
     };
     assert.equal(await metric('openfingerprint_domain_data_loaded'), ['fresh', 'stale'].includes(mode) ? 1 : 0);
     const replace = (body) => { writeFileSync(dataPath + '.tmp', body, { mode: 0o644 }); renameSync(dataPath + '.tmp', dataPath); };
-    const reloadedValue = async () => (await (await request('/v1/check', authHeaders(sites[8]), { domain: 'reloaded.example' })).json()).domain.disposable?.value ?? null;
+    const reloadedValue = async () => (await (await request('/v1/check', {}, { domain: 'reloaded.example' })).json()).domain.disposable?.value ?? null;
     const waitFor = async (expected) => {
         for (let i = 0; i < 40 && await reloadedValue() !== expected; i++) await new Promise(r => setTimeout(r, 250));
         assert.equal(await reloadedValue(), expected);
@@ -815,10 +857,13 @@ try {
     assert.equal(await metric('openfingerprint_rdap_lookups_total{result="found"}'), 1);
     assert(await metric('openfingerprint_rdap_cache_total{result="hit"}') >= 1);
     assert.equal(await metric('openfingerprint_rdap_cache_total{result="error"}'), 0);
+    assert(await metric('openfingerprint_replay_checks_total{result="replayed"}') >= 2);
+    assert(await metric('openfingerprint_replay_checks_total{result="new"}') >= 5);
+    assert.equal(await metric('openfingerprint_replay_checks_total{result="error"}'), 0);
     console.log(`Snapshot reload, last-good retention and metrics passed (${mode}).`);
     phase = 'no request or credential logging';
     for (const sensitive of [
-        ...sites.flatMap(site => [site.secret_key, site.site_key].filter(Boolean)),
+        JSON.parse(legacySites)[0].secret_key,
         signals().fingerprint, shortId(signals().fingerprint), signals('same', 'same', 5).fingerprint,
         signals().components.fontPreferences, 'unsolicited', 'ExAmPlE.test.', 'Support+EU', 'zq.person-7', '2001:db8::1', '192.0.2.1',
         'mail.example', 'disputed.mail.example', 'child.disputed.mail.example', 'dnsmx.example', 'mx.other.example', 'rdapfound.example'
@@ -890,7 +935,7 @@ try {
 }
 
 if (!values['domain-data-mode'] && !process.exitCode) {
-    const env = { ...process.env, OPENFINGERPRINT_SITES: JSON.stringify(sites), OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_DNS: '127.0.0.1:9' };
+    const env = { ...process.env, OPENFINGERPRINT_SITES: legacySites, OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_DNS: '127.0.0.1:9' };
     delete env.OPENFINGERPRINT_REDIS_URL;
     const noRedis = container
         ? spawnSync('docker', ['run', '--rm', '--env', 'OPENFINGERPRINT_SITES', '--env', 'OPENFINGERPRINT_LISTEN_ADDR', '--env', 'OPENFINGERPRINT_DNS', values.image], { env, encoding: 'utf8', timeout: 30000 })

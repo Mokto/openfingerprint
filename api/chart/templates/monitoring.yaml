@@ -97,7 +97,7 @@ spec:
             severity: warning
           annotations:
             summary: OpenFingerprint cannot use its Redis
-            description: Registration lookups bypass the cache and reach registries on every check, and collection challenges fail. Check the Redis pods, credentials and egress on the Redis port.
+            description: Registration lookups bypass the cache and reach registries on every check, and token replay checks are unknown. Check the Redis pods, credentials and egress on the Redis port.
         - alert: OpenFingerprintMxLookupsFailing
           expr: |
             sum(increase(openfingerprint_mx_lookups_total{ {{- $selector -}} ,result="unavailable"}[30m])) / sum(increase(openfingerprint_mx_lookups_total{ {{- $selector -}} }[30m])) > 0.5

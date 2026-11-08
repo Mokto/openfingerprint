@@ -30,7 +30,6 @@ pub fn is_rpc(path: &str) -> bool {
 impl From<ApiError> for ConnectError {
     fn from(ApiError(status, reason): ApiError) -> Self {
         match status {
-            StatusCode::UNAUTHORIZED => Self::unauthenticated(reason),
             StatusCode::FORBIDDEN => Self::permission_denied(reason),
             StatusCode::BAD_REQUEST => Self::invalid_argument(reason),
             StatusCode::PAYLOAD_TOO_LARGE => Self::resource_exhausted(reason),
@@ -64,17 +63,17 @@ impl OpenFingerprint for Check {
     }
 }
 
-/// Applies the `/v1/check` credential rules to every RPC, reflection included.
-struct Authenticate(Arc<AppState>);
+/// Applies the `/v1/check` browser rule to every RPC, reflection included.
+struct RejectBrowsers(Arc<AppState>);
 
 #[connectrpc::async_trait]
-impl Interceptor for Authenticate {
+impl Interceptor for RejectBrowsers {
     async fn intercept_unary(
         &self,
         req: UnaryRequest,
         next: Next<'_>,
     ) -> Result<UnaryResponse, ConnectError> {
-        self.0.authorize(req.ctx.headers())?;
+        self.0.reject_browsers(req.ctx.headers())?;
         next.run(req).await
     }
 
@@ -84,7 +83,7 @@ impl Interceptor for Authenticate {
         inbound: PayloadStream,
         next: NextStream<'_>,
     ) -> Result<StreamResponse, ConnectError> {
-        self.0.authorize(req.ctx.headers())?;
+        self.0.reject_browsers(req.ctx.headers())?;
         next.run(req, inbound).await
     }
 }
@@ -103,7 +102,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>(state: Arc<AppState>) -> Router<
                 .with_max_request_body_size(BODY_LIMIT)
                 .with_max_message_size(BODY_LIMIT),
         )
-        .with_interceptor(Authenticate(state));
+        .with_interceptor(RejectBrowsers(state));
     PATHS.into_iter().fold(Router::new(), |r, path| {
         r.route_service(path, service.clone())
     })
@@ -117,7 +116,7 @@ mod tests {
     fn every_compact_key_has_a_field_in_the_response_message() {
         let response: CheckResponse = serde_json::from_value(serde_json::json!({
             "fingerprint":"abc","automation":true,"tampering":false,"disposable":true,
-            "free":false,"spam":true,"relay":false,"cheapTld":true,"mx":true,"country":"dk","vpn":true,
+            "free":false,"spam":true,"relay":false,"cheapTld":true,"replayed":true,"tokenAgeMs":-1500,"mx":true,"country":"dk","vpn":true,
             "tor":false,"datacenter":true,"proxy":false,"invalid":["ip"]
         }))
         .unwrap();
@@ -132,6 +131,7 @@ mod tests {
                 response.spam,
                 response.relay,
                 response.cheap_tld,
+                response.replayed,
                 response.mx,
                 response.vpn,
                 response.tor,
@@ -148,11 +148,13 @@ mod tests {
                 Some(true),
                 Some(true),
                 Some(true),
+                Some(true),
                 Some(false),
                 Some(true),
                 Some(false)
             ]
         );
+        assert_eq!(response.token_age_ms, Some(-1500));
         assert_eq!(response.invalid, ["ip"]);
         assert_eq!(
             serde_json::from_value::<CheckResponse>(serde_json::json!({})).unwrap(),
@@ -164,7 +166,6 @@ mod tests {
     fn api_errors_map_to_connect_codes() {
         use connectrpc::ErrorCode::*;
         for (status, code) in [
-            (StatusCode::UNAUTHORIZED, Unauthenticated),
             (StatusCode::FORBIDDEN, PermissionDenied),
             (StatusCode::BAD_REQUEST, InvalidArgument),
             (StatusCode::PAYLOAD_TOO_LARGE, ResourceExhausted),

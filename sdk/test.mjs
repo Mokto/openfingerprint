@@ -117,6 +117,7 @@ const checkpoint = () => writeFile(output, `${JSON.stringify(report, null, 2)}\n
 
 function valid(r) {
 	assert.equal(r.version, 1);
+	assert(Number.isInteger(r.collectedAt) && Math.abs(Date.now() - r.collectedAt) < 60000, 'collection time');
 	assert(typeof r.token === 'string' && r.token.length > 100 && /^[\w-]+$/.test(r.token));
 	assert(!r.token.includes('fingerprint') && (!r.fingerprint || !r.token.includes(r.fingerprint)));
 	assert(Array.isArray(r.excluded));

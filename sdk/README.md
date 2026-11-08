@@ -4,10 +4,9 @@ A standalone, MIT-licensed TypeScript browser-signal collector with **zero runti
 
 The SDK has no telemetry, remote code, WASM or import-time collection. `collect()`
 hashes identity signals locally and always includes automation observations as
-unhashed booleans/nulls, with no network requests. `identify()` submits that evidence
-to your same-origin collection proxy and returns an opaque event ID. The optional
-self-hosted API provides stateless checks and a Redis-backed single-use event flow;
-it does not provide managed identification or visitor history.
+unhashed booleans/nulls, with no network requests. You send the resulting `token`
+with your form and your backend checks it. The optional self-hosted API provides
+stateless checks; it does not provide managed identification or visitor history.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Different
 devices can collide; settings, updates and missing signals can split repeat visits.
@@ -40,7 +39,7 @@ pnpm build
 Node 24+ and pnpm 12.11.2 are used for development. Build outputs:
 
 - `dist/index.js`: standalone ES module.
-- `dist/index.iife.js`: script exposing `OpenFingerprint.collect`, `OpenFingerprint.identify` and `OpenFingerprint.collectAutomation`.
+- `dist/index.iife.js`: script exposing `OpenFingerprint.collect` and `OpenFingerprint.collectAutomation`.
 - `dist/types/`: TypeScript declarations.
 
 The package exports resolve to the built ES module and declarations. Only
@@ -58,9 +57,8 @@ the package contents and publishes to npm. A version already on npm is skipped.
 ## Optional Rust API
 
 The independent [Rust API](../api/README.md) verifies SDK evidence and accepts
-optional domain/IP inputs. It is self-hosted and experimental. `collect()` does
-not call it; `identify()` uses its collection endpoint via your same-origin proxy.
-See the [project overview](../README.md) for backend checks and releases.
+optional domain, email and IP inputs. It is self-hosted and experimental.
+`collect()` never calls it: your backend sends the token. See the [project overview](../README.md) for backend checks and releases.
 
 ## Use
 
@@ -145,68 +143,24 @@ it is not an automation signal and the SDK adds no verdict. The probes never aff
 the identity hashes, make no network requests and return no pixel or sample data. The
 [API](../api/README.md#tampering-indicators) evaluates it.
 
-### Challenge-bound identification
+### Sending the token
 
+`collect()` makes no network request. Send `result.token` to your backend with the
+form, and have your backend call the API's `POST /v1/check` with it as `signals`.
+The token is client-supplied evidence: it is obfuscated, not signed, so a script can
+build one. The API therefore reports two things next to the verdict, and your
+backend should act on them:
 
-Your backend first obtains a challenge from `POST /v1/challenges`, binding it to
-a random, server-stored session/action token and your exact browser origin.
-It gives only the challenge to the browser:
+- `replayed`: this exact evidence was already checked within the API's replay window
+  (default one hour). It catches a captured token submitted again, even when it is
+  re-sealed. A forger who builds a fresh token each time is not caught.
+- `tokenAgeMs`: how long ago the browser sealed the token, by the browser's clock
+  (`collectedAt`). Browser clocks are often wrong, so use a generous limit and
+  expect negative values.
 
-```js
-import { identify } from '@openfingerprint/sdk';
-
-const { eventId } = await identify({
-	endpoint: '/fingerprint/collect',
-	challenge
-});
-```
-
-`identify()` collects identity and automation automatically, then makes one JSON
-POST to the same-origin endpoint. Your proxy forwards it to the API's
-`POST /v1/collect`, preserving Origin, User-Agent and Sec-CH-UA-Platform, but no
-cookies or Authorization. The browser receives only an opaque event ID, not a
-server verdict. With network data configured, the API also derives Tor/ASN/cloud
-range evidence from the request, not from browser IP claims. Your proxy must
-sanitize forwarding headers and the API must trust only its actual proxy CIDRs;
-raw IPs are not retained. No extra SDK option is needed. Send that ID with the business action; your backend consumes it
-using `POST /v1/events/consume` and the expected server-stored binding.
-
-The endpoint must be same-origin HTTPS (HTTP is allowed on localhost/loopback).
-Requests omit credentials and referrers, disable caching, refuse redirects and do
-not retry. Allow the endpoint in your CSP `connect-src 'self'`.
-`timeoutMs` controls collection as for `collect()`; `networkTimeoutMs` is a
-separate 1–30000 ms network budget, default 5000. A failed/ambiguous submission
-requires a fresh challenge; do not retry the same one.
-
-Only this flow additionally sends bounded raw user-agent (512 UTF-8 bytes) and
-platform (128 bytes) observations for server consistency checks. Unavailable or
-over-limit values become null. They are not included in identity hashes, returned
-to the browser or retained in the event. `identify()` does not use storage and
-does not expose an `onIdentity` callback.
-
-#### Optional WebRTC address check
-
-`identify({ ..., webrtcStun: 'stun:stun.example.org:3478' })` also gathers the
-browser's WebRTC candidate addresses and sends the public ones in
-`context.webrtc.addresses` (at most 8). The API compares them with the connection
-IP, discards them and reports only `webrtc_ip_mismatch` in `consistency`. A mismatch
-means the browser's UDP path leaves through a different address than its HTTP
-request, for example a proxy or VPN extension that does not cover WebRTC.
-
-It is off by default, and `collect()` never does it. Setting it makes the browser
-send a STUN request to the server you name, which sees the visitor's address:
-use a STUN server you run or trust, and tell your visitors. Only `stun:` and
-`stuns:` URLs without a path are accepted. Private and mDNS (`.local`)
-candidates are dropped in the browser before sending. Gathering stops after at
-most 2 seconds. If WebRTC is missing, blocked or yields no public address, the field is
-omitted or empty and the check reports unknown. CSP `connect-src` does not govern
-WebRTC; use your network policy if you restrict it.
-
-Challenge/event binding prevents replacement and reuse of evaluated results; it
-does not attest honest browser execution. Unknown results stay unknown. Missing,
-expired or already-used events must never authorize a protected action. See the
-[collection API](../api/README.md#challenge-bound-collection) for deployment,
-retention, Redis and integration requirements.
+Your backend can still compare the connection's IP address with what it expects,
+rate-limit by IP and fingerprint, and treat the same fingerprint across many new
+accounts as a signal. See the [API guide](../api/README.md) for the full response.
 
 ### Identity readiness and cooperative batching
 
@@ -256,9 +210,10 @@ wall-time guarantee or a recovery mechanism for missing identities.
 Version **0.6.0**, result **schema 1**:
 
 - `token`: one opaque string encoding the whole result. Send this to the backend
-  (and `identify()` does) instead of the fields below. It is obfuscated, not
-  encrypted: anyone with this package can decode it, and a determined attacker can
-  forge one.
+  instead of the fields below. It is obfuscated, not encrypted: anyone with this
+  package can decode it, and a determined attacker can forge one.
+- `collectedAt`: milliseconds since the Unix epoch, by the browser's clock, when the
+  token was sealed. The API turns it into `tokenAgeMs`.
 
 - `fingerprint`: full SHA-256 over selected component and environment-hint hashes.
 - `coreFingerprint`: separately domain-separated hash of selected rendering probes;

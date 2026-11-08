@@ -1,6 +1,6 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,7 +54,6 @@ function database(epoch, code = 'DK', type = 'DBIP-Country-Lite') {
 process.env.OPENFINGERPRINT_COUNTRY_VALIDATOR = fileURLToPath(new URL('./target/debug/openfingerprint-api', import.meta.url));
 const directory = await mkdtemp(join(tmpdir(), 'openfingerprint-country-'));
 const path = join(directory, 'country.mmdb');
-const key = randomBytes(32).toString('hex');
 const now = Math.floor(Date.now() / 1000);
 const bytes = database(now - 100);
 const digest = createHash('sha1').update(bytes).digest('hex');
@@ -75,11 +74,9 @@ const fetcher = (payload = gzipSync(bytes), html = page, headers = {}) => async 
 let child;
 async function start() {
     child = spawn(fileURLToPath(new URL('./target/debug/openfingerprint-api', import.meta.url)), [], {
-        env: { ...process.env, OPENFINGERPRINT_SITES: JSON.stringify([{ id: 'test', secret_key: key }]),
-            OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0',
+        env: { ...process.env, OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0',
             OPENFINGERPRINT_COUNTRY_DATA: path, OPENFINGERPRINT_COUNTRY_DATA_RELOAD_SECONDS: '1',
-            OPENFINGERPRINT_NETWORK_DATA: networkPath, OPENFINGERPRINT_TRUSTED_PROXIES: undefined,
-            OPENFINGERPRINT_DOMAIN_DATA: join(directory, 'missing.json'),
+            OPENFINGERPRINT_NETWORK_DATA: networkPath, OPENFINGERPRINT_DOMAIN_DATA: join(directory, 'missing.json'),
             OPENFINGERPRINT_REDIS_URL: 'redis://127.0.0.1:1/0', OPENFINGERPRINT_REDIS_PASSWORD: undefined,
             OPENFINGERPRINT_DNS: '127.0.0.1:9' },
         stdio: ['ignore', 'pipe', 'pipe']
@@ -109,7 +106,7 @@ async function replace(bytes) {
 }
 async function check(server, ip, extra = {}) {
     const response = await fetch(`${server.api}/v1/check`, { method: 'POST',
-        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', 'x-forwarded-for': '8.8.8.8' },
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': '8.8.8.8' },
         body: JSON.stringify({ ip, detail: true, ...extra }) });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');

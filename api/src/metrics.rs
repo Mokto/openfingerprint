@@ -48,7 +48,7 @@ impl Histogram {
 
 /// A unit of work inside `/v1/check`. The `domain_*` steps run concurrently, so the
 /// `domain` step lasts as long as the slowest of them, not their sum. `dns_lookup`,
-/// `redis_*`, `rdap_fetch` and `whois_fetch` are the network calls beneath them; a cached
+/// `redis_*`, `replay`, `rdap_fetch` and `whois_fetch` are the network calls beneath them; a cached
 /// registration performs no `rdap_fetch`/`whois_fetch`.
 #[derive(Clone, Copy)]
 pub enum Step {
@@ -63,10 +63,11 @@ pub enum Step {
     DnsLookup,
     RedisGet,
     RedisSet,
+    Replay,
     RdapFetch,
     WhoisFetch,
 }
-const STEPS: [&str; 13] = [
+const STEPS: [&str; 14] = [
     "automation",
     "signals",
     "domain",
@@ -78,20 +79,13 @@ const STEPS: [&str; 13] = [
     "dns_lookup",
     "redis_get",
     "redis_set",
+    "replay",
     "rdap_fetch",
     "whois_fetch",
 ];
 static STEP_TIMES: [Histogram; STEPS.len()] = [const { Histogram::new() }; STEPS.len()];
 
-pub const ROUTES: [&str; 7] = [
-    "check",
-    "verify",
-    "challenges",
-    "collect",
-    "consume",
-    "rpc",
-    "other",
-];
+pub const ROUTES: [&str; 4] = ["check", "verify", "rpc", "other"];
 const CLASSES: [&str; 4] = ["2xx", "4xx", "5xx", "other"];
 static REQUEST_TIMES: [[Histogram; CLASSES.len()]; ROUTES.len()] =
     [const { [const { Histogram::new() }; CLASSES.len()] }; ROUTES.len()];
@@ -100,11 +94,8 @@ pub fn route(path: &str) -> usize {
     match path {
         "/v1/check" => 0,
         "/v1/verify" => 1,
-        "/v1/challenges" => 2,
-        "/v1/collect" => 3,
-        "/v1/events/consume" => 4,
-        _ if crate::rpc::is_rpc(path) => 5,
-        _ => 6,
+        _ if crate::rpc::is_rpc(path) => 2,
+        _ => 3,
     }
 }
 pub fn observe_request(route: usize, status: u16, elapsed: Duration) {

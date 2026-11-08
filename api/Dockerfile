@@ -47,7 +47,7 @@ ENTRYPOINT ["/nodejs/bin/node", "/app/update-network-data.mjs"]
 
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 LABEL org.opencontainers.image.source="https://github.com/Mokto/openfingerprint" \
-      org.opencontainers.image.description="Browser verification, challenge-bound collection and open-data domain/network checks" \
+      org.opencontainers.image.description="Browser verification and open-data domain/network checks" \
       org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

@@ -33,6 +33,12 @@ message CheckResponse {
   // The domain is on a generic TLD that registrars sell at teaser prices (a first-year price of 3 USD
   // or less). Context for review, not a verdict on the site. Unset for a TLD without a known price.
   optional bool cheap_tld = 15;
+  // The same SDK token was checked before, within the replay window. Unset without a token or
+  // when Redis cannot say. Catches a captured token submitted again, not a forged one.
+  optional bool replayed = 16;
+  // Milliseconds from the browser's collection time to now, by the browser's clock: negative
+  // when that clock is ahead. Unset when the token has no collection time.
+  optional int64 token_age_ms = 17;
   // Lowercase ISO 3166-1 alpha-2 code.
   optional string country = 9;
   optional bool vpn = 10;
