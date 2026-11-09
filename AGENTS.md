@@ -55,6 +55,7 @@ OpenFingerprint is an experimental browser-signal SDK and a self-hosted check AP
 - Preserve existing fingerprint hashes and verification compatibility unless the task explicitly calls for a versioned migration. Keep diagnostic evidence outside identity hashes.
 - Preserve unknown results for missing, failed or stale evidence. Do not present browser observations as attestation or a negative detection as proof of trust.
 - Keep the API free of credentials and keep refusing any request with an `Origin` header: no browser may reach it. Keep protected decisions on the backend.
+- Pin GitHub Actions and reusable workflows by commit SHA with a version comment, set `persist-credentials: false` on checkouts, and keep publishing credentials out of pull-request jobs. Renovate proposes the bumps.
 
 ## Verification
 
@@ -65,6 +66,8 @@ Use the Node and pnpm versions declared in [package.json](package.json). Install
 | SDK or shared build/release wiring | `pnpm check`, `pnpm build`, `pnpm test` |
 | Rust API or API data logic | `pnpm api:check` |
 | Helm chart | `bash api/chart/test.sh` |
+| GitHub workflows | `zizmor --min-severity low .github` |
+| Rust dependencies or licenses | `cargo deny --manifest-path api/Cargo.toml check` |
 | Documentation or agent instructions only | Verify referenced paths, headings and commands; run `git diff --check`. |
 
 - For browser tests, install engines with `pnpm --dir sdk exec playwright-core install chromium firefox webkit`; use `--with-deps` when the host needs system libraries.

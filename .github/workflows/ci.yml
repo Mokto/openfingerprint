@@ -1,13 +1,22 @@
 name: CI
-on: [pull_request, workflow_dispatch]
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24'
@@ -18,14 +27,21 @@ jobs:
       - run: pnpm --dir sdk exec playwright-core install --with-deps chromium firefox webkit
       - run: pnpm test
   api:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24'
       - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      # Only main writes caches: PRs read the default branch's entries without evicting them.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: api
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo +stable fmt --manifest-path api/Cargo.toml --check
       - run: cargo +stable clippy --manifest-path api/Cargo.toml --locked --all-targets -- -D warnings
       - run: cargo +stable test --manifest-path api/Cargo.toml --locked
@@ -35,10 +51,12 @@ jobs:
       - run: node api/test-network.mjs
       - run: bash api/chart/test.sh
   images:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24'

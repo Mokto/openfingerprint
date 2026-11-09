@@ -1,0 +1,4 @@
+rules:
+  adhoc-packages:
+    # pnpm is installed at the version package.json pins; the workspace itself installs from the lockfile
+    disable: true

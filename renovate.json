@@ -1,6 +1,21 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigestsToSemver"],
+  "timezone": "Europe/Copenhagen",
+  "schedule": ["before 6am on monday"],
+  "minimumReleaseAge": "7 days",
+  "vulnerabilityAlerts": { "schedule": ["at any time"], "minimumReleaseAge": null },
+  "packageRules": [
+    {
+      "description": "Batch the routine bumps into one pull request",
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
+      "groupName": "non-major dependencies"
+    },
+    {
+      "description": "The two crates generate the API's wire format together; bump them by hand",
+      "matchPackageNames": ["/^connectrpc/", "/^buffa/"],
+      "groupName": "connectrpc and buffa",
+      "automerge": false
+    }
   ]
 }
