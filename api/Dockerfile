@@ -45,7 +45,7 @@ ENV OPENFINGERPRINT_API_BINARY=/usr/local/bin/openfingerprint-api
 USER 65532:65532
 ENTRYPOINT ["/nodejs/bin/node", "/app/update-network-data.mjs"]
 
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 LABEL org.opencontainers.image.source="https://github.com/Mokto/openfingerprint" \
       org.opencontainers.image.description="Browser verification and open-data domain/network checks" \
       org.opencontainers.image.licenses="MIT"
