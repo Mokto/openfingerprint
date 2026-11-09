@@ -553,7 +553,9 @@ is `{"number":15169,"organization":"Google LLC"}` (illustrative values).
 visitor is safe; it does not change `ip.status` or the country estimate.
 A `vpn` match is `{"scope":"listed_vpn_range"}`, a `datacenter` match is
 `{"scope":"listed_datacenter_range"}` and a `proxy` match is
-`{"protocols":["http","socks5"],"scope":"listed_open_proxy"}`.
+`{"protocols":["http","socks5"],"scope":"listed_open_proxy"}`. These objects are in the
+`detail: true` response; the default response and the RPC message carry `true` for a
+listed `vpn`, `tor`, `datacenter` or `proxy` and leave the key out otherwise.
 No match yields null, never false or a residential/human verdict. Facts for a source
 that is not loaded report `not_configured`. Residential proxies and VPNs missing from the
 lists are not detected, and datacenter ranges include VPN ranges as the upstream defines them.

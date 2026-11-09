@@ -409,7 +409,7 @@ fn bare(fact: &serde_json::Value) -> Option<serde_json::Value> {
 /// `fingerprint` (null unless fully verified); every other section contributes
 /// only the facts to act on. Unknown facts are omitted, so a missing key means
 /// unknown, and rejected inputs are listed under `invalid`.
-fn compact(response: &mut serde_json::Value) {
+pub(crate) fn compact(response: &mut serde_json::Value) {
     use serde_json::{Map, Value, json};
     let Some(map) = response.as_object_mut() else {
         return;
@@ -484,7 +484,15 @@ fn compact(response: &mut serde_json::Value) {
                 out.insert("country".into(), code.to_ascii_lowercase().into());
             }
             for key in ["vpn", "tor", "datacenter", "proxy"] {
-                put(&mut out, key, &ip["network"][key]);
+                match &ip["network"][key]["value"] {
+                    Value::Null => {}
+                    Value::Bool(listed) => {
+                        out.insert(key.into(), json!(listed));
+                    }
+                    _ => {
+                        out.insert(key.into(), json!(true));
+                    }
+                }
             }
         }
     }
@@ -983,7 +991,10 @@ pub(crate) mod tests {
                 "mxLookup":"resolved","registration":{"status":"found"}},
             "ip": {"status":"ok","countryCode":"DK","source":{},
                 "network":{"status":"ok","source":"x","tor":{"value":false,"status":"ok","source":null},
-                    "vpn":{"value":null,"status":"unknown"},"asn":{"value":{"number":1},"status":"ok"}}}
+                    "vpn":{"value":null,"status":"unknown"},
+                    "datacenter":{"value":{"scope":"listed_datacenter_range"},"status":"listed"},
+                    "proxy":{"value":{"protocols":["http"],"scope":"listed_open_proxy"},"status":"listed"},
+                    "asn":{"value":{"number":1},"status":"ok"}}}
         });
         compact(&mut response);
         assert_eq!(
@@ -991,7 +1002,7 @@ pub(crate) mod tests {
             serde_json::json!({
                 "fingerprint":"abc","replayed":true,"tokenAgeMs":1200,"automation":true,
                 "tampering":false,"disposable":true,"free":false,"cheapTld":true,"mx":true,
-                "country":"dk","tor":false
+                "country":"dk","tor":false,"datacenter":true,"proxy":true
             })
         );
         let mut domain = serde_json::json!({"domain":{"status":"ok","mxLookup":"no_domain"}});
