@@ -585,6 +585,9 @@ impl ApiError {
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if self.0.is_server_error() {
+            sentry::capture_message(self.1, sentry::Level::Error);
+        }
         (self.0, Json(serde_json::json!({"error":self.1}))).into_response()
     }
 }

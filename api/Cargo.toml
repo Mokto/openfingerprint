@@ -25,6 +25,7 @@ connectrpc = { version = "0.9", default-features = false, features = ["axum", "g
 connectrpc-reflection = "0.9"
 buffa = { version = "0.9", features = ["json"] }
 buffa-types = { version = "0.9", features = ["json"] }
+sentry = { version = "0.49.5", default-features = false, features = ["backtrace", "contexts", "panic", "ureq", "rustls-no-provider"] }
 
 [build-dependencies]
 connectrpc-build = "0.9"
