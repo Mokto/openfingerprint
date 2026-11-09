@@ -112,6 +112,8 @@ done
 minimal=$(helm template openfingerprint . --namespace openfingerprint)
 grep -q 'kind: NetworkPolicy' <<< "$minimal" && { echo "NetworkPolicies must be opt-in" >&2; exit 1; }
 grep -q 'value: "redis://openfingerprint-redis-ha-haproxy:6379/0"' <<< "$minimal" || { echo "The bundled Redis must be on by default" >&2; exit 1; }
+sentry=$(render --set sentry.dsn=https://k@sentry.example/1 --set sentry.environment=prod)
+grep -q 'name: SENTRY_DSN' <<< "$sentry" && grep -q 'value: "prod"' <<< "$sentry" || { echo "sentry values must reach the API" >&2; exit 1; }
 bundled=$(render --set redis-ha.auth=true --set redis-ha.existingSecret=cache-auth)
 ruby -ryaml -e '
 docs = YAML.load_stream(ARGF.read).compact
