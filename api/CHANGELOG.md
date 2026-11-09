@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/Mokto/openfingerprint/compare/api-v0.17.0...api-v0.18.0) (2026-11-09)
+
+
+### Features
+
+* **chart:** add sentry.dsn and sentry.environment values ([#95](https://github.com/Mokto/openfingerprint/issues/95)) ([413edc8](https://github.com/Mokto/openfingerprint/commit/413edc8d46b7cc2b252ca7de81adf1fa215a5fc5))
+
 ## [0.17.0](https://github.com/Mokto/openfingerprint/compare/api-v0.16.0...api-v0.17.0) (2026-11-09)
 
 
