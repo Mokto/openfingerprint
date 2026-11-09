@@ -60,40 +60,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24'
-      - run: |
-          docker buildx build --load --provenance=false --platform "linux/$ARCH" \
-            --label "org.opencontainers.image.version=$VERSION" \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            -f api/Dockerfile -t "$IMAGE:sha-$GITHUB_SHA-$ARCH" .
-          node api/test.mjs --image "$IMAGE:sha-$GITHUB_SHA-$ARCH"
-      - name: Build and smoke-test the data updater against the live public sources
-        run: |
-          docker buildx build --load --provenance=false --platform "linux/$ARCH" \
-            --label "org.opencontainers.image.version=$VERSION" \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --build-arg "API_IMAGE=$IMAGE:sha-$GITHUB_SHA-$ARCH" \
-            -f api/updater.Dockerfile -t "$UPDATER:sha-$GITHUB_SHA-$ARCH" .
-          out="$(mktemp -d)"
-          chmod 777 "$out"
-          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
-            -v "$out:/out" "$UPDATER:sha-$GITHUB_SHA-$ARCH" --output /out/domains.json
-          node -e 'const d = require(process.argv[1]); if (d.version !== 1 || d.sources.length < 7) process.exit(1)' "$out/domains.json"
-          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
-            --entrypoint /nodejs/bin/node -v "$out:/out" "$UPDATER:sha-$GITHUB_SHA-$ARCH" \
-            /app/update-country-data.mjs --output /out/country.mmdb
-          test -s "$out/country.mmdb"
-      - name: Build and smoke-test the network updater against licensed public sources
-        run: |
-          docker buildx build --load --provenance=false --platform "linux/$ARCH" \
-            --label "org.opencontainers.image.version=$VERSION" \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            -f api/Dockerfile --target network-updater -t "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH" .
-          out="$(mktemp -d)"
-          chmod 777 "$out"
-          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
-            -v "$out:/out" "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH" --output /out/network.json
-          docker run --rm --read-only --network none --cap-drop=ALL \
-            -v "$out:/out:ro" "$IMAGE:sha-$GITHUB_SHA-$ARCH" --validate-network-data /out/network.json
+      - name: Build and smoke-test the API, domain-updater and network-updater images
+        run: bash api/build-images.sh "$IMAGE:sha-$GITHUB_SHA-$ARCH" "$UPDATER:sha-$GITHUB_SHA-$ARCH" "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH"
       - env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
@@ -180,7 +148,7 @@ jobs:
           bash api/chart/test.sh
           yq -i '.image.digest = strenv(API_DIGEST) | .domainData.refresh.image.digest = strenv(UPDATER_DIGEST) | .networkData.refresh.image.digest = strenv(NETWORK_UPDATER_DIGEST)' api/chart/values.yaml
           helm package api/chart --version "$VERSION" --app-version "$VERSION"
-          rendered="$(helm template openfingerprint "openfingerprint-$VERSION.tgz" --set existingSecret=x --set networkData.existingClaim=network-test --set networkData.refresh.enabled=true --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]')"
+          rendered="$(helm template openfingerprint "openfingerprint-$VERSION.tgz" --set networkData.existingClaim=network-test --set networkData.refresh.enabled=true --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]')"
           grep -q "image: \"$IMAGE:$VERSION@$API_DIGEST\"" <<< "$rendered"
           grep -q "image: \"$UPDATER:$VERSION@$UPDATER_DIGEST\"" <<< "$rendered"
           grep -q "image: \"$NETWORK_UPDATER:$VERSION@$NETWORK_UPDATER_DIGEST\"" <<< "$rendered"
@@ -200,18 +168,26 @@ jobs:
     runs-on: ubuntu-24.04
     permissions: {}
     steps:
-      # DISPATCH_TARGET is the full workflow_dispatch URL of the deploying workflow, DISPATCH_TOKEN a token for it.
+      # Each DISPATCH_TARGET<suffix> is the full workflow_dispatch URL of a deploying workflow and
+      # DISPATCH_TOKEN<suffix> a token for it. The unsuffixed pair and the _K3S pair are independent.
       - name: Dispatch the deployment of this release's chart
         env:
           TARGET: ${{ secrets.DISPATCH_TARGET }}
           TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          TARGET_K3S: ${{ secrets.DISPATCH_TARGET_K3S }}
+          TOKEN_K3S: ${{ secrets.DISPATCH_TOKEN_K3S }}
           VERSION: ${{ needs.release.outputs.version }}
         run: |
-          if [ -z "$TARGET" ] || [ -z "$TOKEN" ]; then
-            echo "::notice::DISPATCH_TARGET or DISPATCH_TOKEN is not set; skipping the deployment dispatch"
-            exit 0
-          fi
-          curl -fsS --retry 3 -X POST "$TARGET" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d "{\"ref\":\"main\",\"inputs\":{\"version\":\"$VERSION\"}}"
+          failed=0
+          for pair in "$TARGET|$TOKEN" "$TARGET_K3S|$TOKEN_K3S"; do
+            target="${pair%%|*}" token="${pair#*|}"
+            if [ -z "$target" ] || [ -z "$token" ]; then
+              echo "::notice::A deployment dispatch target or token is not set; skipping it"
+              continue
+            fi
+            curl -fsS --retry 3 -X POST "$target" \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.github+json" \
+              -d "{\"ref\":\"main\",\"inputs\":{\"version\":\"$VERSION\"}}" || failed=1
+          done
+          exit "$failed"

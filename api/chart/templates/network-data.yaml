@@ -1,3 +1,6 @@
+{{- if and .Values.networkData.sidecar.enabled (or .Values.networkData.existingClaim .Values.networkData.refresh.enabled) }}
+{{- fail "networkData.sidecar replaces networkData.existingClaim and networkData.refresh: set one mode" }}
+{{- end }}
 {{- if and .Values.networkData.refresh.enabled (not .Values.networkData.existingClaim) }}
 {{- fail "networkData.refresh requires networkData.existingClaim" }}
 {{- end }}

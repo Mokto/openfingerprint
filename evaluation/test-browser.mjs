@@ -11,7 +11,7 @@ const sdk = await readFile(new URL('../sdk/dist/index.js', import.meta.url));
 const recorder = await readFile(new URL('./record.mjs', import.meta.url));
 const study = randomUUID(), device = randomUUID();
 const build = createHash('sha256').update(sdk).digest('hex');
-const plan = { format: 1, study, build, schema: 5, targets: [], rounds: [
+const plan = { format: 1, study, build, schema: 1, targets: [], rounds: [
     { id: 1, day: 0, condition: 'baseline' }, { id: 2, day: 0, condition: 'reload' }
 ] };
 const rows = [];

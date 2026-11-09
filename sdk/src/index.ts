@@ -1,8 +1,10 @@
+import { seal } from './token';
 import { environment } from './environment';
 import { identityExclusions } from './policy';
 
 import { collectAutomation, isSoftwareRenderer, observeAsyncAutomation, type AutomationEvidence } from './automation';
-export { collectAutomation, type AutomationEvidence };
+import { observeTampering, unobservedTampering, type TamperingEvidence } from './tampering';
+export { collectAutomation, type AutomationEvidence, type TamperingEvidence };
 
 const unsupported = Symbol();
 const unstable = Symbol();
@@ -466,7 +468,8 @@ export interface Options {
 }
 export interface Result {
 	automation: AutomationEvidence;
-	version: 5;
+	tampering: TamperingEvidence;
+	version: 1;
 	excluded: Name[];
 	fingerprint: string | null;
 	coreFingerprint: string | null;
@@ -474,9 +477,15 @@ export interface Result {
 	hints: Partial<Record<Name, string>>;
 	unavailable: Partial<Record<Name, Status>>;
 	storageId: string | null;
+	/** Milliseconds since the Unix epoch, by this browser's clock, when the token was sealed. */
+	collectedAt: number;
 	durationMs: number;
 	timings: Partial<Record<Name, { durationMs: number; blockingMs: number }>>;
+	/** Opaque string to send to the backend instead of the fields above. */
+	token: string;
 }
+
+const tokenOf = ({ token: _, ...rest }: Result) => seal(rest);
 
 function storageId(key: string | undefined): string | null {
 	if (!key) return null;
@@ -515,7 +524,8 @@ export async function collect(options: Options = {}): Promise<Result> {
 	};
 	const result: Result = {
 		automation: collectAutomation(),
-		version: 5,
+		tampering: unobservedTampering(),
+		version: 1,
 		excluded: identityExclusions(navigator.userAgent, navigator.vendor),
 		fingerprint: null,
 		coreFingerprint: null,
@@ -523,11 +533,14 @@ export async function collect(options: Options = {}): Promise<Result> {
 		hints: {},
 		unavailable: {},
 		storageId: null,
+		collectedAt: 0,
 		durationMs: 0,
-		timings: {}
+		timings: {},
+		token: ''
 	};
 	const excluded = new Set(result.excluded);
 	const asyncAutomation = observeAsyncAutomation(controller.signal);
+	const tampering = observeTampering(controller.signal);
 	try {
 		const run = async (name: Name) => {
 			let began = performance.now(),
@@ -572,6 +585,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		await run('gpu');
 		await audioJob;
 		Object.assign(result.automation, await asyncAutomation);
+		result.tampering = await tampering;
 		const entries = Object.entries(result.components)
 			.filter(([name]) => !result.excluded.includes(name as Name))
 			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
@@ -586,10 +600,10 @@ export async function collect(options: Options = {}): Promise<Result> {
 				.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 			[result.fingerprint, result.coreFingerprint] = await Promise.race([
 				Promise.all([
-					hash(`stealth-agent:5\0${JSON.stringify({ components: entries, hints })}`).catch(
+					hash(`stealth-agent:1\0${JSON.stringify({ components: entries, hints })}`).catch(
 						() => null
 					),
-					hash(`stealth-core:5\0${JSON.stringify(entries)}`).catch(() => null)
+					hash(`stealth-core:1\0${JSON.stringify(entries)}`).catch(() => null)
 				]),
 				timeout
 			]);
@@ -600,6 +614,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 			const snapshot: Result = {
 				...result,
 				automation: { ...result.automation },
+				tampering: { ...result.tampering },
 				excluded: [...result.excluded],
 				components: { ...result.components },
 				hints: { ...result.hints },
@@ -607,8 +622,10 @@ export async function collect(options: Options = {}): Promise<Result> {
 				timings: Object.fromEntries(
 					Object.entries(result.timings).map(([name, timing]) => [name, { ...timing }])
 				),
+				collectedAt: Date.now(),
 				durationMs: Math.round((performance.now() - start) * 10) / 10
 			};
+			snapshot.token = tokenOf(snapshot);
 			try {
 				void Promise.resolve(onIdentity(snapshot)).catch(() => {});
 			} catch {}
@@ -616,117 +633,12 @@ export async function collect(options: Options = {}): Promise<Result> {
 		// Diagnostic timeouts must not erase an already-computed identity.
 		for (const name of result.excluded) if (name !== 'audio') await run(name);
 		if (excluded.has('audio')) await run('audio');
+		result.collectedAt = Date.now();
 		result.durationMs = Math.round((performance.now() - start) * 10) / 10;
+		result.token = tokenOf(result);
 		return result;
 	} finally {
 		controller.abort();
 		clearTimeout(timer);
 	}
-}
-
-export interface IdentifyOptions {
-	endpoint: string;
-	challenge: string;
-	timeoutMs?: number;
-	networkTimeoutMs?: number;
-	webrtcStun?: string;
-}
-
-const privateAddress =
-	/^(?:10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|::1$|f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/i;
-
-function webrtcAddresses(stun: string, timeoutMs: number): Promise<string[] | null> {
-	return new Promise((resolve) => {
-		if (typeof RTCPeerConnection === 'undefined') return resolve(null);
-		const found = new Set<string>();
-		let connection: RTCPeerConnection;
-		try {
-			connection = new RTCPeerConnection({ iceServers: [{ urls: stun }] });
-		} catch {
-			return resolve(null);
-		}
-		const finish = () => {
-			clearTimeout(timer);
-			try {
-				connection.close();
-			} catch {}
-			resolve([...found].slice(0, 8));
-		};
-		const timer = setTimeout(finish, timeoutMs);
-		connection.onicecandidate = (event) => {
-			if (!event.candidate) return finish();
-			const match = /^candidate:\S+ \d+ \w+ \d+ (\S+) \d+ typ (?:srflx|host)\b/.exec(
-				event.candidate.candidate
-			);
-			const address = match?.[1];
-			if (address && !address.endsWith('.local') && !privateAddress.test(address))
-				found.add(address);
-		};
-		try {
-			connection.createDataChannel('');
-			connection
-				.createOffer()
-				.then((offer) => connection.setLocalDescription(offer))
-				.catch(finish);
-		} catch {
-			finish();
-		}
-	});
-}
-
-export async function identify(options: IdentifyOptions): Promise<{ eventId: string }> {
-	const { endpoint, challenge, timeoutMs, networkTimeoutMs = 5000, webrtcStun } = options;
-	if (typeof location === 'undefined') throw new Error('A browser context is required');
-	if (typeof endpoint !== 'string' || !endpoint.length)
-		throw new TypeError('endpoint is required');
-	const url = new URL(endpoint, location.href);
-	if (
-		url.origin !== location.origin || url.username || url.password || url.hash || url.search ||
-		(url.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
-	) throw new TypeError('endpoint must be same-origin HTTPS (HTTP loopback is allowed)');
-	if (typeof challenge !== 'string' || !/^[0-9a-f]{64}$/.test(challenge))
-		throw new TypeError('challenge must be a 64-character lowercase hexadecimal token');
-	if (!Number.isFinite(networkTimeoutMs) || networkTimeoutMs < 1 || networkTimeoutMs > 30000)
-		throw new RangeError('networkTimeoutMs must be between 1 and 30000');
-	if (
-		webrtcStun !== undefined &&
-		(typeof webrtcStun !== 'string' || !/^stuns?:[A-Za-z0-9.:[\]-]{1,200}$/.test(webrtcStun))
-	)
-		throw new TypeError('webrtcStun must be a stun: or stuns: URL without a path');
-	const text = (read: () => unknown, limit: number): string | null => {
-		try {
-			const value = read();
-			return typeof value === 'string' && value.length > 0 && new TextEncoder().encode(value).length <= limit
-				? value : null;
-		} catch {
-			return null;
-		}
-	};
-	const [signals, addresses] = await Promise.all([
-		collect({ timeoutMs }),
-		webrtcStun === undefined ? null : webrtcAddresses(webrtcStun, 2000)
-	]);
-	const context = {
-		userAgent: text(() => navigator.userAgent, 512),
-		platform: text(() => navigator.platform, 128),
-		...(addresses ? { webrtc: { addresses } } : {})
-	};
-	const response = await fetch(url, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ challenge, signals, context }),
-		credentials: 'omit',
-		cache: 'no-store',
-		redirect: 'error',
-		referrerPolicy: 'no-referrer',
-		signal: AbortSignal.timeout(networkTimeoutMs)
-	});
-	if (!response.ok) throw new Error('Identification failed; request a new challenge before retrying');
-	const result = await response.json();
-	if (
-		!result || typeof result !== 'object' || Array.isArray(result) ||
-		Object.keys(result).length !== 1 || typeof result.event_id !== 'string' ||
-		!/^[0-9a-f]{64}$/.test(result.event_id)
-	) throw new Error('Invalid identification response');
-	return { eventId: result.event_id };
 }

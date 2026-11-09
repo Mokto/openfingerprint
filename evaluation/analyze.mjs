@@ -17,7 +17,7 @@ function keys(value, expected) {
 }
 export function validatePlan(plan) {
     assert(keys(plan, ['format', 'study', 'build', 'schema', 'targets', 'rounds']), 'Invalid study plan fields');
-    assert(plan.format === 1 && plan.schema === 5 && typeof plan.study === 'string' && uuid.test(plan.study)
+    assert(plan.format === 1 && plan.schema === 1 && typeof plan.study === 'string' && uuid.test(plan.study)
         && typeof plan.build === 'string' && /^[0-9a-f]{64}$/.test(plan.build), 'Invalid study identity or SDK build');
     // ponytail: 500 targets bound the O(n²) distinct collision-pair set; use bitsets or external aggregation for larger cohorts.
     assert(Array.isArray(plan.targets) && plan.targets.length > 0 && plan.targets.length <= 500, 'A study requires 1–500 browser targets');

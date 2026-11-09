@@ -1,3 +1,38 @@
+{{- define "of.domainUpdaterPod" -}}
+metadata:
+  labels:
+    {{- include "of.updaterSelector" . | nindent 4 }}
+spec:
+  serviceAccountName: {{ include "of.dataName" . }}
+  automountServiceAccountToken: true
+  restartPolicy: Never
+  securityContext:
+    {{- include "of.podSecurity" . | nindent 4 }}
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: updater
+      image: {{ include "of.image" (dict "image" .Values.domainData.refresh.image "appVersion" .Chart.AppVersion) | quote }}
+      imagePullPolicy: {{ .Values.domainData.refresh.image.pullPolicy }}
+      args: ["--configmap", {{ include "of.dataName" . | quote }}]
+      env:
+        - name: NODE_EXTRA_CA_CERTS
+          value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      securityContext:
+        {{- include "of.containerSecurity" . | nindent 8 }}
+      resources:
+        {{- toYaml .Values.domainData.refresh.resources | nindent 8 }}
+  {{- with .Values.nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
 {{- if .Values.domainData.refresh.enabled }}
 apiVersion: v1
 kind: ServiceAccount
@@ -55,37 +90,20 @@ spec:
       backoffLimit: 2
       activeDeadlineSeconds: 600
       template:
-        metadata:
-          labels:
-            {{- include "of.updaterSelector" . | nindent 12 }}
-        spec:
-          serviceAccountName: {{ include "of.dataName" . }}
-          automountServiceAccountToken: true
-          restartPolicy: Never
-          securityContext:
-            {{- include "of.podSecurity" . | nindent 12 }}
-          {{- with .Values.imagePullSecrets }}
-          imagePullSecrets:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          containers:
-            - name: updater
-              image: {{ include "of.image" (dict "image" .Values.domainData.refresh.image "appVersion" .Chart.AppVersion) | quote }}
-              imagePullPolicy: {{ .Values.domainData.refresh.image.pullPolicy }}
-              args: ["--configmap", {{ include "of.dataName" . | quote }}]
-              env:
-                - name: NODE_EXTRA_CA_CERTS
-                  value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-              securityContext:
-                {{- include "of.containerSecurity" . | nindent 16 }}
-              resources:
-                {{- toYaml .Values.domainData.refresh.resources | nindent 16 }}
-          {{- with .Values.nodeSelector }}
-          nodeSelector:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.tolerations }}
-          tolerations:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+        {{- include "of.domainUpdaterPod" . | nindent 8 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "of.dataName" . }}-initial
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    {{- include "of.domainUpdaterPod" . | nindent 4 }}
 {{- end }}

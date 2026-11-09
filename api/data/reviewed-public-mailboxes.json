@@ -1,7 +1,7 @@
 {
   "license": "CC0-1.0",
-  "reviewed_at_unix": 1794031960,
-  "expires_at_unix": 1796623960,
+  "reviewed_at_unix": 1794081281,
+  "expires_at_unix": 1796673281,
   "entries": [
     {
       "domain": "gmail.com",
@@ -587,6 +587,1531 @@
       "domain": "bol.com.br",
       "evidence_url": "https://email.uol.com.br/",
       "evidence": "UOL offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to UOL mail (mx3.bol.com.br)."
+    },
+    {
+      "domain": "cox.net",
+      "evidence_url": "https://www.cox.com/residential/support/coxnet-email-transitioning-to-yahoo.html",
+      "evidence": "Cox offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mta6.am0.yahoodns.net."
+    },
+    {
+      "domain": "charter.net",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx0.charter.net."
+    },
+    {
+      "domain": "spectrum.net",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx0.charter.net."
+    },
+    {
+      "domain": "bresnan.net",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to chr-west.mx.a.cloudfilter.net."
+    },
+    {
+      "domain": "twc.com",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to pkvw-mx.msg.pkvw.co.charter.net."
+    },
+    {
+      "domain": "roadrunner.com",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to pkvw-mx.msg.pkvw.co.charter.net."
+    },
+    {
+      "domain": "adelphia.net",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to pkvw-mx.msg.pkvw.co.charter.net."
+    },
+    {
+      "domain": "brighthouse.com",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to chr-east.mx.a.cloudfilter.net."
+    },
+    {
+      "domain": "mi.rr.com",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to chr-west.mx.a.cloudfilter.net."
+    },
+    {
+      "domain": "nycap.rr.com",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to pkvw-mx.msg.pkvw.co.charter.net."
+    },
+    {
+      "domain": "tampabay.rr.com",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to pkvw-mx.msg.pkvw.co.charter.net."
+    },
+    {
+      "domain": "earthlink.net",
+      "evidence_url": "https://help.earthlink.net/portal/en/kb/articles/myearthlink-email-application",
+      "evidence": "EarthLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx04.earthlink-vadesecure.net."
+    },
+    {
+      "domain": "mindspring.com",
+      "evidence_url": "https://help.earthlink.net/portal/en/kb/articles/myearthlink-email-application",
+      "evidence": "EarthLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx03.earthlink-vadesecure.net."
+    },
+    {
+      "domain": "juno.com",
+      "evidence_url": "https://help.juno.com/support/webmail/wm-email-setup.html",
+      "evidence": "Juno offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.dca.untd.com."
+    },
+    {
+      "domain": "optimum.net",
+      "evidence_url": "https://faq.optimum.net/node/7327",
+      "evidence": "Optimum (Altice) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.altice.prod.cloud.openwave.ai."
+    },
+    {
+      "domain": "optonline.net",
+      "evidence_url": "https://faq.optimum.net/node/7327",
+      "evidence": "Optimum (Altice) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.altice.prod.cloud.openwave.ai."
+    },
+    {
+      "domain": "centurylink.net",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink/Lumen offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "windstream.net",
+      "evidence_url": "https://business.gokinetic.com/support/setting-up-my-windstream-email-account",
+      "evidence": "Windstream/Kinetic offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.windstream.net."
+    },
+    {
+      "domain": "rcn.com",
+      "evidence_url": "https://astound-prod.mindtouch.us/support/email-and-webmail-help/email-and-server-settings-for-all-markets",
+      "evidence": "Astound (RCN) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.rcn.com."
+    },
+    {
+      "domain": "shaw.ca",
+      "evidence_url": "https://www.rogers.com/support/internet/shaw-email-service-details-and-settings",
+      "evidence": "Shaw (Rogers) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to shw-central.mx.a.cloudfilter.net."
+    },
+    {
+      "domain": "rogers.com",
+      "evidence_url": "https://www.rogers.com/support/internet/rogers-member-centre-faq",
+      "evidence": "Rogers offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-rogers.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "bell.net",
+      "evidence_url": "https://support.bell.ca/internet/email/how-to-use-bell-mail",
+      "evidence": "Bell offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.bell.net."
+    },
+    {
+      "domain": "sympatico.ca",
+      "evidence_url": "https://support.bell.ca/internet/email/how-to-use-bell-mail",
+      "evidence": "Bell offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.sympatico.ca."
+    },
+    {
+      "domain": "bellaliant.net",
+      "evidence_url": "https://support.bell.ca/internet/email/how-to-use-bell-mail",
+      "evidence": "Bell Aliant offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.bellaliant.net."
+    },
+    {
+      "domain": "mymts.net",
+      "evidence_url": "https://support.bell.ca/internet/email/mts_internet_activating_and_using_mts_mail_account",
+      "evidence": "Bell MTS offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.mymts.net."
+    },
+    {
+      "domain": "videotron.ca",
+      "evidence_url": "https://www.videotron.com/en/support/internet/email/configure-email",
+      "evidence": "Videotron offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.videotron.ca."
+    },
+    {
+      "domain": "telus.net",
+      "evidence_url": "https://www.telus.com/en/support/article/set-up-telus-email-first-time",
+      "evidence": "Telus offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to aspmx.l.google.com."
+    },
+    {
+      "domain": "cogeco.ca",
+      "evidence_url": "https://help.cogeco.ca/article/how-do-i-set-up-my-cogeco-email-1548",
+      "evidence": "Cogeco offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.cogeco.ca."
+    },
+    {
+      "domain": "sasktel.net",
+      "evidence_url": "https://support.sasktel.com/app/answers/detail/a_id/15455/~/settings-for-sasktel.net-email",
+      "evidence": "SaskTel offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx1c11.megamailservers.com."
+    },
+    {
+      "domain": "pacbell.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-att.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "swbell.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-att.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "flash.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-att.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "ameritech.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-att.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "prodigy.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-att.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "snet.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-att.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "nvbell.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-att.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "wans.net",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-att.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "currently.com",
+      "evidence_url": "https://www.att.com/support/article/email-support/KM1010523/",
+      "evidence": "AT&T offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-att.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "btinternet.com",
+      "evidence_url": "https://www.bt.com/help/email/bt-email-products",
+      "evidence": "BT offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.bt.prod.cloud.openwave.ai."
+    },
+    {
+      "domain": "btopenworld.com",
+      "evidence_url": "https://www.bt.com/help/email/bt-email-products",
+      "evidence": "BT offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.bt.prod.cloud.openwave.ai."
+    },
+    {
+      "domain": "talk21.com",
+      "evidence_url": "https://www.bt.com/help/email/bt-email-products",
+      "evidence": "BT offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.bt.prod.cloud.openwave.ai."
+    },
+    {
+      "domain": "ntlworld.com",
+      "evidence_url": "https://www.virginmedia.com/help/broadband/manage-email-settings",
+      "evidence": "Virgin Media offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-10.eu-west.atmailcloud.com."
+    },
+    {
+      "domain": "blueyonder.co.uk",
+      "evidence_url": "https://www.virginmedia.com/help/broadband/manage-email-settings",
+      "evidence": "Virgin Media offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-10.eu-west.atmailcloud.com."
+    },
+    {
+      "domain": "virgin.net",
+      "evidence_url": "https://www.virginmedia.com/help/broadband/manage-email-settings",
+      "evidence": "Virgin Media offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-10.eu-west.atmailcloud.com."
+    },
+    {
+      "domain": "virginmedia.com",
+      "evidence_url": "https://www.virginmedia.com/help/broadband/manage-email-account",
+      "evidence": "Virgin Media offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-10.eu-west.atmailcloud.com."
+    },
+    {
+      "domain": "bigpond.com",
+      "evidence_url": "https://www.telstra.com.au/support/email/email-phone-tablet",
+      "evidence": "Telstra offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to extmail.bigpond.com."
+    },
+    {
+      "domain": "bigpond.net.au",
+      "evidence_url": "https://www.telstra.com.au/support/email/email-phone-tablet",
+      "evidence": "Telstra offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to extmail.bpbb.bigpond.com."
+    },
+    {
+      "domain": "optusnet.com.au",
+      "evidence_url": "https://www.optus.com.au/support/answer/we_re_checking_the_status_of_your_optusnet_email_service_20294",
+      "evidence": "Optus offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-10.au-east.atmailcloud.com."
+    },
+    {
+      "domain": "iinet.net.au",
+      "evidence_url": "https://help.iinet.net.au/iinet-email-messaging-company",
+      "evidence": "iiNet (TPG Telecom) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-10.au-east.atmailcloud.com."
+    },
+    {
+      "domain": "internode.on.net",
+      "evidence_url": "https://www.internode.on.net/nodesupport/faq/internode_email_messaging_company",
+      "evidence": "Internode (TPG Telecom) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-10.au-east.atmailcloud.com."
+    },
+    {
+      "domain": "tpg.com.au",
+      "evidence_url": "https://support.tpg.com.au/tpg-email-messaging-company",
+      "evidence": "TPG offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-10.au-east.atmailcloud.com."
+    },
+    {
+      "domain": "westnet.com.au",
+      "evidence_url": "https://help.westnet.com.au/westnet-email-messaging-company",
+      "evidence": "Westnet (TPG Telecom) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-10.au-east.atmailcloud.com."
+    },
+    {
+      "domain": "xtra.co.nz",
+      "evidence_url": "https://www.spark.co.nz/help/get-more/xtra/xtra-mail-setup/",
+      "evidence": "Spark NZ (Xtra Mail) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.xtra.co.nz."
+    },
+    {
+      "domain": "mweb.co.za",
+      "evidence_url": "https://help.mweb.co.za/articles/mail/about-mail/email-server-settings",
+      "evidence": "MWEB offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.spamexperts.com."
+    },
+    {
+      "domain": "ziggo.nl",
+      "evidence_url": "https://www.ziggo.nl/klantenservice/e-mail/serverinstellingen",
+      "evidence": "Ziggo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mxin5.ziggo.nl."
+    },
+    {
+      "domain": "quicknet.nl",
+      "evidence_url": "https://www.ziggo.nl/klantenservice/e-mail/serverinstellingen",
+      "evidence": "Ziggo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mxin5.ziggo.nl."
+    },
+    {
+      "domain": "home.nl",
+      "evidence_url": "https://www.ziggo.nl/klantenservice/e-mail/serverinstellingen",
+      "evidence": "Ziggo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mxin5.ziggo.nl."
+    },
+    {
+      "domain": "casema.nl",
+      "evidence_url": "https://www.ziggo.nl/klantenservice/e-mail/serverinstellingen",
+      "evidence": "Ziggo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mxin5.ziggo.nl."
+    },
+    {
+      "domain": "upcmail.nl",
+      "evidence_url": "https://www.ziggo.nl/klantenservice/e-mail/serverinstellingen",
+      "evidence": "Ziggo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mxin5.ziggo.nl."
+    },
+    {
+      "domain": "chello.nl",
+      "evidence_url": "https://www.ziggo.nl/klantenservice/e-mail/serverinstellingen",
+      "evidence": "Ziggo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mxin5.ziggo.nl."
+    },
+    {
+      "domain": "sfr.fr",
+      "evidence_url": "https://webmail.sfr.fr/",
+      "evidence": "SFR offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to smtp-in.sfr.fr."
+    },
+    {
+      "domain": "neuf.fr",
+      "evidence_url": "https://webmail.sfr.fr/",
+      "evidence": "SFR offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to smtp-in.sfr.fr."
+    },
+    {
+      "domain": "mail.de",
+      "evidence_url": "https://www.mail.de/",
+      "evidence": "mail.de offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.mail.de."
+    },
+    {
+      "domain": "sapo.pt",
+      "evidence_url": "https://ajuda.sapo.pt/mail-68658",
+      "evidence": "SAPO offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.sapo.pt."
+    },
+    {
+      "domain": "tiscali.it",
+      "evidence_url": "https://mail.tiscali.it/",
+      "evidence": "Tiscali offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to etb-2.mail.tiscali.it."
+    },
+    {
+      "domain": "posteo.net",
+      "evidence_url": "https://posteo.de/en/site/features",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "jubii.dk",
+      "evidence_url": "https://www.jubii.dk/",
+      "evidence": "Jubii offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.dka.mailcore.net."
+    },
+    {
+      "domain": "luukku.com",
+      "evidence_url": "https://www.luukku.com/",
+      "evidence": "Luukku offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.dka.mailcore.net."
+    },
+    {
+      "domain": "citromail.hu",
+      "evidence_url": "https://www.citromail.hu/faq",
+      "evidence": "Citromail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.dka.mailcore.net."
+    },
+    {
+      "domain": "mail.ee",
+      "evidence_url": "https://www.mail.ee/",
+      "evidence": "Mail.ee (Inbox.eu) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-in.inbox.eu."
+    },
+    {
+      "domain": "inbox.lv",
+      "evidence_url": "https://www.inbox.lv/",
+      "evidence": "Inbox.lv offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx2.inbox.lv."
+    },
+    {
+      "domain": "inbox.lt",
+      "evidence_url": "https://www.inbox.lt/",
+      "evidence": "Inbox.lt offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-in.inbox.eu."
+    },
+    {
+      "domain": "o2.pl",
+      "evidence_url": "https://poczta.o2.pl/",
+      "evidence": "WP Media (Poczta o2) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.tlen.pl."
+    },
+    {
+      "domain": "gazeta.pl",
+      "evidence_url": "https://poczta.gazeta.pl/",
+      "evidence": "Gazeta.pl (Agora) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.poczta.gazeta.pl."
+    },
+    {
+      "domain": "centrum.sk",
+      "evidence_url": "https://mail.centrum.sk/",
+      "evidence": "Centrum.sk offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to nm-sk-10mx1.eco-mx.cz."
+    },
+    {
+      "domain": "freemail.hu",
+      "evidence_url": "https://freemail.hu/",
+      "evidence": "Freemail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to fmx.freemail.hu."
+    },
+    {
+      "domain": "abv.bg",
+      "evidence_url": "https://passport.abv.bg/app/profiles/registration",
+      "evidence": "ABV (Net Info) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to pmx.abv.bg."
+    },
+    {
+      "domain": "mail.bg",
+      "evidence_url": "https://mail.bg/",
+      "evidence": "Mail.bg offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx2.mail.bg."
+    },
+    {
+      "domain": "dir.bg",
+      "evidence_url": "https://mail.dir.bg/",
+      "evidence": "Dir.bg offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to smtp-out1.dir.bg."
+    },
+    {
+      "domain": "rambler.ru",
+      "evidence_url": "https://help.rambler.ru/mail/mail-znakomstvo-s-servisom-ram/",
+      "evidence": "Rambler offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to inmx.rambler.ru."
+    },
+    {
+      "domain": "ukr.net",
+      "evidence_url": "https://mail.ukr.net/terms_uk.html",
+      "evidence": "UkrNet (FREEMAIL) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mxs.ukr.net."
+    },
+    {
+      "domain": "meta.ua",
+      "evidence_url": "https://webmail.meta.ua/",
+      "evidence": "Meta.ua offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mxs2.meta.ua."
+    },
+    {
+      "domain": "walla.co.il",
+      "evidence_url": "https://friends.walla.co.il/",
+      "evidence": "Walla offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx2.hc494-80.c3s2.iphmx.com."
+    },
+    {
+      "domain": "docomo.ne.jp",
+      "evidence_url": "https://www.docomo.ne.jp/service/docomo_mail/",
+      "evidence": "NTT Docomo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mfsmax.docomo.ne.jp."
+    },
+    {
+      "domain": "softbank.ne.jp",
+      "evidence_url": "https://www.softbank.jp/mobile/service/mail/",
+      "evidence": "SoftBank offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to msv.softbank.ne.jp."
+    },
+    {
+      "domain": "i.softbank.jp",
+      "evidence_url": "https://www.softbank.jp/mobile/service/mail/",
+      "evidence": "SoftBank offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to msv.softbank.jp."
+    },
+    {
+      "domain": "nifty.com",
+      "evidence_url": "https://www.nifty.com/mail/",
+      "evidence": "@nifty offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx2.nifty.com."
+    },
+    {
+      "domain": "so-net.ne.jp",
+      "evidence_url": "https://www.so-net.ne.jp/option/mail/basic",
+      "evidence": "So-net offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to ms-ext91.so-net.ne.jp."
+    },
+    {
+      "domain": "sina.com",
+      "evidence_url": "https://mail.sina.com.cn/",
+      "evidence": "Sina Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to freemx3.sinamail.sina.com.cn."
+    },
+    {
+      "domain": "sina.cn",
+      "evidence_url": "https://mail.sina.com.cn/",
+      "evidence": "Sina Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to freemx3.sinamail.sina.com.cn."
+    },
+    {
+      "domain": "sohu.com",
+      "evidence_url": "https://m.mail.sohu.com/app-web1/register.html",
+      "evidence": "Sohu Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to sohumx2.sohu.com."
+    },
+    {
+      "domain": "vip.qq.com",
+      "evidence_url": "https://vip.qq.com/freedom/freedom_vipmail.html",
+      "evidence": "Tencent QQ Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx3.qq.com."
+    },
+    {
+      "domain": "prodigy.net.mx",
+      "evidence_url": "https://downloads.telmex.com/formulario/prodigy_mail_nolinks.html",
+      "evidence": "Telmex Prodigy Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to publicms1.mail2world.com."
+    },
+    {
+      "domain": "talktalk.net",
+      "evidence_url": "https://help-centre.talktalk.co.uk/Email/Find_info_or_guidance_about_my_Email/Email_Transition_FAQs",
+      "evidence": "TalkTalk offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx002.tt.xion.oxcs.net."
+    },
+    {
+      "domain": "sky.com",
+      "evidence_url": "https://www.sky.com/help/articles/getting-started-with-sky-yahoo-mail",
+      "evidence": "Sky UK offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-eu.mail.am0.yahoodns.net."
+    },
+    {
+      "domain": "eircom.net",
+      "evidence_url": "https://www.eir.ie/helpandsupport/webmail/help",
+      "evidence": "eir offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to eir-08.mx.a.cloudfilter.net."
+    },
+    {
+      "domain": "orcon.net.nz",
+      "evidence_url": "https://help.2degrees.nz/Orcon/Tech_Support/Orcon_email_settings",
+      "evidence": "Orcon (2degrees) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to pmg-1.orcon.net.nz."
+    },
+    {
+      "domain": "suddenlink.net",
+      "evidence_url": "https://www.optimum.net/pages/transition.html",
+      "evidence": "Optimum (Suddenlink) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.altice.prod.cloud.openwave.ai."
+    },
+    {
+      "domain": "embarqmail.com",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "webmail.co.za",
+      "evidence_url": "https://www.webmail.co.za/",
+      "evidence": "webmail.co.za offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.dka.mailcore.net."
+    },
+    {
+      "domain": "bluewin.ch",
+      "evidence_url": "https://www.swisscom.ch/en/residential/help/e-mail/setup.html",
+      "evidence": "Swisscom offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.p.bluenet.ch."
+    },
+    {
+      "domain": "numericable.fr",
+      "evidence_url": "https://assistance.sfr.fr/nc/les-adresses-de-serveur-de-messagerie-numericable.html",
+      "evidence": "SFR offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to smtp-in.sfr.fr."
+    },
+    {
+      "domain": "noos.fr",
+      "evidence_url": "https://assistance.sfr.fr/nc/les-adresses-de-serveur-de-messagerie-numericable.html",
+      "evidence": "SFR offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to smtp-in.sfr.fr."
+    },
+    {
+      "domain": "online.de",
+      "evidence_url": "https://hilfe-center.1und1.de/kein-e-mail-versand-mit-abweichender-absenderadresse",
+      "evidence": "1&1 offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.emig.kundenserver.de."
+    },
+    {
+      "domain": "posteo.at",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "posteo.ch",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "telenet.be",
+      "evidence_url": "https://www2.telenet.be/residential/nl/klantenservice/internet/e-mail/e-mail-instellen.html",
+      "evidence": "Telenet offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx2.telenet-ops.be."
+    },
+    {
+      "domain": "skynet.be",
+      "evidence_url": "https://www.proximus.be/support/en/id_sfaqr_mail_global/personal/support/internet/e-mails-and-website/problems-with-your-mailbox/questions-about-proximus-mail.html",
+      "evidence": "Proximus offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.gtm-tc2.proximus.be."
+    },
+    {
+      "domain": "proximus.be",
+      "evidence_url": "https://www.proximus.be/support/en/id_sfaqr_mail_global/personal/support/internet/e-mails-and-website/problems-with-your-mailbox/questions-about-proximus-mail.html",
+      "evidence": "Proximus offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.gtm-tc2.proximus.be."
+    },
+    {
+      "domain": "kpnmail.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "planet.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "hetnet.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "kpnplanet.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "xs4all.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "virgilio.it",
+      "evidence_url": "https://aiuto.libero.it/articolo/mail/invio-ricezione-sincronizzazione-app-libero-mail",
+      "evidence": "Italiaonline (Libero/Virgilio) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to smtp-in.virgilio.it."
+    },
+    {
+      "domain": "inwind.it",
+      "evidence_url": "https://aiuto.libero.it/articolo/mail/invio-ricezione-sincronizzazione-app-libero-mail",
+      "evidence": "Italiaonline (Libero/Virgilio) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to smtp-in.inwind.it."
+    },
+    {
+      "domain": "iol.it",
+      "evidence_url": "https://aiuto.libero.it/articolo/mail/invio-ricezione-sincronizzazione-app-libero-mail",
+      "evidence": "Italiaonline (Libero/Virgilio) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to smtp-in.iol.it."
+    },
+    {
+      "domain": "blu.it",
+      "evidence_url": "https://aiuto.libero.it/articolo/mail/invio-ricezione-sincronizzazione-app-libero-mail",
+      "evidence": "Italiaonline (Libero/Virgilio) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to smtp-in.blu.it."
+    },
+    {
+      "domain": "giallo.it",
+      "evidence_url": "https://aiuto.libero.it/articolo/mail/invio-ricezione-sincronizzazione-app-libero-mail",
+      "evidence": "Italiaonline (Libero/Virgilio) offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to smtp-in.giallo.it."
+    },
+    {
+      "domain": "alice.it",
+      "evidence_url": "https://www.tim.it/assistenza/assistenza-tecnica/mail/guida",
+      "evidence": "TIM offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.tim.it."
+    },
+    {
+      "domain": "tin.it",
+      "evidence_url": "https://www.tim.it/assistenza/assistenza-tecnica/mail/guida",
+      "evidence": "TIM offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.tin.it."
+    },
+    {
+      "domain": "tim.it",
+      "evidence_url": "https://www.tim.it/assistenza/assistenza-tecnica/mail/guida",
+      "evidence": "TIM offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.tim.it."
+    },
+    {
+      "domain": "fastwebnet.it",
+      "evidence_url": "https://www.fastweb.it/myfastweb/assistenza/guide/configura-windows-mail",
+      "evidence": "Fastweb offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx1.fastwebnet.it."
+    },
+    {
+      "domain": "online.no",
+      "evidence_url": "https://www.telenor.no/kundeservice/e-post",
+      "evidence": "Telenor offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx1c60.megamailservers.eu."
+    },
+    {
+      "domain": "saunalahti.fi",
+      "evidence_url": "https://elisa.fi/asiakaspalvelu/palvelut/sahkopostin-asetukset",
+      "evidence": "Elisa offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx-tnl.mail.saunalahti.fi."
+    },
+    {
+      "domain": "poczta.fm",
+      "evidence_url": "https://konto-pocztowe.interia.pl/",
+      "evidence": "Interia offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.interia.pl."
+    },
+    {
+      "domain": "interia.eu",
+      "evidence_url": "https://konto-pocztowe.interia.pl/",
+      "evidence": "Interia offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.interia.pl."
+    },
+    {
+      "domain": "otenet.gr",
+      "evidence_url": "https://www.otenet.gr/",
+      "evidence": "Cosmote/OTEnet offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.otenet.gr."
+    },
+    {
+      "domain": "au.com",
+      "evidence_url": "https://www.au.com/mobile/service/email/",
+      "evidence": "KDDI au offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx23.au.com."
+    },
+    {
+      "domain": "ezweb.ne.jp",
+      "evidence_url": "https://www.au.com/mobile/service/email/",
+      "evidence": "KDDI au offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx13.au.com."
+    },
+    {
+      "domain": "139.com",
+      "evidence_url": "https://mail.10086.cn/",
+      "evidence": "China Mobile 139 Mail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx1.mail.139.com."
+    },
+    {
+      "domain": "cfl.rr.com",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to pkvw-mx.msg.pkvw.co.charter.net."
+    },
+    {
+      "domain": "indy.rr.com",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to chr-east.mx.a.cloudfilter.net."
+    },
+    {
+      "domain": "panhandle.rr.com",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to chr-east.mx.a.cloudfilter.net."
+    },
+    {
+      "domain": "twmi.rr.com",
+      "evidence_url": "https://www.spectrum.net/support/internet/email-settings",
+      "evidence": "Charter Spectrum offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to chr-east.mx.a.cloudfilter.net."
+    },
+    {
+      "domain": "posteo.com",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "posteo.us",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "posteo.ca",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "posteo.uk",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "posteo.ie",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "posteo.es",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "posteo.nl",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "posteo.be",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "posteo.lu",
+      "evidence_url": "https://posteo.de/en/site/faq",
+      "evidence": "Posteo offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx01.posteo.de."
+    },
+    {
+      "domain": "wxs.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "freeler.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "snelnet.net",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "on.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "onsbrabantnet.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "onsmail.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "onsnet.nu",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "onsneteindhoven.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "onsnetnuenen.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "telfort.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "tip.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "tiscali.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "tiscalimail.nl",
+      "evidence_url": "https://www.kpn.com/service/ugs/instellen-e-mail-laptop-pc",
+      "evidence": "KPN offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.kpnmail.nl."
+    },
+    {
+      "domain": "interia.com",
+      "evidence_url": "https://konto-pocztowe.interia.pl/",
+      "evidence": "Interia offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.interia.pl."
+    },
+    {
+      "domain": "intmail.pl",
+      "evidence_url": "https://konto-pocztowe.interia.pl/",
+      "evidence": "Interia offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.interia.pl."
+    },
+    {
+      "domain": "interiowy.pl",
+      "evidence_url": "https://konto-pocztowe.interia.pl/",
+      "evidence": "Interia offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.interia.pl."
+    },
+    {
+      "domain": "adresik.net",
+      "evidence_url": "https://konto-pocztowe.interia.pl/",
+      "evidence": "Interia offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.interia.pl."
+    },
+    {
+      "domain": "pisz.to",
+      "evidence_url": "https://konto-pocztowe.interia.pl/",
+      "evidence": "Interia offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.interia.pl."
+    },
+    {
+      "domain": "vip.interia.pl",
+      "evidence_url": "https://konto-pocztowe.interia.pl/",
+      "evidence": "Interia offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.interia.pl."
+    },
+    {
+      "domain": "pacz.to",
+      "evidence_url": "https://konto-pocztowe.interia.pl/",
+      "evidence": "Interia offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.interia.pl."
+    },
+    {
+      "domain": "ogarnij.se",
+      "evidence_url": "https://konto-pocztowe.interia.pl/",
+      "evidence": "Interia offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.interia.pl."
+    },
+    {
+      "domain": "centurytel.net",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "clds.net",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "coastalnow.net",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "cswnet.com",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "elpasotel.net",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "emadisonriver.com",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "emadisonriver.net",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "gallatinriver.net",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "grics.net",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "gulftel.com",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "mebtel.net",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "qwest.net",
+      "evidence_url": "https://www.centurylink.com/home/help/internet/email/how-to-set-up-your-email-server-settings-to-go-through-pop-and-smtp.html",
+      "evidence": "CenturyLink offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to mx.centurylink.net."
+    },
+    {
+      "domain": "123mail.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "150mail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "150ml.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "16mail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "2-mail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "4email.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "50mail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "airpost.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "aliencamel.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "allmail.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "cluemail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "elitemail.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "emailcorner.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "emailengine.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "emailengine.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "emailgroups.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "emailplus.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "emailuser.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "eml.cc",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "f-m.fm",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fast-email.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fast-mail.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastem.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastemailer.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastest.cc",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastimap.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.ca",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.cn",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.com.au",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.im",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.in",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.jp",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.mx",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.to",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.tw",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmailbox.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmessaging.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fea.st",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fmailbox.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fmgirl.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fmguy.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "foobox.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "foobox.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "ftml.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "hailmail.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "imap-mail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "imap.cc",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "imapmail.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "immerbox.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "immermail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "inoutbox.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "internet-e-mail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "internet-mail.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "internetemails.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "internetmailing.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "jetemail.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "justemail.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "letterboxes.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "lifetimeaddress.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mail-central.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mail-page.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailas.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailbolt.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailc.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailcan.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailforce.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailhaven.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailingaddress.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailite.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailmight.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailnew.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailsent.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailservice.ms",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailup.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailworks.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mailzone.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "ml1.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mm.st",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "myfastmail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "mymacmail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "nospammail.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "onepost.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "ownmail.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "penguinmail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "permanentmail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "petml.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "pobox.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "postinbox.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "postpro.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "proinbox.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "promessage.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "realemail.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "reallyfast.biz",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "reallyfast.info",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "rushpost.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "sent.as",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "sent.at",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "sent.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "siemprebox.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "siempremail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "speedpost.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "speedymail.org",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "ssl-mail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "swift-mail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "the-fastest.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "the-quickest.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "theinternetemail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "veribox.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "veryfast.biz",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "veryspeedy.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "warpmail.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "xsmail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "yepmail.net",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "your-mail.com",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to in1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.co.uk",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to eu1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.de",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to eu1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.es",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to eu1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.fr",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to eu1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.nl",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to eu1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.se",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to eu1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.uk",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to eu1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fmail.co.uk",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to eu1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "bestmail.us",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to us1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastemail.us",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to us1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "fastmail.us",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to us1-smtp.messagingengine.com."
+    },
+    {
+      "domain": "h-mail.us",
+      "evidence_url": "https://www.fastmail.help/hc/en-us/articles/6239365719055-What-domains-can-I-use-with-Fastmail",
+      "evidence": "Fastmail offers personal mailboxes to the public or its subscribers on this domain, so its addresses belong to unrelated people. At review, the domain's MX routed to us1-smtp.messagingengine.com."
     }
   ]
 }

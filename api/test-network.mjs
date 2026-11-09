@@ -1,19 +1,16 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { createHash, randomBytes } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tor, hosting, vpn, datacenter, proxy, update, validate } from './update-network-data.mjs';
+import { tor, hosting, vpn, datacenter, proxy, update, validate, loop, prune } from './update-network-data.mjs';
 
 const directory = await mkdtemp(resolve(tmpdir(), 'openfingerprint-network-check-'));
 const path = resolve(directory, 'network.json');
 const binary = fileURLToPath(new URL('./target/debug/openfingerprint-api', import.meta.url));
 const now = Math.floor(Date.now() / 1000);
-const secret = randomBytes(32).toString('hex');
-const sites = JSON.stringify([{ id: 'network_test', secret_key: secret }]);
 const meta = (id, license, lifetime) => ({ id, license, license_url: 'https://example.test/license', license_text: 'test license', attribution: 'test source', url: 'https://example.test/source', revision: 'a'.repeat(64), updated_at_unix: now - 60, fetched_at_unix: now, expires_at_unix: now + lifetime });
 const snapshot = {
     version: 1,
@@ -28,8 +25,8 @@ const proxyLicense = "MIT License\n\nCopyright (c) 2022 monosans\n\nPermission i
 const servers = [];
 async function start(extra = {}) {
     const env = { ...process.env };
-    for (const key of ['OPENFINGERPRINT_REDIS_URL', 'OPENFINGERPRINT_REDIS_PASSWORD', 'OPENFINGERPRINT_RDAP_BOOTSTRAP', 'OPENFINGERPRINT_COUNTRY_DATA', 'OPENFINGERPRINT_NETWORK_DATA', 'OPENFINGERPRINT_TRUSTED_PROXIES']) delete env[key];
-    const child = spawn(binary, [], { env: { ...env, OPENFINGERPRINT_REDIS_URL: 'redis://127.0.0.1:1/', OPENFINGERPRINT_SITES: sites, OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0', OPENFINGERPRINT_NETWORK_DATA: path, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
+    for (const key of ['OPENFINGERPRINT_REDIS_URL', 'OPENFINGERPRINT_REDIS_PASSWORD', 'OPENFINGERPRINT_RDAP_BOOTSTRAP', 'OPENFINGERPRINT_COUNTRY_DATA', 'OPENFINGERPRINT_NETWORK_DATA']) delete env[key];
+    const child = spawn(binary, [], { env: { ...env, OPENFINGERPRINT_REDIS_URL: 'redis://127.0.0.1:1/', OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0', OPENFINGERPRINT_NETWORK_DATA: path, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
     const server = { child, output: '' };
     servers.push(server);
     child.stderr.on('data', data => { server.output += data; });
@@ -45,12 +42,11 @@ async function start(extra = {}) {
     });
     return server;
 }
-const auth = { Authorization: `Bearer ${secret}` };
-async function post(server, route, body, headers = auth) {
+async function post(server, route, body, headers = {}) {
     return fetch(server.base + route, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json', ...headers }, signal: AbortSignal.timeout(5000) });
 }
 async function check(server, ip) {
-    const response = await post(server, '/v1/check', { ip });
+    const response = await post(server, '/v1/check', { ip, detail: true });
     assert.equal(response.status, 200);
     return (await response.json()).ip.network;
 }
@@ -138,6 +134,34 @@ try {
     await stopped;
     await update(path, { fetchBytes, now });
     assert.equal(await readFile(path, 'utf8'), previous);
+    {
+        const sidecar = resolve(directory, 'sidecar');
+        const manifest = resolve(sidecar, 'network.json');
+        await mkdir(sidecar);
+        const keep = 'b'.repeat(64);
+        const [old, recent, current] = ['a'.repeat(64), 'c'.repeat(64), keep].map(revision => resolve(sidecar, `asn-${revision}.mmdb`));
+        const other = resolve(sidecar, 'notes.txt');
+        for (const file of [old, recent, current, other]) await writeFile(file, 'x');
+        await writeFile(manifest, JSON.stringify({ version: 1, asn: { revision: keep } }));
+        const stale = new Date(Date.now() - 7200000);
+        for (const file of [old, current, other]) await utimes(file, stale, stale);
+        await prune(manifest);
+        assert.deepEqual((await readdir(sidecar)).sort(), ['network.json', `asn-${'b'.repeat(64)}.mmdb`, `asn-${'c'.repeat(64)}.mmdb`, 'notes.txt'].sort());
+        const stop = new AbortController();
+        const runs = [];
+        const looping = loop(manifest, stop.signal, { interval: 20, retry: 5, run: async () => { runs.push(Date.now()); if (runs.length === 2) stop.abort(); return { failures: [], sources: ['tor'] }; } });
+        await looping;
+        assert.equal(runs.length, 2);
+        const missing = resolve(sidecar, 'missing/network.json');
+        const gaps = [];
+        const retrying = new AbortController();
+        await loop(missing, retrying.signal, { interval: 100000, retry: 5, run: async () => { gaps.push(Date.now()); if (gaps.length === 3) retrying.abort(); throw new Error('offline'); } });
+        assert.equal(gaps.length, 3, 'A failed first refresh must retry quickly, not after the interval');
+        const afterFailure = new AbortController();
+        const failures = [];
+        await loop(manifest, afterFailure.signal, { interval: 5, retry: 100000, run: async () => { failures.push(Date.now()); if (failures.length === 3) afterFailure.abort(); throw new Error('offline'); } });
+        assert.equal(failures.length, 3, 'A failure with an existing manifest retries on the normal interval');
+    }
     const owner = spawn(process.execPath, ['--input-type=module', '-e', `import { update } from ${JSON.stringify(new URL('./update-network-data.mjs', import.meta.url).href)}; await update(${JSON.stringify(path)}, { fetchBytes: async () => { console.log('locked'); return new Promise(() => {}); } });`], { stdio: ['ignore','pipe','pipe'] });
     servers.push({ child: owner, output: '' });
     owner.stderr.resume();
@@ -155,7 +179,6 @@ try {
     console.log('Network updater validates observed exits, license changes, retained expiry, atomic preservation and exclusive updates.');
 
     phase = 'stateless facts and isolation';
-    for (const proxies of ['["0.0.0.0/0"]', '["10.0.0.1/8"]', 'not-json']) await assert.rejects(start({ OPENFINGERPRINT_TRUSTED_PROXIES: proxies }));
     const direct = await start();
     const matched = await check(direct, '8.8.8.8');
     assert.equal(matched.tor.value, true);
@@ -195,6 +218,10 @@ try {
     const text = await (await fetch('http://' + metrics + '/metrics')).text();
     assert(text.includes('openfingerprint_network_data_source_fresh{source="tor_exit"} 1'));
     assert(!text.includes('8.8.8.8'));
+    const series = name => Number(new RegExp(`^${name.replace(/[{}"]/g, '\\$&')} (\\d+)$`, 'm').exec(text)?.[1]);
+    assert(series('openfingerprint_http_request_duration_seconds_count{route="check",status="2xx"}') >= 1);
+    assert(series('openfingerprint_check_step_duration_seconds_count{step="ip_network"}') >= 1);
+    assert(series('openfingerprint_check_step_duration_seconds_count{step="ip_country"}') >= 1);
     console.log('IPv4/IPv6 facts, mapped addresses, invalid/non-global inputs, independent expiry and aggregate-only metrics passed.');
 
     if (process.env.OPENFINGERPRINT_TEST_NETWORK_DATA) {
@@ -222,58 +249,7 @@ try {
         }
         console.log('Unchanged-manifest ASN sidecar repair and automatic reload passed.');
     }
-    if (process.env.OPENFINGERPRINT_TEST_REDIS_URL) {
-        phase = 'request provenance and protected action';
-        const redis = { OPENFINGERPRINT_REDIS_URL: process.env.OPENFINGERPRINT_TEST_REDIS_URL };
-        const untrusted = await start(redis);
-        const trusted = await start({ ...redis, OPENFINGERPRINT_TRUSTED_PROXIES: '["127.0.0.1/32"]' });
-        const sha = v => createHash('sha256').update(v).digest('hex');
-        const components = { example: sha('network-check') };
-        const signals = { version: 5, fingerprint: sha('stealth-agent:5\0' + JSON.stringify({ components: Object.entries(components), hints: [] })), coreFingerprint: null, components, hints: {}, unavailable: {}, excluded: [], durationMs: 1, automation: { version: 1 } };
-        const origin = 'https://network-test.example';
-        async function collect(server, forwarded, delayMs = 0) {
-            const binding = randomBytes(32).toString('hex');
-            const issued = await post(server, '/v1/challenges', { binding, origin });
-            const { challenge } = await issued.json();
-            const input = { challenge, signals, context: {} };
-            const headers = { Origin: origin, ...(forwarded === null ? {} : { 'X-Forwarded-For': forwarded }) };
-            assert.equal((await post(server, '/v1/collect', { ...input, ip: '8.8.8.8' }, headers)).status, 400);
-            const response = await post(server, '/v1/collect', input, headers);
-            assert.equal(response.status, 200);
-            const publicResult = await response.json();
-            assert.deepEqual(Object.keys(publicResult), ['event_id']);
-            if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
-            const event = await post(server, '/v1/events/consume', { ...publicResult, binding });
-            assert.equal(event.status, 200);
-            assert.equal((await post(server, '/v1/events/consume', { ...publicResult, binding })).status, 409);
-            return event.json();
-        }
-        assert.equal((await collect(untrusted, '8.8.8.8')).ip.reason, 'non_global_ip');
-        const event = await collect(trusted, 'garbage, 9.9.9.9, 8.8.8.8');
-        assert.equal(event.ip.source, 'trusted_proxy');
-        assert.equal(event.ip.tor.value, true);
-        assert(!JSON.stringify(event).includes('8.8.8.8'));
-        assert.equal((await collect(trusted, '8.8.8.8:80')).ip.reason, 'invalid_forwarded_ip');
-        assert.equal((await collect(trusted, null)).ip.reason, 'forwarded_ip_unavailable');
-        for (const observationExpiry of [false, true]) {
-            const expiring = structuredClone(snapshot);
-            const time = Math.floor(Date.now() / 1000);
-            expiring.tor.metadata.updated_at_unix = time - 1;
-            expiring.tor.metadata.fetched_at_unix = time;
-            expiring.tor.metadata.expires_at_unix = time + (observationExpiry ? 3600 : 2);
-            expiring.tor.entries = expiring.tor.entries.map(({ ip }) => ({ ip, observed_at_unix: time - (observationExpiry ? 86400 - 2 : 60) }));
-            const expiringPath = resolve(directory, 'expiring.json');
-            await writeFile(expiringPath, JSON.stringify(expiring));
-            const expiringServer = await start({ ...redis, OPENFINGERPRINT_TRUSTED_PROXIES: '["127.0.0.1/32"]', OPENFINGERPRINT_NETWORK_DATA: expiringPath });
-            const expired = await collect(expiringServer, '8.8.8.8', 3100);
-            assert.equal(expired.ip.tor.value, null);
-            assert.equal(expired.ip.tor.status, 'stale_data');
-            assert.deepEqual(expired.ip.hosting.value.providers, ['Test Cloud']);
-            if (observationExpiry) assert(expired.ip.tor.source.expires_at_unix > Math.floor(Date.now() / 1000));
-        }
-        console.log('Collection ignores untrusted forwarding, walks trusted chains, rejects browser IP claims and returns single-use events without raw IP retention.');
-    } else console.log('Network collection integration skipped: set OPENFINGERPRINT_TEST_REDIS_URL.');
-    for (const { output } of servers) for (const value of [secret, '8.8.8.8', '2606:4700:4700::1111']) assert(!output.includes(value));
+    for (const { output } of servers) for (const value of ['8.8.8.8', '2606:4700:4700::1111']) assert(!output.includes(value));
 } catch (error) {
     console.error(`Network self-check failed during ${phase}: ${error.name}. Sensitive values suppressed.`);
     console.error(error.stack?.split('\n').find(line => line.trim().startsWith('at ')) ?? '');

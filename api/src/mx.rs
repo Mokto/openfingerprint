@@ -92,9 +92,12 @@ impl Resolver {
     }
 
     async fn lookup(&self, name: &str, qtype: u8, counts: &[AtomicU64; 4]) -> Lookup {
-        let result = tokio::time::timeout(TIMEOUT, self.query(name, qtype))
-            .await
-            .unwrap_or(Lookup::Unavailable);
+        let result = tokio::time::timeout(
+            TIMEOUT,
+            crate::metrics::timed(crate::metrics::Step::DnsLookup, self.query(name, qtype)),
+        )
+        .await
+        .unwrap_or(Lookup::Unavailable);
         counts[result.index()].fetch_add(1, Ordering::Relaxed);
         result
     }

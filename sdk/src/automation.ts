@@ -1,5 +1,5 @@
 export interface AutomationEvidence {
-	version: 2;
+	version: 3;
 	webdriver: boolean | null;
 	headlessUserAgent: boolean | null;
 	seleniumArtifacts: boolean | null;
@@ -78,23 +78,39 @@ function cdpDetected(): boolean {
 	return read;
 }
 
-function nativeFunctionTampering(): boolean {
-	const toString = Function.prototype.toString;
-	const native = (fn: unknown) =>
-		typeof fn === 'function' &&
-		!('prototype' in fn) &&
-		/\{\s*\[native code\]\s*\}\s*$/.test(toString.call(fn));
+// Error monitors such as Sentry replace Function.prototype.toString with a wrapper that still
+// answers correctly, so its own source is not evidence of anything. The natives that automation
+// tooling patches are read with the toString of a fresh same-origin frame instead, which page
+// scripts have not touched. Without a frame the answer is unknown, never a guess.
+function nativeFunctionTampering(): boolean | null {
 	try {
-		toString.call({});
+		Function.prototype.toString.call({});
 		return true;
 	} catch (error) {
 		if (!(error instanceof TypeError)) return true;
 	}
-	return ![
-		toString,
-		Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')?.get,
-		typeof Permissions === 'undefined' ? undefined : Permissions.prototype.query
-	].every((fn) => fn === undefined || native(fn));
+	const parent = document.body ?? document.documentElement;
+	if (!parent) return null;
+	const frame = document.createElement('iframe');
+	frame.style.display = 'none';
+	frame.setAttribute('aria-hidden', 'true');
+	frame.tabIndex = -1;
+	parent.appendChild(frame);
+	try {
+		const untouched = (frame.contentWindow as (Window & typeof globalThis) | null)?.Function.prototype
+			.toString;
+		if (typeof untouched !== 'function') return null;
+		const native = (fn: unknown) =>
+			typeof fn === 'function' &&
+			!('prototype' in fn) &&
+			/\{\s*\[native code\]\s*\}\s*$/.test(untouched.call(fn));
+		return ![
+			Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')?.get,
+			typeof Permissions === 'undefined' ? undefined : Permissions.prototype.query
+		].every((fn) => fn === undefined || native(fn));
+	} finally {
+		frame.remove();
+	}
 }
 
 function settle(work: () => Promise<boolean | null>, signal: AbortSignal): Promise<boolean | null> {
@@ -173,7 +189,7 @@ export function collectAutomation(): AutomationEvidence {
 	)
 		throw new Error('A browser context is required');
 	return {
-		version: 2,
+		version: 3,
 		webdriver: observe(() => navigator.webdriver),
 		headlessUserAgent: observe(() => {
 			const userAgent = navigator.userAgent;

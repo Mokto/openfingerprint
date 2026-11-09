@@ -1,7 +1,7 @@
 # OpenFingerprint Helm chart
 
 Runs the check API and keeps its open domain and country data fresh, with the Redis
-it requires for collection state and the RDAP cache: bundled `redis-ha` or your own.
+it requires for the RDAP cache and token replay markers: bundled `redis-ha` or your own.
 When enabled, NetworkPolicies permit DNS, Redis, registry HTTPS and public HTTPS
 for country downloads. Policies apply to the entire pod, not individual containers.
 Disable `countryData.enabled` to remove country refresh and its HTTPS allowance;
@@ -9,11 +9,12 @@ the RDAP HTTPS allowance remains.
 
 ```sh
 helm install openfingerprint oci://ghcr.io/mokto/charts/openfingerprint \
-  --namespace openfingerprint --create-namespace \
-  --set existingSecret=openfingerprint-config
+  --namespace openfingerprint --create-namespace
 ```
 
-NetworkPolicies are off by default. To isolate the API, enable them and name its callers:
+The API has no authentication, so keep its Service private and isolate it: with the
+default `networkPolicy.enabled=false`, any pod in the cluster can call it. Enable the
+policies and name its callers:
 
 ```sh
   --set networkPolicy.enabled=true \
@@ -28,21 +29,22 @@ API and updater image digests.
 | Resource | Purpose |
 | --- | --- |
 | Deployment and ClusterIP Service | The API on port 80 (container 8180) and, when enabled, metrics on 9180. No Ingress. |
-| NetworkPolicy `<release>-api` (with `networkPolicy.enabled`) | Ingress only from `networkPolicy.apiFrom` (and `metricsFrom` on the metrics port). Egress UDP and TCP 53 to `networkPolicy.dnsTo` (default: `kube-dns` pods in `kube-system`) for MX, SPF, DMARC and registry-host lookups (TCP only for answers too large for UDP), TCP 443 and 43 to `networkPolicy.rdapTo` (default: public IPv4/IPv6, no private, CGNAT, loopback or link-local ranges) for RDAP and WHOIS, public TCP 443 for country refresh when enabled, and Redis: the bundled HAProxy pods on 6379, or `networkPolicy.redisTo` on `redisPort`. |
-| CronJob `<release>-domain-data` | Every six hours, fetches the pinned public sources and publishes the snapshot to the `<release>-domain-data` ConfigMap. |
+| NetworkPolicy `<release>-api` (with `networkPolicy.enabled`) | Ingress only from `networkPolicy.apiFrom` (and `metricsFrom` on the metrics port). Egress UDP and TCP 53 to `networkPolicy.dnsTo` (default: `kube-dns` pods in `kube-system`) for MX, SPF, DMARC and registry-host lookups (TCP only for answers too large for UDP), TCP 443 and 43 to `networkPolicy.rdapTo` (default: public IPv4/IPv6, no private, CGNAT, loopback or link-local ranges) for RDAP and WHOIS, public TCP 443 for the country and network refresh sidecars when enabled, and Redis: the bundled HAProxy pods on 6379, or `networkPolicy.redisTo` on `redisPort`. |
+| CronJob `<release>-domain-data` and `post-install` Job `<release>-domain-data-initial` | Every six hours (and once after install), fetches the pinned public sources and publishes the snapshot to the `<release>-domain-data` ConfigMap. |
 | ServiceAccount, Role, RoleBinding | Only the updater gets a token: it may create ConfigMaps and get/patch its own. Kubernetes cannot scope `create` to a name. |
 | NetworkPolicy `<release>-domain-data` (with `networkPolicy.enabled`) | The updater accepts nothing; it may reach DNS, HTTPS and `kubeApiServerPorts`. |
 | Sidecar `country-updater` and shared `emptyDir` | Downloads DB-IP Country Lite immediately, then daily; retries hourly after failures. Uses the pinned `domainData.refresh.image`, with no credentials or Kubernetes token. |
+| Sidecar `network-updater` and per-pod `emptyDir` (with `networkData.sidecar.enabled`) | Runs the pinned `networkData.refresh.image` in `--loop` mode: refreshes network intelligence hourly, retries hourly after failures (every minute until the first manifest exists) and prunes old ASN files. The API mounts the 64Mi volume read-only. No credentials or Kubernetes token. |
 | ServiceMonitor, PrometheusRule | Optional domain/country dataset-health scraping and alerts. |
 | `redis-ha` (default; `redis-ha.enabled`) | The [DandyDeveloper redis-ha](https://github.com/DandyDeveloper/charts/tree/master/charts/redis-ha) chart: three Redis pods with Sentinel and two HAProxy pods, 64 MB, `noeviction`, no persistence or snapshots. Disable it to use your own Redis. |
 
 The API mounts the ConfigMap read-only and reloads it within about two minutes of a
 refresh (kubelet sync plus `domainData.reloadSeconds`). Until the first refresh
-creates it, domain facts are `unknown`; trigger one immediately after installing:
-
-```sh
-kubectl -n openfingerprint create job --from=cronjob/openfingerprint-domain-data initial
-```
+creates it, domain facts are `unknown`. A `post-install` hook Job
+`<release>-domain-data-initial` runs one refresh right after the first install, so
+the snapshot normally exists within a minute. If that Job fails, the install is marked
+failed; the cron job still fills the data in. Re-run it manually with
+`kubectl -n openfingerprint create job --from=cronjob/openfingerprint-domain-data manual`.
 
 A rejected snapshot leaves the last valid one serving until its sources expire.
 Set `domainData.refresh.enabled=false` to use only the data bundled in the image,
@@ -71,6 +73,12 @@ callers send only the domain. Its policy allows UDP 53 to `networkPolicy.dnsTo`.
 `unavailable`.
 `openfingerprint_mx_lookups_total{result}` counts outcomes.
 
+## Scheduling
+
+`onePodPerNode` (default `true`) adds required pod anti-affinity so each node runs at most one API
+pod. A rolling update surges one extra pod, so it needs at least `replicaCount + 1` schedulable
+nodes; on fewer, set `onePodPerNode=false`. A non-empty `affinity` replaces it.
+
 ## Redis
 
 The API does not start without `OPENFINGERPRINT_REDIS_URL`. By default the chart
@@ -86,27 +94,20 @@ To use a Redis or Valkey you already run, set `redis-ha.enabled=false`, add
 such as `redis://redis.shared.svc.cluster.local:6379/0`: with `ndots: 1`, a short
 name is first sent upstream as a public DNS query.
 
-Collection needs one authoritative Redis history ([retention and failover
-limits](../README.md#challenge-bound-collection)). `redis-ha` fails over through
-Sentinel, which is asynchronous: a failover can lose the latest writes and so bring
-back a challenge or event that was already used. If single use must survive Redis
-failures, use a Redis whose failover does not lose acknowledged writes. The bundled
-instance uses `noeviction`, a 64 MB limit and no persistence; a full Redis rejects new
-writes, which fails collection closed and turns RDAP caching off until keys expire.
+Replay markers need one Redis shared by every replica. `redis-ha` fails over through
+Sentinel, which is asynchronous: a failover can lose the latest writes, so a token
+checked just before it may not show as replayed afterwards. That only weakens the
+`replayed` signal; checks keep working. The bundled instance uses `noeviction`, a 64 MB
+limit and no persistence; a full Redis rejects new writes, which leaves `replayed` out
+and turns RDAP caching off until keys expire.
 
-## Collection state and proxy
+## Access
 
-Every replica must share the same Redis database and collection settings. If Redis
-is unreachable, collection returns 503 and stateless checks keep working.
+Keep the Service private and name your backend in `networkPolicy.apiFrom`; do not
+open ingress to the internet. If a gateway exposes the API, add your own
+authentication, quotas and request limits there. The API refuses any request that
+carries an `Origin` header, so browsers cannot call it directly.
 
-Keep the Service private. Your application's HTTPS same-origin proxy exposes
-only `POST /v1/collect`, preserving Origin, User-Agent and Sec-CH-UA-Platform and
-stripping Cookie/Authorization. Do not expose the private challenge/consume routes
-or forward browser credentials to them. Include that proxy in `apiFrom`; do not
-open ingress to the internet. Add edge quotas for both the proxy and your
-application's challenge-issuance route.
-
-See [collection integration and Redis retention](../README.md#challenge-bound-collection).
 `/health` checks process liveness, not Redis availability.
 
 ## RDAP registration dates
@@ -128,11 +129,32 @@ API waits at most 250 ms for Redis and falls back to the registry.
 
 ## Network intelligence
 
-Network data uses an external shared volume, not a ConfigMap. Provision a PVC
-writable by UID/group 65532 and readable by every API replica and the updater.
-For pods on different nodes this normally requires ReadWriteMany storage with
-coherent atomic rename and cross-node file locking. The network-data claim must
-be provisioned separately.
+Pick one mode. The first is the default recommendation: it needs no storage class.
+
+**Per-pod sidecar (recommended).** Each API pod runs a `network-updater` sidecar that writes
+a pod-local `emptyDir` the API reads. Pods start without waiting on any volume, so storage
+failures cannot stall rollouts, and nothing is shared between pods.
+
+```yaml
+networkData:
+  sidecar:
+    enabled: true
+```
+
+Network facts are unknown (`data_unavailable`, not a clean result) until the first refresh
+publishes, normally within a minute of pod start. Each pod fetches the sources itself, so
+sources see one request set per pod per hour, and the pod's NetworkPolicy allows public TCP 443
+(the same rule the country sidecar uses, rendered once). The sidecar's memory limit is
+per pod (`networkData.sidecar.resources`, default 512Mi). Setting `existingClaim` or
+`refresh.enabled` together with the sidecar fails rendering.
+
+**Shared volume with a CronJob.** Kept for clusters with ReadWriteMany storage, where one
+refresh serves every replica. Network data then uses an external shared volume, not a
+ConfigMap. Provision a PVC writable by UID/group 65532 and readable by every API replica and
+the updater. For pods on different nodes this normally requires ReadWriteMany storage with
+coherent atomic rename and cross-node file locking. The shared volume's availability becomes a
+start-up dependency of every new API pod. The network-data claim must be provisioned
+separately.
 
 ```yaml
 networkData:
@@ -141,14 +163,14 @@ networkData:
     enabled: true
 ```
 
-The API mounts it read-only at `/network-data` and checks `network.json` every
-60 seconds. The isolated, non-root network updater writes it hourly, gets no
+In both modes the API mounts the data read-only at `/network-data` and checks `network.json`
+every 60 seconds. The CronJob's isolated, non-root network updater writes it hourly, gets no
 Kubernetes token/RBAC or server credentials, and has only DNS/HTTPS egress.
 The manifest's ASN sidecars must remain in the same directory. Source failures
 keep their original expiry and produce a failed/degraded job, not clean results.
 No visitor IPs are sent to sources or stored on the volume.
 
-Published charts pin `networkData.refresh.image` to the matching
+Published charts pin `networkData.refresh.image` (used by both modes) to the matching
 `ghcr.io/mokto/openfingerprint-network-updater` digest. For source builds:
 
 ```sh
@@ -156,10 +178,7 @@ nice -n 15 docker build --target network-updater -f api/Dockerfile \
   -t openfingerprint-network-updater:local .
 ```
 
-Set `OPENFINGERPRINT_TRUSTED_PROXIES` in `existingSecret` to a JSON array of
-the real proxy CIDRs; the default is no proxy trust. The public collection proxy
-must sanitize/append forwarding headers correctly. Keep the API private and
-`apiFrom` restricted. See the [source, licensing and proxy guide](../README.md#local-network-intelligence).
+See the [source and licensing guide](../README.md#local-network-intelligence).
 
 An empty `network.json.lock` file is normal: the OS lock, not file existence,
 serializes writers and is released on process death. Never delete an active lock
@@ -180,10 +199,10 @@ With `prometheusRule.enabled`:
 | `OpenFingerprintCountryDataUnavailable` | No country database for 30 minutes, or the metric is missing. |
 | `OpenFingerprintCountryDataExpiring` | The database expires within `expiryWarningDays` or has expired. |
 | `OpenFingerprintCountryDataReloadFailing` | The API rejected a changed country file in the last hour. |
-| `OpenFingerprintRedisErrors` | Redis calls from the registration cache failed for 15 minutes. Registries then get every lookup, and collection challenges fail. |
+| `OpenFingerprintRedisErrors` | Redis calls from the registration cache failed for 15 minutes. Registries then get every lookup, and `replayed` is left out. |
 | `OpenFingerprintMxLookupsFailing` | Over half of MX lookups were unavailable in 30 minutes (with at least `minLookups`, default 20), for 15 minutes: usually the nameserver or UDP 53 egress. |
 | `OpenFingerprintRegistryLookupsFailing` | Over half of RDAP and WHOIS lookups were unavailable in 30 minutes (with at least `minLookups`), for 30 minutes: usually TCP 443/43 egress. |
-| `OpenFingerprintNetworkSourceUnavailable` | With a network claim configured, any of the three expected network sources is missing, stale or future-dated for 15 minutes. |
+| `OpenFingerprintNetworkSourceUnavailable` | With the sidecar or a network claim configured, any network source is missing, stale or future-dated for 15 minutes. |
 | `OpenFingerprintNetworkDataReloadFailing` | A network reload was rejected in the last hour; last-good sources keep their original expiry. |
 
 ## Upgrading from a single-file deployment

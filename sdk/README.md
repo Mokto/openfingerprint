@@ -4,10 +4,9 @@ A standalone, MIT-licensed TypeScript browser-signal collector with **zero runti
 
 The SDK has no telemetry, remote code, WASM or import-time collection. `collect()`
 hashes identity signals locally and always includes automation observations as
-unhashed booleans/nulls, with no network requests. `identify()` submits that evidence
-to your same-origin collection proxy and returns an opaque event ID. The optional
-self-hosted API provides stateless checks and a Redis-backed single-use event flow;
-it does not provide managed identification or visitor history.
+unhashed booleans/nulls, with no network requests. You send the resulting `token`
+with your form and your backend checks it. The optional self-hosted API provides
+stateless checks; it does not provide managed identification or visitor history.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Different
 devices can collide; settings, updates and missing signals can split repeat visits.
@@ -40,7 +39,7 @@ pnpm build
 Node 24+ and pnpm 12.11.2 are used for development. Build outputs:
 
 - `dist/index.js`: standalone ES module.
-- `dist/index.iife.js`: script exposing `OpenFingerprint.collect`, `OpenFingerprint.identify` and `OpenFingerprint.collectAutomation`.
+- `dist/index.iife.js`: script exposing `OpenFingerprint.collect` and `OpenFingerprint.collectAutomation`.
 - `dist/types/`: TypeScript declarations.
 
 The package exports resolve to the built ES module and declarations. Only
@@ -58,9 +57,8 @@ the package contents and publishes to npm. A version already on npm is skipped.
 ## Optional Rust API
 
 The independent [Rust API](../api/README.md) verifies SDK evidence and accepts
-optional domain/IP inputs. It is self-hosted and experimental. `collect()` does
-not call it; `identify()` uses its collection endpoint via your same-origin proxy.
-See the [project overview](../README.md) for backend checks and releases.
+optional domain, email and IP inputs. It is self-hosted and experimental.
+`collect()` never calls it: your backend sends the token. See the [project overview](../README.md) for backend checks and releases.
 
 ## Use
 
@@ -91,15 +89,15 @@ only that marker, not arbitrary localStorage data. Blocked storage returns `null
 ### Automatic automation observations
 
 Every `collect()` result and `onIdentity` snapshot includes `automation`.
-Forward `{ signals: result }` to a compatible `/v1/check` to receive the evaluation
-inside `response.signals.automation`. No opt-in or separate call is needed.
-Automation remains outside fingerprint hashes, so identity schema 5 is unchanged.
+Forward `{ signals: result.token }` to a compatible `/v1/check` to receive the evaluation
+in `response.automation` (`response.signals.automation` with `detail: true`). No opt-in or separate call is needed.
+Automation remains outside fingerprint hashes, so the identity schema is unchanged.
 Deploy the compatible API first: older versions reject this additional SDK field.
 `collectAutomation()` remains available as a synchronous browser-only helper.
 
 | Field | Observation |
 | --- | --- |
-| `version` | Always `2`, independent of fingerprint schema 5. |
+| `version` | Always `2`, independent of the fingerprint schema. |
 | `webdriver` | The boolean `navigator.webdriver` value. |
 | `headlessUserAgent` | A `HeadlessChrome/` token in the user-agent string. |
 | `seleniumArtifacts` | Presence of `__webdriver_evaluate`, `__selenium_evaluate`, `__webdriver_script_fn` or `__selenium_unwrapped` on `document`. |
@@ -112,7 +110,7 @@ Deploy the compatible API first: older versions reject this additional SDK field
 | `softwareRenderer` | Unmasked WebGL renderer matches SwiftShader, llvmpipe, softpipe, software rasterizer or Mesa offscreen. Taken from the GPU probe, so `collect()` only. |
 | `zeroDimensions` | Screen or outer-window width or height of 0. |
 | `cdpDetected` | A `stack` getter on an `Error` passed to `console.debug` was read, as CDP clients and open DevTools do. |
-| `nativeFunctionTampering` | `Function.prototype.toString`, the `navigator.webdriver` getter or `Permissions.prototype.query` is not native code, or `toString` accepts a non-function. |
+| `nativeFunctionTampering` | The `navigator.webdriver` getter or `Permissions.prototype.query` is not native code when read with the `toString` of a fresh same-origin frame, or `Function.prototype.toString` accepts a non-function. A `toString` wrapper that still answers correctly, as error monitors install, is not reported. Unknown when no frame can be created. |
 | `workerUserAgentMismatch` | A blob dedicated worker reports a different UA or platform than the main thread. `collect()` only. |
 
 The standalone `collectAutomation()` returns `null` for the three `collect()`-only
@@ -134,67 +132,35 @@ An observed false means only that this specific marker was absent. It does not
 prove human activity. The [API](../api/README.md#automation-indicators) evaluates
 the observations with versioned rules and preserves unknowns.
 
-### Challenge-bound identification
+### Tampering observations
 
-Your backend first obtains a challenge from `POST /v1/challenges`, binding it to
-a random, server-stored session/action token and your exact browser origin.
-It gives only the challenge to the browser:
+`collect()` also returns `tampering`: `{ version: 1, canvasReadbackAltered,
+audioRenderAltered }`, each `boolean | null`. It draws a fixed 16x16 canvas of flat
+colors and renders a constant 0.5 audio signal offline, and flags a result that does
+not read back exactly. Clean browsers read both exactly, while noise injection and
+resist-fingerprinting modes do not. This is common among privacy-conscious people:
+it is not an automation signal and the SDK adds no verdict. The probes never affect
+the identity hashes, make no network requests and return no pixel or sample data. The
+[API](../api/README.md#tampering-indicators) evaluates it.
 
-```js
-import { identify } from '@openfingerprint/sdk';
+### Sending the token
 
-const { eventId } = await identify({
-	endpoint: '/fingerprint/collect',
-	challenge
-});
-```
+`collect()` makes no network request. Send `result.token` to your backend with the
+form, and have your backend call the API's `POST /v1/check` with it as `signals`.
+The token is client-supplied evidence: it is obfuscated, not signed, so a script can
+build one. The API therefore reports two things next to the verdict, and your
+backend should act on them:
 
-`identify()` collects identity and automation automatically, then makes one JSON
-POST to the same-origin endpoint. Your proxy forwards it to the API's
-`POST /v1/collect`, preserving Origin, User-Agent and Sec-CH-UA-Platform, but no
-cookies or Authorization. The browser receives only an opaque event ID, not a
-server verdict. With network data configured, the API also derives Tor/ASN/cloud
-range evidence from the request, not from browser IP claims. Your proxy must
-sanitize forwarding headers and the API must trust only its actual proxy CIDRs;
-raw IPs are not retained. No extra SDK option is needed. Send that ID with the business action; your backend consumes it
-using `POST /v1/events/consume` and the expected server-stored binding.
+- `replayed`: this exact evidence was already checked within the API's replay window
+  (default one hour). It catches a captured token submitted again, even when it is
+  re-sealed. A forger who builds a fresh token each time is not caught.
+- `tokenAgeMs`: how long ago the browser sealed the token, by the browser's clock
+  (`collectedAt`). Browser clocks are often wrong, so use a generous limit and
+  expect negative values.
 
-The endpoint must be same-origin HTTPS (HTTP is allowed on localhost/loopback).
-Requests omit credentials and referrers, disable caching, refuse redirects and do
-not retry. Allow the endpoint in your CSP `connect-src 'self'`.
-`timeoutMs` controls collection as for `collect()`; `networkTimeoutMs` is a
-separate 1–30000 ms network budget, default 5000. A failed/ambiguous submission
-requires a fresh challenge; do not retry the same one.
-
-Only this flow additionally sends bounded raw user-agent (512 UTF-8 bytes) and
-platform (128 bytes) observations for server consistency checks. Unavailable or
-over-limit values become null. They are not included in identity hashes, returned
-to the browser or retained in the event. `identify()` does not use storage and
-does not expose an `onIdentity` callback.
-
-#### Optional WebRTC address check
-
-`identify({ ..., webrtcStun: 'stun:stun.example.org:3478' })` also gathers the
-browser's WebRTC candidate addresses and sends the public ones in
-`context.webrtc.addresses` (at most 8). The API compares them with the connection
-IP, discards them and reports only `webrtc_ip_mismatch` in `consistency`. A mismatch
-means the browser's UDP path leaves through a different address than its HTTP
-request, for example a proxy or VPN extension that does not cover WebRTC.
-
-It is off by default, and `collect()` never does it. Setting it makes the browser
-send a STUN request to the server you name, which sees the visitor's address:
-use a STUN server you run or trust, and tell your visitors. Only `stun:` and
-`stuns:` URLs without a path are accepted. Private and mDNS (`.local`)
-candidates are dropped in the browser before sending. Gathering stops after at
-most 2 seconds. If WebRTC is missing, blocked or yields no public address, the field is
-omitted or empty and the check reports unknown. CSP `connect-src` does not govern
-WebRTC; use your network policy if you restrict it.
-
-Challenge/event binding prevents replacement and reuse of evaluated results; it
-does not attest honest browser execution. Unknown results stay unknown. Missing,
-expired or already-used events must never authorize a protected action. See the
-[collection API](../api/README.md#challenge-bound-collection) for deployment,
-retention, Redis and integration requirements.
+Your backend can still compare the connection's IP address with what it expects,
+rate-limit by IP and fingerprint, and treat the same fingerprint across many new
+accounts as a signal. See the [API guide](../api/README.md) for the full response.
 
 ### Identity readiness and cooperative batching
 
@@ -241,7 +207,13 @@ wall-time guarantee or a recovery mechanism for missing identities.
 
 ## Result and schema
 
-Version **0.6.0**, result **schema 5**:
+Version **0.6.0**, result **schema 1**:
+
+- `token`: one opaque string encoding the whole result. Send this to the backend
+  instead of the fields below. It is obfuscated, not encrypted: anyone with this
+  package can decode it, and a determined attacker can forge one.
+- `collectedAt`: milliseconds since the Unix epoch, by the browser's clock, when the
+  token was sealed. The API turns it into `tokenAgeMs`.
 
 - `fingerprint`: full SHA-256 over selected component and environment-hint hashes.
 - `coreFingerprint`: separately domain-separated hash of selected rendering probes;
@@ -279,18 +251,10 @@ fallback metrics remain separate. Temporary frames are removed on failure/abort.
 
 ### Compatibility
 
-Hash domains (`stealth-agent:5`, `stealth-core:5`) and the optional marker
+Hash domains (`stealth-agent:1`, `stealth-core:1`) and the optional marker
 namespace (`stealth:`) intentionally retain their original `stealth` spelling.
 Renaming the project must not silently change existing IDs or markers. Compare IDs
 only within the same schema; any change to identity inputs requires versioning.
-
-Schema 5 (version 0.6.0) changes only the locale hint: it uses the primary
-`navigator.language`, time-zone name and resolved `Intl` locale. It no longer
-includes the full `navigator.languages` list, which Chrome incognito and Safari
-reduce to one entry, or the current UTC offset, which changes at daylight-saving
-transitions. Probes, canvas/font/GPU/audio inputs and the core ID inputs are
-unchanged, but every full and core ID differs from schema 4 because the hash domain
-changes. Schema-4 history does not match schema-5 IDs.
 
 ## Tests and reference comparison
 

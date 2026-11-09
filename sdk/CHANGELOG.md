@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.10.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.9.0...sdk-v0.10.0) (2026-11-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* the API has no authentication and ignores OPENFINGERPRINT_SITES (with a startup warning) and any Authorization header. The routes /v1/challenges, /v1/collect and /v1/events/consume, OPENFINGERPRINT_TRUSTED_PROXIES, OPENFINGERPRINT_COLLECTION_TTL_SECONDS and OPENFINGERPRINT_COLLECTION_CAPACITY are gone, and metrics drop the challenges, collect and consume route labels.
+
+### Features
+
+* remove authentication and challenge-bound collection, add replay and token age signals ([#76](https://github.com/Mokto/openfingerprint/issues/76)) ([f7ce6a6](https://github.com/Mokto/openfingerprint/commit/f7ce6a63a231a7bebb7a17d562b2c0d13661185d))
+
+## [0.9.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.8.0...sdk-v0.9.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** compact flat /v1/check response, short IDs and opaque SDK token ([#66](https://github.com/Mokto/openfingerprint/issues/66))
+
+### Features
+
+* **api:** compact flat /v1/check response, short IDs and opaque SDK token ([#66](https://github.com/Mokto/openfingerprint/issues/66)) ([13e522f](https://github.com/Mokto/openfingerprint/commit/13e522fab1c5e9f4193eccc9cb9bebedda0c39b1))
+
+## [0.8.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.7.0...sdk-v0.8.0) (2026-11-07)
+
+
+### Features
+
+* add canvas and audio tampering indicators, separate from automation ([#54](https://github.com/Mokto/openfingerprint/issues/54)) ([a22c26f](https://github.com/Mokto/openfingerprint/commit/a22c26f10bd267e821beaaecdbf21316eb137ad2))
+
 ## [0.7.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.6.1...sdk-v0.7.0) (2026-11-07)
 
 

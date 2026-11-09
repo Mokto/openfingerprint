@@ -1,5 +1,105 @@
 # Changelog
 
+## [0.16.0](https://github.com/Mokto/openfingerprint/compare/api-v0.15.0...api-v0.16.0) (2026-11-09)
+
+
+### Features
+
+* **api:** count automation verdicts and positive probes ([#81](https://github.com/Mokto/openfingerprint/issues/81)) ([19f6477](https://github.com/Mokto/openfingerprint/commit/19f64774fa56f487f395c8b0ba0a5db90c7c1cfd))
+* **api:** spread API pods one per node in the Helm chart ([#84](https://github.com/Mokto/openfingerprint/issues/84)) ([8ddeb29](https://github.com/Mokto/openfingerprint/commit/8ddeb29752374c6e691e2e3baa1a9de627199b91))
+* **chart:** fill domain data right after install with a post-install hook Job ([#83](https://github.com/Mokto/openfingerprint/issues/83)) ([dd5299e](https://github.com/Mokto/openfingerprint/commit/dd5299ea6be72d2727fd805698b91cbe65d8abf7))
+
+## [0.15.0](https://github.com/Mokto/openfingerprint/compare/api-v0.14.0...api-v0.15.0) (2026-11-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** POST /v1/verify answers 404. Send result.token as signals to POST /v1/check and read fingerprint. The metrics route label verify is gone.
+
+### Features
+
+* **api:** remove POST /v1/verify ([#78](https://github.com/Mokto/openfingerprint/issues/78)) ([b146bfc](https://github.com/Mokto/openfingerprint/commit/b146bfcee895188ff024c7965c5d2c12ae409637))
+
+
+### Bug Fixes
+
+* **api:** return listed vpn, datacenter and proxy as booleans in the compact response ([#80](https://github.com/Mokto/openfingerprint/issues/80)) ([fdfb20e](https://github.com/Mokto/openfingerprint/commit/fdfb20efd8e0a5b32c657da02a5d18597b6a49b4))
+
+## [0.14.0](https://github.com/Mokto/openfingerprint/compare/api-v0.13.0...api-v0.14.0) (2026-11-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* the API has no authentication and ignores OPENFINGERPRINT_SITES (with a startup warning) and any Authorization header. The routes /v1/challenges, /v1/collect and /v1/events/consume, OPENFINGERPRINT_TRUSTED_PROXIES, OPENFINGERPRINT_COLLECTION_TTL_SECONDS and OPENFINGERPRINT_COLLECTION_CAPACITY are gone, and metrics drop the challenges, collect and consume route labels.
+
+### Features
+
+* remove authentication and challenge-bound collection, add replay and token age signals ([#76](https://github.com/Mokto/openfingerprint/issues/76)) ([f7ce6a6](https://github.com/Mokto/openfingerprint/commit/f7ce6a63a231a7bebb7a17d562b2c0d13661185d))
+
+## [0.13.0](https://github.com/Mokto/openfingerprint/compare/api-v0.12.0...api-v0.13.0) (2026-11-08)
+
+
+### Features
+
+* **api:** report cheapTld for generic TLDs that registrars sell at teaser prices ([#74](https://github.com/Mokto/openfingerprint/issues/74)) ([711e847](https://github.com/Mokto/openfingerprint/commit/711e8470ec7e421b86d7219f5e72f34644d319a2))
+
+## [0.12.0](https://github.com/Mokto/openfingerprint/compare/api-v0.11.0...api-v0.12.0) (2026-11-08)
+
+
+### Features
+
+* **api:** infer disposable domains from MX infrastructure that serves throwaway domains ([#69](https://github.com/Mokto/openfingerprint/issues/69)) ([9bf3f05](https://github.com/Mokto/openfingerprint/commit/9bf3f05f59fdee9829c60b4018d4e361639c721d))
+* **api:** recognise Mail2World's consumer mail servers as public mailboxes ([#70](https://github.com/Mokto/openfingerprint/issues/70)) ([8c7589c](https://github.com/Mokto/openfingerprint/commit/8c7589cc791ef7e22a3aa91560d4ce9c61434b68))
+* **api:** report the SPF policy from the record's all term ([#71](https://github.com/Mokto/openfingerprint/issues/71)) ([6d65005](https://github.com/Mokto/openfingerprint/commit/6d65005a3895a4e8b057f871d2b6758a1d197df2))
+* **api:** serve /v1/check over Connect, gRPC and gRPC-Web with reflection ([#73](https://github.com/Mokto/openfingerprint/issues/73)) ([d764b44](https://github.com/Mokto/openfingerprint/commit/d764b446c6df4775feb419b1833d302f334241ef))
+
+## [0.11.0](https://github.com/Mokto/openfingerprint/compare/api-v0.10.1...api-v0.11.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** compact flat /v1/check response, short IDs and opaque SDK token ([#66](https://github.com/Mokto/openfingerprint/issues/66))
+
+### Features
+
+* **api:** compact flat /v1/check response, short IDs and opaque SDK token ([#66](https://github.com/Mokto/openfingerprint/issues/66)) ([13e522f](https://github.com/Mokto/openfingerprint/commit/13e522fab1c5e9f4193eccc9cb9bebedda0c39b1))
+* **api:** serve compact /v1/check verdicts over gRPC ([#68](https://github.com/Mokto/openfingerprint/issues/68)) ([226a288](https://github.com/Mokto/openfingerprint/commit/226a288cbbafe0f4516363a0c255182377217bc4))
+* **data:** recognise 305 more personal mailbox domains and email-alias custom domains ([#67](https://github.com/Mokto/openfingerprint/issues/67)) ([22af74b](https://github.com/Mokto/openfingerprint/commit/22af74b8afc21bcd3aa56ef9365047c162902bba))
+
+
+### Performance Improvements
+
+* **api:** reuse one Redis connection per consumer instead of one per command ([#62](https://github.com/Mokto/openfingerprint/issues/62)) ([0e6dd7f](https://github.com/Mokto/openfingerprint/commit/0e6dd7fc6c558342c26a5d7b4f796dd95ab889dd))
+* **api:** write the RDAP cache in the background ([#64](https://github.com/Mokto/openfingerprint/issues/64)) ([9c7172e](https://github.com/Mokto/openfingerprint/commit/9c7172eacf702d95b0d1766c2780813013453853))
+
+## [0.10.1](https://github.com/Mokto/openfingerprint/compare/api-v0.10.0...api-v0.10.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **api:** return the role-account field as roleAccount, like other /v1/check keys ([#60](https://github.com/Mokto/openfingerprint/issues/60)) ([81d9f6a](https://github.com/Mokto/openfingerprint/commit/81d9f6af22a9697f1f40e0a755ab22e635437489))
+
+## [0.10.0](https://github.com/Mokto/openfingerprint/compare/api-v0.9.0...api-v0.10.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** /v1/check response keys are camelCase (mxLookup, mxProviders, publicMailbox, freeSubdomain, registeredAtUnix, countryCode, ruleVersion, unavailableProbes, ...), and did_you_mean is now suggestedDomain. Enumerated values stay snake_case. /v1/verify and the collection envelope are unchanged.
+
+### Features
+
+* add canvas and audio tampering indicators, separate from automation ([#54](https://github.com/Mokto/openfingerprint/issues/54)) ([a22c26f](https://github.com/Mokto/openfingerprint/commit/a22c26f10bd267e821beaaecdbf21316eb137ad2))
+* **api:** accept a full email address and report role accounts ([#55](https://github.com/Mokto/openfingerprint/issues/55)) ([676aa4d](https://github.com/Mokto/openfingerprint/commit/676aa4d582e70e2928307fe12f0ceaf92420c569))
+* **api:** request and per-step latency histograms for /v1/check ([#57](https://github.com/Mokto/openfingerprint/issues/57)) ([f596b08](https://github.com/Mokto/openfingerprint/commit/f596b0845303a386c2a673a4478f09675dff57f1))
+* **api:** return camelCase keys from /v1/check ([#59](https://github.com/Mokto/openfingerprint/issues/59)) ([22ecb56](https://github.com/Mokto/openfingerprint/commit/22ecb568a9ce981ca7231f5d0043b8b3ca284c6d))
+
+## [0.9.0](https://github.com/Mokto/openfingerprint/compare/api-v0.8.0...api-v0.9.0) (2026-11-07)
+
+
+### Features
+
+* **chart:** per-pod network refresh sidecar ([#50](https://github.com/Mokto/openfingerprint/issues/50)) ([36996e4](https://github.com/Mokto/openfingerprint/commit/36996e43865bba5bd32b9e504590df2dd8b832d5))
+
 ## [0.8.0](https://github.com/Mokto/openfingerprint/compare/api-v0.7.0...api-v0.8.0) (2026-11-07)
 
 

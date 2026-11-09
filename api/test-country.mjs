@@ -1,6 +1,6 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,7 +54,6 @@ function database(epoch, code = 'DK', type = 'DBIP-Country-Lite') {
 process.env.OPENFINGERPRINT_COUNTRY_VALIDATOR = fileURLToPath(new URL('./target/debug/openfingerprint-api', import.meta.url));
 const directory = await mkdtemp(join(tmpdir(), 'openfingerprint-country-'));
 const path = join(directory, 'country.mmdb');
-const key = randomBytes(32).toString('hex');
 const now = Math.floor(Date.now() / 1000);
 const bytes = database(now - 100);
 const digest = createHash('sha1').update(bytes).digest('hex');
@@ -75,11 +74,9 @@ const fetcher = (payload = gzipSync(bytes), html = page, headers = {}) => async 
 let child;
 async function start() {
     child = spawn(fileURLToPath(new URL('./target/debug/openfingerprint-api', import.meta.url)), [], {
-        env: { ...process.env, OPENFINGERPRINT_SITES: JSON.stringify([{ id: 'test', secret_key: key }]),
-            OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0',
+        env: { ...process.env, OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0',
             OPENFINGERPRINT_COUNTRY_DATA: path, OPENFINGERPRINT_COUNTRY_DATA_RELOAD_SECONDS: '1',
-            OPENFINGERPRINT_NETWORK_DATA: networkPath, OPENFINGERPRINT_TRUSTED_PROXIES: undefined,
-            OPENFINGERPRINT_DOMAIN_DATA: join(directory, 'missing.json'),
+            OPENFINGERPRINT_NETWORK_DATA: networkPath, OPENFINGERPRINT_DOMAIN_DATA: join(directory, 'missing.json'),
             OPENFINGERPRINT_REDIS_URL: 'redis://127.0.0.1:1/0', OPENFINGERPRINT_REDIS_PASSWORD: undefined,
             OPENFINGERPRINT_DNS: '127.0.0.1:9' },
         stdio: ['ignore', 'pipe', 'pipe']
@@ -109,8 +106,8 @@ async function replace(bytes) {
 }
 async function check(server, ip, extra = {}) {
     const response = await fetch(`${server.api}/v1/check`, { method: 'POST',
-        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', 'x-forwarded-for': '8.8.8.8' },
-        body: JSON.stringify({ ip, ...extra }) });
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': '8.8.8.8' },
+        body: JSON.stringify({ ip, detail: true, ...extra }) });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');
     const body = await response.json();
@@ -167,21 +164,24 @@ try {
     let server = await start();
     const expected = (await check(server, '8.8.8.8')).ip;
     assert.equal(expected.status, 'ok', JSON.stringify(expected));
-    assert.equal(expected.country_code, 'DK');
+    assert.equal(expected.countryCode, 'DK');
     assert.equal(expected.network.tor.value, true);
     assert.equal(expected.network.source, 'backend_supplied');
     assert.equal(expected.source.license, 'CC-BY-4.0');
-    assert.equal(expected.source.updated_at_unix, now - 100);
-    assert.equal(expected.source.expires_at_unix, now - 100 + 62 * 86400);
+    assert.equal(expected.source.updatedAtUnix, now - 100);
+    assert.equal(expected.source.expiresAtUnix, now - 100 + 62 * 86400);
     assert.equal(expected.source.sha256, createHash('sha256').update(bytes).digest('hex'));
     assert.deepEqual((await check(server, '::ffff:8.8.8.8')).ip, expected);
-    assert.equal((await check(server, '2001:4860::8888')).ip.country_code, 'SE');
+    assert.equal((await check(server, '2001:4860::8888')).ip.countryCode, 'SE');
+    const compact = await check(server, '2001:4860::8888', { detail: false });
+    assert.equal(compact.country, 'se');
+    assert(!('ip' in compact) && !('countryCode' in compact) && !('source' in compact));
     assert.equal((await check(server, '2606:4700::1111')).ip.reason, 'not_found');
     for (const ip of ['127.0.0.1', '192.0.2.1', '10.0.0.1', '100.64.0.1', '::1', 'fe80::1', '2001:db8::1', '::ffff:10.0.0.1']) {
         const result = (await check(server, ip)).ip;
         assert.equal(result.status, 'unknown');
         assert.equal(result.reason, 'non_public_ip');
-        assert(!('country_code' in result));
+        assert(!('countryCode' in result));
     }
     for (const ip of ['8.8.8.8:80', '[::1]', 'fe80::1%eth0', '8.8.8.0/24', true, []]) {
         assert.equal((await check(server, ip)).ip.reason, 'invalid_ip');
@@ -197,10 +197,10 @@ try {
     await eventually(async () => (await (await fetch(`${server.metrics}/metrics`)).text()).includes('openfingerprint_country_data_reload_failures_total 2\n'));
     assert.deepEqual((await check(server, '8.8.8.8')).ip, expected);
     await replace(database(now - 50, 'US'));
-    await eventually(async () => (await check(server, '8.8.8.8')).ip.country_code === 'US');
+    await eventually(async () => (await check(server, '8.8.8.8')).ip.countryCode === 'US');
     await rm(path);
     await eventually(async () => (await (await fetch(`${server.metrics}/metrics`)).text()).includes('openfingerprint_country_data_reload_failures_total 3\n'));
-    assert.equal((await check(server, '8.8.8.8')).ip.country_code, 'US');
+    assert.equal((await check(server, '8.8.8.8')).ip.countryCode, 'US');
     await stop();
     for (const [fixture, reason] of [
         [database(now - 63 * 86400), 'stale_data'], [database(now + 3600), 'unavailable'],
@@ -212,7 +212,7 @@ try {
         const result = (await check(server, '8.8.8.8')).ip;
         assert.equal(result.status, 'unknown');
         assert.equal(result.reason, reason);
-        assert(!('country_code' in result));
+        assert(!('countryCode' in result));
         assert.equal(result.network.tor.value, true);
         await stop();
     }
@@ -220,7 +220,7 @@ try {
     server = await start();
     assert.equal((await check(server, '8.8.8.8')).ip.reason, 'unavailable');
     await replace(bytes);
-    await eventually(async () => (await check(server, '8.8.8.8')).ip.country_code === 'DK');
+    await eventually(async () => (await check(server, '8.8.8.8')).ip.countryCode === 'DK');
     console.log('Country updater integrity, IPv4/IPv6, special-use ranges, provenance, expiry, isolation and live reload checks passed.');
 } finally {
     await stop();

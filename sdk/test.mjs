@@ -116,7 +116,10 @@ await mkdir(dirname(output), { recursive: true });
 const checkpoint = () => writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
 
 function valid(r) {
-	assert.equal(r.version, 5);
+	assert.equal(r.version, 1);
+	assert(Number.isInteger(r.collectedAt) && Math.abs(Date.now() - r.collectedAt) < 60000, 'collection time');
+	assert(typeof r.token === 'string' && r.token.length > 100 && /^[\w-]+$/.test(r.token));
+	assert(!r.token.includes('fingerprint') && (!r.fingerprint || !r.token.includes(r.fingerprint)));
 	assert(Array.isArray(r.excluded));
 	assert(r.fingerprint === null || /^[0-9a-f]{64}$/.test(r.fingerprint));
 	assert(r.coreFingerprint === null || /^[0-9a-f]{64}$/.test(r.coreFingerprint));
@@ -173,7 +176,8 @@ try {
 		try {
 			await page.goto(`${origin}/custom`);
 			const automation = await page.evaluate(() => OpenFingerprint.collectAutomation());
-			assert.equal(automation.version, 2);
+			assert.equal(automation.version, 3);
+			assert.equal(automation.nativeFunctionTampering, false, 'a clean page is not tampered');
 			for (const [key, value] of Object.entries(automation)) assert(key === 'version' || value === null || typeof value === 'boolean', key);
 			assert.equal(automation.softwareRenderer, null);
 			assert.equal(automation.notificationPermissionQuirk, null);
@@ -207,7 +211,7 @@ try {
 					assert.deepEqual(
 						Object.fromEntries(Object.entries(observed).slice(0, 5)),
 						{
-							version: 2,
+							version: 3,
 							webdriver: unreadable ? null : false,
 							headlessUserAgent: unreadable ? null : scenario === 'markers',
 							seleniumArtifacts: scenario === 'markers',
@@ -243,9 +247,82 @@ try {
 			} finally {
 				await spoof.close();
 			}
+			const probe = async (init, late) => {
+				const p = await fresh(init);
+				try {
+					return await p.evaluate((late) => {
+						if (late) document.createElement = () => { throw new Error('blocked'); };
+						return OpenFingerprint.collectAutomation().nativeFunctionTampering;
+					}, late);
+				} finally {
+					await p.close();
+				}
+			};
+			assert.equal(await probe(() => {
+				const original = Function.prototype.toString;
+				Function.prototype.toString = function toString(...args) { return original.apply(this, args); };
+			}), false, 'a delegating toString wrapper, as Sentry installs, is not tampering');
+			assert.equal(await probe(() => {
+				const original = Function.prototype.toString;
+				const masked = new WeakSet();
+				Function.prototype.toString = function toString(...args) {
+					return masked.has(this) ? 'function get webdriver() { [native code] }' : original.apply(this, args);
+				};
+				masked.add(Function.prototype.toString);
+				const patched = function () { return false; };
+				masked.add(patched);
+				Object.defineProperty(Navigator.prototype, 'webdriver', { configurable: true, get: patched });
+			}), true, 'a patched native hidden behind a masking toString is still found');
+			assert.equal(await probe(() => {
+				Permissions.prototype.query = function query() { return Promise.resolve({ state: 'prompt' }); };
+			}), true, 'a replaced Permissions.query is found');
+			assert.equal(await probe(undefined, true), null, 'no frame means unknown, not a verdict');
+			report.checks.push({
+				browser: name,
+				check: 'Native function probe ignores a delegating toString wrapper, finds masked patches and is unknown without a frame',
+				passed: true
+			});
 			report.checks.push({
 				browser: name,
 				check: 'Automation observations isolate throwing/missing properties and never execute artifact getters',
+				passed: true
+			});
+			const clean = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }).then(r => r.tampering));
+			assert.deepEqual(clean, { version: 1, canvasReadbackAltered: false, audioRenderAltered: false });
+			const noisy = await fresh(() => {
+				const read = CanvasRenderingContext2D.prototype.getImageData;
+				CanvasRenderingContext2D.prototype.getImageData = function (...args) {
+					const image = read.apply(this, args);
+					image.data[0] ^= 1;
+					return image;
+				};
+				const channel = AudioBuffer.prototype.getChannelData;
+				AudioBuffer.prototype.getChannelData = function (...args) {
+					const data = channel.apply(this, args);
+					for (let i = 0; i < data.length; i += 97) data[i] += 1e-7;
+					return data;
+				};
+			});
+			try {
+				const injected = await noisy.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }).then(r => r.tampering));
+				assert.deepEqual(injected, { version: 1, canvasReadbackAltered: true, audioRenderAltered: true });
+				const blocked = await fresh(() => {
+					CanvasRenderingContext2D.prototype.getImageData = () => { throw new Error('blocked'); };
+					window.OfflineAudioContext = undefined;
+					window.webkitOfflineAudioContext = undefined;
+				});
+				try {
+					const unreadable = await blocked.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }).then(r => r.tampering));
+					assert.deepEqual(unreadable, { version: 1, canvasReadbackAltered: null, audioRenderAltered: null });
+				} finally {
+					await blocked.close();
+				}
+			} finally {
+				await noisy.close();
+			}
+			report.checks.push({
+				browser: name,
+				check: 'Tampering probes read exact on clean canvas/audio, flag injected noise and report null when blocked',
 				passed: true
 			});
 			const a = await page.evaluate(() =>
@@ -319,12 +396,12 @@ try {
 			const hints = Object.entries(a.hints)
 				.filter(([name]) => !a.excluded.includes(name))
 				.sort(order);
-			const canonical = 'stealth-agent:5\0' + JSON.stringify({ components, hints });
+			const canonical = 'stealth-agent:1\0' + JSON.stringify({ components, hints });
 			assert.equal(a.fingerprint, createHash('sha256').update(canonical).digest('hex'));
 			assert.equal(
 				a.coreFingerprint,
 				createHash('sha256')
-					.update('stealth-core:5\0' + JSON.stringify(components))
+					.update('stealth-core:1\0' + JSON.stringify(components))
 					.digest('hex')
 			);
 			report.checks.push({
@@ -399,7 +476,7 @@ try {
 			assert.equal(
 				batched.candidates,
 				96,
-				'The schema-4 catalogue must still test all 96 font families'
+				'The font catalogue must still test all 96 font families'
 			);
 			assert.equal(
 				batched.maxCallsInSlice,
@@ -651,7 +728,9 @@ try {
 					let count = 0;
 					window.audioDisconnects = 0;
 					globalThis.OfflineAudioContext = class {
-						id = ++count;
+						constructor(channels, length) {
+							this.id = length === 4410 ? 0 : ++count;
+						}
 						createOscillator() {
 							return {
 								frequency: { value: 0 },
@@ -1009,7 +1088,7 @@ try {
 			assert(!diagnosticTimeout.excluded.includes('fonts'));
 			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
 			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
-			assert.equal(diagnosticTimeout.automation.version, 2);
+			assert.equal(diagnosticTimeout.automation.version, 3);
 			assert(diagnosticTimeout.components.canvas);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);
@@ -1081,7 +1160,7 @@ try {
 				const original = crypto.subtle.digest.bind(crypto.subtle);
 				window.aggregateSeen = false;
 				crypto.subtle.digest = (algorithm, data) => {
-					if (new TextDecoder().decode(data).startsWith('stealth-agent:5')) {
+					if (new TextDecoder().decode(data).startsWith('stealth-agent:1')) {
 						window.aggregateSeen = true;
 						return new Promise(() => {});
 					}

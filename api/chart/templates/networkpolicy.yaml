@@ -46,7 +46,7 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    {{- if .Values.countryData.enabled }}
+    {{- if or .Values.countryData.enabled .Values.networkData.sidecar.enabled }}
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

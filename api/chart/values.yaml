@@ -7,7 +7,8 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# Required: a Secret providing OPENFINGERPRINT_SITES (server credentials), loaded with envFrom.
+# Optional: a Secret loaded with envFrom into the API. The API has no credentials of its own;
+# this is how you supply OPENFINGERPRINT_REDIS_URL (required when redis-ha.enabled=false).
 existingSecret: ""
 
 replicaCount: 1
@@ -21,7 +22,11 @@ resources:
     memory: 256Mi
 nodeSelector: {}
 tolerations: []
+# Overrides onePodPerNode when set.
 affinity: {}
+# Hard anti-affinity: at most one API pod per node. Needs at least replicaCount + 1 schedulable
+# nodes for a rolling update to surge (maxSurge 1); otherwise the extra pod stays Pending.
+onePodPerNode: true
 
 service:
   port: 80
@@ -75,7 +80,22 @@ countryData:
       memory: 256Mi
 
 networkData:
+  # Per-pod refresh: a network-updater sidecar writes a pod-local emptyDir that the API reads, so
+  # no shared volume is needed. Mutually exclusive with existingClaim/refresh below. Each pod
+  # fetches the sources itself, so every pod needs public HTTPS egress.
+  sidecar:
+    enabled: false
+    sizeLimit: 64Mi
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+  # Shared-volume mode, for clusters with ReadWriteMany storage: a CronJob writes the claim that
+  # every API pod mounts read-only.
   existingClaim: ""
+  # The image of both modes. Only the CronJob mode uses the rest.
   refresh:
     enabled: false
     schedule: "7 * * * *"
@@ -91,15 +111,15 @@ networkData:
       limits:
         memory: 512Mi
 
-# Redis is required: it holds collection state and caches RDAP answers (keys are SHA-256 hashes
-# of registered domains, always with a TTL). The chart deploys redis-ha by default. To use your
+# Redis is required: it caches RDAP answers and holds token replay markers (keys are SHA-256
+# hashes of registered domains or token content, always with a TTL). The chart deploys redis-ha by default. To use your
 # own Redis or Valkey, set redis-ha.enabled=false and put OPENFINGERPRINT_REDIS_URL (and
 # optionally OPENFINGERPRINT_REDIS_PASSWORD) in existingSecret.
 redis-ha:
   enabled: true
   replicas: 3
   # With auth, set existingSecret (key authKey); the API reads the same Secret. Sentinel
-  # failover is asynchronous: see "Redis" in the chart README before relying on collection.
+  # failover is asynchronous: see "Redis" in the chart README.
   auth: false
   persistentVolume:
     enabled: false
@@ -115,7 +135,7 @@ redis-ha:
   redis:
     config:
       maxmemory: 64mb
-      # Collection state must not be evicted: a full Redis rejects writes instead.
+      # Replay markers and cached answers must not be evicted: a full Redis rejects writes instead.
       maxmemory-policy: noeviction
       save: '""'
     resources:

@@ -55,6 +55,7 @@ pub struct DomainData {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 pub struct DomainCheck {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,13 +91,30 @@ impl DomainCheck {
     }
 }
 
+/// An otherwise unlisted domain whose MX hosts all belong to one provider's consumer or alias
+/// infrastructure, or to infrastructure that serves throwaway domains, so its addresses are like
+/// those at that provider's own domains.
+fn mx_inferred(fact: Fact, provider: Option<&str>) -> Fact {
+    match provider {
+        Some(_) if fact.status == "not_listed" => Fact {
+            value: Some(true),
+            status: "mx_listed",
+            ..fact
+        },
+        _ => fact,
+    }
+}
+
 #[derive(Serialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 struct Facts {
     disposable: Fact,
     free_subdomain: Fact,
     spam: Fact,
     public_mailbox: Fact,
     relay: Fact,
+    cheap_tld: crate::tld::CheapTld,
+    #[serde(rename(serialize = "suggestedDomain"))]
     did_you_mean: Option<String>,
 }
 
@@ -111,6 +129,7 @@ struct Fact {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 struct SourceStatus {
     id: String,
     status: &'static str,
@@ -299,11 +318,15 @@ impl DomainData {
                 "free_subdomain_namespace",
             ),
             spam: self.fact(domain, now, Category::ReferrerSpam, "referrer_spam"),
-            public_mailbox: self.consumer_fact(
+            public_mailbox: mx_inferred(
                 self.fact(domain, now, Category::PublicMailbox, "public_mailbox"),
-                mx,
+                crate::providers::consumer(mx),
             ),
-            relay: self.fact(domain, now, Category::Relay, "email_relay"),
+            relay: mx_inferred(
+                self.fact(domain, now, Category::Relay, "email_relay"),
+                crate::providers::relay(mx),
+            ),
+            cheap_tld: crate::tld::CheapTld::of(domain),
             did_you_mean: None,
         };
         let facts = Facts {
@@ -372,18 +395,6 @@ impl DomainData {
         hits.next().is_none().then(|| hit.clone())
     }
 
-    /// An otherwise unlisted domain whose mail goes only to a provider's consumer infrastructure.
-    fn consumer_fact(&self, fact: Fact, mx: &[String]) -> Fact {
-        match crate::providers::consumer(mx) {
-            Some(_) if fact.status == "not_listed" => Fact {
-                value: Some(true),
-                status: "mx_listed",
-                ..fact
-            },
-            _ => fact,
-        }
-    }
-
     fn mx_fact(&self, fact: Fact, domain: &str, mx: &[String], now: u64) -> Fact {
         if fact.status != "not_listed" {
             return fact;
@@ -411,7 +422,7 @@ impl DomainData {
                 status: "mx_listed",
                 ..host
             },
-            None => fact,
+            None => mx_inferred(fact, crate::providers::disposable_infrastructure(mx)),
         }
     }
 
@@ -720,9 +731,9 @@ mod tests {
             source("relay", &["mozmail.com"]),
         ]);
         let check = |name: &str| serde_json::to_value(d.check_at(name, &[], 1500)).unwrap();
-        assert_eq!(check("gmail.com")["public_mailbox"]["status"], "listed");
+        assert_eq!(check("gmail.com")["publicMailbox"]["status"], "listed");
         assert_eq!(
-            check("mail.gmail.com")["public_mailbox"]["status"],
+            check("mail.gmail.com")["publicMailbox"]["status"],
             "not_listed"
         );
         assert_eq!(check("x.mozmail.com")["relay"]["value"], true);
@@ -745,10 +756,10 @@ mod tests {
             ("co.uk", None),
             ("hotmail.org.uk", None),
         ] {
-            assert_eq!(check(typo)["did_you_mean"].as_str(), want, "{typo}");
+            assert_eq!(check(typo)["suggestedDomain"].as_str(), want, "{typo}");
         }
         assert_eq!(
-            serde_json::to_value(d.check_at("gmial.com", &[], 2500)).unwrap()["did_you_mean"],
+            serde_json::to_value(d.check_at("gmial.com", &[], 2500)).unwrap()["suggestedDomain"],
             serde_json::Value::Null,
             "stale lists suggest nothing"
         );
@@ -781,7 +792,8 @@ mod tests {
         {
             total += 1;
             if let Some(hit) =
-                serde_json::to_value(d.check_at(name, &[], 1500)).unwrap()["did_you_mean"].as_str()
+                serde_json::to_value(d.check_at(name, &[], 1500)).unwrap()["suggestedDomain"]
+                    .as_str()
             {
                 println!("SUGGEST {name} -> {hit}");
             }

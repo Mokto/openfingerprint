@@ -1,12 +1,12 @@
 [package]
 name = "openfingerprint-api"
-version = "0.8.0"
+version = "0.16.0"
 edition = "2024"
 license = "MIT"
 publish = false
 
 [dependencies]
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["http2"] }
 http-body-util = "0.1.5"
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "ring", "webpki-roots", "tls12"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
@@ -16,9 +16,16 @@ maxminddb = "0.32.0"
 psl = "2.1.248"
 ring = "0.17.14"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "tls12"] }
-redis = { version = "1.8.1", default-features = false, features = ["tokio-rustls-comp", "script"] }
+redis = { version = "1.8.1", default-features = false, features = ["tokio-rustls-comp"] }
 url = "2.5.8"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["full"] }
+connectrpc = { version = "0.9", default-features = false, features = ["axum", "gzip", "json"] }
+connectrpc-reflection = "0.9"
+buffa = { version = "0.9", features = ["json"] }
+buffa-types = { version = "0.9", features = ["json"] }
 sentry = { version = "0.49.5", default-features = false, features = ["backtrace", "contexts", "panic", "ureq", "rustls-no-provider"] }
+
+[build-dependencies]
+connectrpc-build = "0.9"

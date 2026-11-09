@@ -1,14 +1,19 @@
 mod automation;
 mod cache;
 mod check;
-mod collection;
 mod country;
 mod domains;
+mod email;
 mod mailauth;
+mod metrics;
 mod mx;
 mod network;
 mod providers;
 mod rdap;
+mod replay;
+mod rpc;
+mod tampering;
+mod tld;
 mod whois;
 
 use std::{sync::Arc, time::Duration};
@@ -27,12 +32,10 @@ fn app(state: Arc<check::AppState>) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/v1/check", post(check::check))
-        .route("/v1/verify", post(check::verify))
-        .route("/v1/challenges", post(collection::challenge))
-        .route("/v1/collect", post(collection::collect))
-        .route("/v1/events/consume", post(collection::consume))
+        .merge(rpc::routes(state.clone()))
         .layer(DefaultBodyLimit::max(check::BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
+        .layer(middleware::from_fn(observe))
         .with_state(state)
 }
 
@@ -43,8 +46,19 @@ async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::respon
             + &state.dns.metrics()
             + &state.rdap.metrics()
             + &state.countries.metrics()
-            + &state.network.metrics(),
+            + &state.network.metrics()
+            + &state.replay.metrics()
+            + &automation::metrics()
+            + &metrics::render(),
     )
+}
+
+async fn observe(request: Request, next: Next) -> Response {
+    let route = metrics::route(request.uri().path());
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    metrics::observe_request(route, response.status().as_u16(), started.elapsed());
+    response
 }
 
 async fn no_store(request: Request, next: Next) -> Response {
@@ -179,11 +193,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("OPENFINGERPRINT_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8180".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("listening on {}", listener.local_addr()?);
-    axum::serve(
-        listener,
-        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+    axum::serve(listener, app(state))
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
 }

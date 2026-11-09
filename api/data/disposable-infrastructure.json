@@ -1,0 +1,70 @@
+{
+  "license": "CC0-1.0",
+  "reviewed_at_unix": 1794085148,
+  "method": "Registered-domain MX infrastructure used by at least 50 domains on public disposable-domain lists (>=50 each) and by at most 3 of the Tranco top 300,000 domains, outside the known mail providers. Kept only where an independent commercial reference classifier labelled at least 90% of a sample of at least 8 such domains disposable, or the operator advertises a temporary inbox on its own site. Suffixes of general web hosts are narrowed to the hosts seen. See api/mine-disposable-infra.mjs.",
+  "entries": [
+    {
+      "suffix": "wabblywabble.com",
+      "listed_domains": 2095,
+      "popular_sites": 1
+    },
+    {
+      "suffix": "wallywatts.com",
+      "listed_domains": 2095,
+      "popular_sites": 1
+    },
+    {
+      "suffix": "kv.de",
+      "listed_domains": 280,
+      "popular_sites": 0
+    },
+    {
+      "suffix": "tempm.com",
+      "listed_domains": 161,
+      "popular_sites": 1,
+      "evidence_url": "https://tempm.com/"
+    },
+    {
+      "suffix": "tinyhost.shop",
+      "listed_domains": 518,
+      "popular_sites": 0,
+      "evidence_url": "https://tinyhost.shop/"
+    },
+    {
+      "suffix": "tempmail.tw",
+      "listed_domains": 114,
+      "popular_sites": 0,
+      "evidence_url": "https://tempmail.tw/"
+    },
+    {
+      "suffix": "mainnetmail.com",
+      "listed_domains": 101,
+      "popular_sites": 0
+    },
+    {
+      "suffix": "fr.priyohost.net",
+      "listed_domains": 88,
+      "popular_sites": 0
+    },
+    {
+      "suffix": "de2.priyohost.net",
+      "listed_domains": 22,
+      "popular_sites": 0
+    },
+    {
+      "suffix": "erinn.biz",
+      "listed_domains": 116,
+      "popular_sites": 3
+    },
+    {
+      "suffix": "oneb.net",
+      "listed_domains": 150,
+      "popular_sites": 0
+    },
+    {
+      "suffix": "chatgpt.org.uk",
+      "listed_domains": 830,
+      "popular_sites": 0
+    }
+  ]
+}

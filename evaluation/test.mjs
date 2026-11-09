@@ -13,11 +13,11 @@ const study = randomUUID(), build = hash('test-build');
 const deviceA = randomUUID(), deviceB = randomUUID(), deviceC = randomUUID();
 const target = (device, cohort = 'real_device', family = 'chrome') => ({ browser: randomUUID(), device, cohort, family, platform: 'linux', deviceClass: 'desktop' });
 const targets = [target(deviceA), target(deviceA, 'real_device', 'firefox'), target(deviceB), target(deviceC, 'synthetic')];
-const plan = { format: 1, study, build, schema: 5, targets, rounds: [
+const plan = { format: 1, study, build, schema: 1, targets, rounds: [
     { id: 1, day: 0, condition: 'baseline' }, { id: 2, day: 0, condition: 'reload' }, { id: 3, day: 7, condition: 'return' }
 ] };
 const metadata = (index, round) => ({ study, build, browser: targets[index].browser, round, consent: true });
-const sdkResult = (full, core = full) => ({ version: 5, fingerprint: full === null ? null : hash(full), coreFingerprint: core === null ? null : hash(core),
+const sdkResult = (full, core = full) => ({ version: 1, fingerprint: full === null ? null : hash(full), coreFingerprint: core === null ? null : hash(core),
     components: { canvas: hash('component') }, hints: {}, excluded: [], unavailable: {},
     storageId: 'private-secret', automation: { private: 'private-secret' }, extra: 'private-secret' });
 const sample = (index, round, full, core = full) => capture(metadata(index, round), async () => sdkResult(full, core));
