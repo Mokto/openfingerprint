@@ -445,7 +445,8 @@ try {
         [{ ...automation, webdriver: null }, 'unknown', [], ['webdriver']],
         [{ ...automation, headlessUserAgent: null }, 'detected', ['webdriver'], ['headless_user_agent']],
         [{ ...automation, webdriver: false, headlessUserAgent: true }, 'detected', ['headless_user_agent'], []],
-        [{ version: 2, softwareRenderer: true, cdpDetected: false }, 'detected', ['software_renderer'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'zero_dimensions', 'native_function_tampering', 'worker_user_agent_mismatch']]
+        [{ version: 2, softwareRenderer: true, cdpDetected: false }, 'detected', ['software_renderer'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'zero_dimensions', 'native_function_tampering', 'worker_user_agent_mismatch']],
+        [{ version: 3, nativeFunctionTampering: true }, 'detected', ['native_function_tampering'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'worker_user_agent_mismatch']]
     ]) {
         const response = await request('/v1/check', {}, { automation: observations, signals: signals() });
         assert.equal(response.status, 200);
@@ -454,7 +455,7 @@ try {
             signals: checkedProfile(signals())
         });
     }
-    for (const invalid of [false, [], 'browser', {}, { version: 3 }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
+    for (const invalid of [false, [], 'browser', {}, { version: 4 }, { version: 3, extra: true }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
         const response = await request('/v1/check', {}, { ...fields, signals: signals(), automation: invalid });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {

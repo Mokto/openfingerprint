@@ -160,7 +160,7 @@ The JSON object accepts only these fields:
 | Field | Shape |
 | --- | --- |
 | `signals` | Optional `token` string from the SDK result (`result.token`). Objects are rejected as `invalid_signals`. |
-| `automation` | Optional version-1 or version-2 SDK automation evidence, as described below. |
+| `automation` | Optional version-1, -2 or -3 SDK automation evidence, as described below. |
 | `domain` | Optional ASCII hostname, not a URL or complete email address. |
 | `email` | Optional full email address. Its domain gets the `domain` checks, so it cannot be combined with `domain`. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
@@ -449,9 +449,11 @@ The response contains:
 }
 ```
 
-Evidence accepts `version: 1` with four optional booleans, or `version: 2` with
-those four plus ten more. Each version rejects any field it does not define, so a
-version-1 document cannot carry version-2 probes. `ruleVersion` echoes the
+Evidence accepts `version: 1` with four optional booleans, or `version: 2` or `3`
+with those four plus ten more. Version 3 has the same fields as version 2; it only
+changes how the SDK observes `nativeFunctionTampering` (see the table). Each version
+rejects any field it does not define, so a version-1 document cannot carry
+version-2 probes. `ruleVersion` echoes the
 evidence version. Null or omitted observations remain unknown. `indicators` and
 `unavailableProbes` list snake_case names in this order:
 
@@ -469,7 +471,7 @@ evidence version. Null or omitted observations remain unknown. `indicators` and
 | `softwareRenderer` | `software_renderer` | 2 | Unmasked WebGL renderer is SwiftShader, llvmpipe, softpipe or similar. |
 | `zeroDimensions` | `zero_dimensions` | 2 | Screen or outer-window width/height is 0. |
 | `cdpDetected` | `cdp_detected` | 2 | A console-logged object's `stack` getter was read, as a CDP client or open DevTools does. |
-| `nativeFunctionTampering` | `native_function_tampering` | 2 | `Function.prototype.toString`, the `navigator.webdriver` getter or `Permissions.prototype.query` is not native. |
+| `nativeFunctionTampering` | `native_function_tampering` | 2 | Version 3: the `navigator.webdriver` getter or `Permissions.prototype.query` is not native when read with an untouched `toString`, or `Function.prototype.toString.call({})` does not throw. Version 2: also true when `Function.prototype.toString` itself is replaced, which error monitors such as Sentry do by default, so version-2 reports from such pages are positive on every visit; do not rely on it. |
 | `workerUserAgentMismatch` | `worker_user_agent_mismatch` | 2 | A dedicated worker reports a different UA or platform than the main thread. |
 
 Rules for either version report `detected` if any observation is true, `unknown`
@@ -485,7 +487,7 @@ can be forged or hidden. `not_detected` is not proof of a human, and automation
 may be legitimate testing or assistive tooling, not malicious traffic. No
 good/bad bot classification, confidence, fraud score, retention or new outbound
 traffic is introduced. Deploy the compatible API before upgrading the SDK;
-older servers reject version-2 evidence.
+older servers reject version-2 and -3 evidence.
 
 #### Tampering indicators
 

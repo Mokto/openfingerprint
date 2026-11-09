@@ -110,7 +110,7 @@ Deploy the compatible API first: older versions reject this additional SDK field
 | `softwareRenderer` | Unmasked WebGL renderer matches SwiftShader, llvmpipe, softpipe, software rasterizer or Mesa offscreen. Taken from the GPU probe, so `collect()` only. |
 | `zeroDimensions` | Screen or outer-window width or height of 0. |
 | `cdpDetected` | A `stack` getter on an `Error` passed to `console.debug` was read, as CDP clients and open DevTools do. |
-| `nativeFunctionTampering` | `Function.prototype.toString`, the `navigator.webdriver` getter or `Permissions.prototype.query` is not native code, or `toString` accepts a non-function. |
+| `nativeFunctionTampering` | The `navigator.webdriver` getter or `Permissions.prototype.query` is not native code when read with the `toString` of a fresh same-origin frame, or `Function.prototype.toString` accepts a non-function. A `toString` wrapper that still answers correctly, as error monitors install, is not reported. Unknown when no frame can be created. |
 | `workerUserAgentMismatch` | A blob dedicated worker reports a different UA or platform than the main thread. `collect()` only. |
 
 The standalone `collectAutomation()` returns `null` for the three `collect()`-only
