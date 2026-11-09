@@ -163,6 +163,24 @@ mod tests {
     }
 
     #[test]
+    fn listed_network_facts_encode_as_booleans() {
+        let fact = |value| serde_json::json!({"value":value,"status":"listed"});
+        let mut response = serde_json::json!({"ip":{"status":"ok","countryCode":"DK","network":{
+            "status":"ok",
+            "tor":fact(serde_json::json!(true)),
+            "vpn":fact(serde_json::json!({"scope":"listed_vpn_range"})),
+            "datacenter":fact(serde_json::json!({"scope":"listed_datacenter_range"})),
+            "proxy":fact(serde_json::json!({"protocols":["http"],"scope":"listed_open_proxy"}))}}});
+        crate::check::compact(&mut response);
+        let message: CheckResponse = serde_json::from_value(response).unwrap();
+        assert_eq!(
+            [message.tor, message.vpn, message.datacenter, message.proxy],
+            [Some(true); 4]
+        );
+        assert_eq!(message.country.as_deref(), Some("dk"));
+    }
+
+    #[test]
     fn api_errors_map_to_connect_codes() {
         use connectrpc::ErrorCode::*;
         for (status, code) in [
