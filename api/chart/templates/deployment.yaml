@@ -55,6 +55,14 @@ spec:
           env:
             - name: OPENFINGERPRINT_LISTEN_ADDR
               value: 0.0.0.0:8180
+            {{- with .Values.sentry.dsn }}
+            - name: SENTRY_DSN
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.sentry.environment }}
+            - name: SENTRY_ENVIRONMENT
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.metrics.enabled }}
             - name: OPENFINGERPRINT_METRICS_ADDR
               value: "0.0.0.0:{{ .Values.metrics.port }}"

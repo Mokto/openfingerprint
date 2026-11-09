@@ -79,6 +79,13 @@ callers send only the domain. Its policy allows UDP 53 to `networkPolicy.dnsTo`.
 pod. A rolling update surges one extra pod, so it needs at least `replicaCount + 1` schedulable
 nodes; on fewer, set `onePodPerNode=false`. A non-empty `affinity` replaces it.
 
+## Sentry
+
+Set `sentry.dsn` (and optionally `sentry.environment`) to report panics, HTTP 5xx responses
+and rejected snapshot reloads. Nothing is sent without a DSN. Events carry no request data;
+see the [API guide](../README.md#configuration). With `networkPolicy.enabled`, the default
+`rdapTo` already allows public HTTPS; if you narrow it, allow your Sentry ingest host.
+
 ## Redis
 
 The API does not start without `OPENFINGERPRINT_REDIS_URL`. By default the chart
