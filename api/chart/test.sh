@@ -70,6 +70,8 @@ check.call(pod["dnsConfig"] == {"options" => [{"name" => "ndots", "value" => "1"
 check.call(policy["ingress"].map { |r| r["ports"] } == [[{"protocol" => "TCP", "port" => 8180}], [{"protocol" => "TCP", "port" => 9180}]], "API and metrics ports only")
 check.call(policy["ingress"][0]["from"][0]["podSelector"] == {"matchLabels" => {"app.kubernetes.io/name" => "users"}}, "Configured API callers")
 cron = get.call("CronJob")
+hook = get.call("Job", "openfingerprint-domain-data-initial")
+check.call(hook["metadata"]["annotations"]["helm.sh/hook"] == "post-install" && hook["spec"]["template"] == cron["spec"]["jobTemplate"]["spec"]["template"], "Initial refresh hook runs the cron pod")
 job = cron["spec"]["jobTemplate"]["spec"]["template"]
 updater_labels = job["metadata"]["labels"]
 check.call(updater_labels == {"app.kubernetes.io/name" => "openfingerprint-domain-updater", "app.kubernetes.io/instance" => "openfingerprint"}, "Updater labels")

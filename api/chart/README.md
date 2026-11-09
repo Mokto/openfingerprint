@@ -30,7 +30,7 @@ API and updater image digests.
 | --- | --- |
 | Deployment and ClusterIP Service | The API on port 80 (container 8180) and, when enabled, metrics on 9180. No Ingress. |
 | NetworkPolicy `<release>-api` (with `networkPolicy.enabled`) | Ingress only from `networkPolicy.apiFrom` (and `metricsFrom` on the metrics port). Egress UDP and TCP 53 to `networkPolicy.dnsTo` (default: `kube-dns` pods in `kube-system`) for MX, SPF, DMARC and registry-host lookups (TCP only for answers too large for UDP), TCP 443 and 43 to `networkPolicy.rdapTo` (default: public IPv4/IPv6, no private, CGNAT, loopback or link-local ranges) for RDAP and WHOIS, public TCP 443 for the country and network refresh sidecars when enabled, and Redis: the bundled HAProxy pods on 6379, or `networkPolicy.redisTo` on `redisPort`. |
-| CronJob `<release>-domain-data` | Every six hours, fetches the pinned public sources and publishes the snapshot to the `<release>-domain-data` ConfigMap. |
+| CronJob `<release>-domain-data` and `post-install` Job `<release>-domain-data-initial` | Every six hours (and once after install), fetches the pinned public sources and publishes the snapshot to the `<release>-domain-data` ConfigMap. |
 | ServiceAccount, Role, RoleBinding | Only the updater gets a token: it may create ConfigMaps and get/patch its own. Kubernetes cannot scope `create` to a name. |
 | NetworkPolicy `<release>-domain-data` (with `networkPolicy.enabled`) | The updater accepts nothing; it may reach DNS, HTTPS and `kubeApiServerPorts`. |
 | Sidecar `country-updater` and shared `emptyDir` | Downloads DB-IP Country Lite immediately, then daily; retries hourly after failures. Uses the pinned `domainData.refresh.image`, with no credentials or Kubernetes token. |
@@ -40,11 +40,11 @@ API and updater image digests.
 
 The API mounts the ConfigMap read-only and reloads it within about two minutes of a
 refresh (kubelet sync plus `domainData.reloadSeconds`). Until the first refresh
-creates it, domain facts are `unknown`; trigger one immediately after installing:
-
-```sh
-kubectl -n openfingerprint create job --from=cronjob/openfingerprint-domain-data initial
-```
+creates it, domain facts are `unknown`. A `post-install` hook Job
+`<release>-domain-data-initial` runs one refresh right after the first install, so
+the snapshot normally exists within a minute. If that Job fails, the install is marked
+failed; the cron job still fills the data in. Re-run it manually with
+`kubectl -n openfingerprint create job --from=cronjob/openfingerprint-domain-data manual`.
 
 A rejected snapshot leaves the last valid one serving until its sources expire.
 Set `domainData.refresh.enabled=false` to use only the data bundled in the image,
