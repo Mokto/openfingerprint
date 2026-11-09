@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.15.0](https://github.com/Mokto/openfingerprint/compare/api-v0.14.0...api-v0.15.0) (2026-11-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** POST /v1/verify answers 404. Send result.token as signals to POST /v1/check and read fingerprint. The metrics route label verify is gone.
+
+### Features
+
+* **api:** remove POST /v1/verify ([#78](https://github.com/Mokto/openfingerprint/issues/78)) ([b146bfc](https://github.com/Mokto/openfingerprint/commit/b146bfcee895188ff024c7965c5d2c12ae409637))
+
+
+### Bug Fixes
+
+* **api:** return listed vpn, datacenter and proxy as booleans in the compact response ([#80](https://github.com/Mokto/openfingerprint/issues/80)) ([fdfb20e](https://github.com/Mokto/openfingerprint/commit/fdfb20efd8e0a5b32c657da02a5d18597b6a49b4))
+
 ## [0.14.0](https://github.com/Mokto/openfingerprint/compare/api-v0.13.0...api-v0.14.0) (2026-11-08)
 
 
