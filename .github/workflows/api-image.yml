@@ -60,6 +60,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24'
+          package-manager-cache: false
       - name: Build and smoke-test the API, domain-updater and network-updater images
         run: bash api/build-images.sh "$IMAGE:sha-$GITHUB_SHA-$ARCH" "$UPDATER:sha-$GITHUB_SHA-$ARCH" "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH"
       - env:
@@ -74,6 +75,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       packages: write
+      attestations: write
+      id-token: write
     env:
       VERSION: ${{ needs.release.outputs.version }}
     outputs:
@@ -99,6 +102,24 @@ jobs:
             [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]
             echo "${pair%%=*}=$digest" >> "$GITHUB_OUTPUT"
           done
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digests.outputs.api }}
+          push-to-registry: true
+          create-storage-record: false
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.UPDATER }}
+          subject-digest: ${{ steps.digests.outputs.updater }}
+          push-to-registry: true
+          create-storage-record: false
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.NETWORK_UPDATER }}
+          subject-digest: ${{ steps.digests.outputs.network-updater }}
+          push-to-registry: true
+          create-storage-record: false
       - name: Verify public multi-architecture pulls
         run: |
           export DOCKER_CONFIG="$(mktemp -d)"
