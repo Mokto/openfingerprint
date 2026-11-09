@@ -22,7 +22,11 @@ resources:
     memory: 256Mi
 nodeSelector: {}
 tolerations: []
+# Overrides onePodPerNode when set.
 affinity: {}
+# Hard anti-affinity: at most one API pod per node. Needs at least replicaCount + 1 schedulable
+# nodes for a rolling update to surge (maxSurge 1); otherwise the extra pod stays Pending.
+onePodPerNode: true
 
 service:
   port: 80
