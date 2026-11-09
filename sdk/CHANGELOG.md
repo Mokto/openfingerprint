@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/Mokto/openfingerprint/compare/sdk-v0.10.0...sdk-v0.10.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* stop flagging a wrapped Function.prototype.toString as automation ([#87](https://github.com/Mokto/openfingerprint/issues/87)) ([3e0d86c](https://github.com/Mokto/openfingerprint/commit/3e0d86cb7c04fd3d2b4beb36a985deb272e51dab))
+
 ## [0.10.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.9.0...sdk-v0.10.0) (2026-11-08)
 
 
