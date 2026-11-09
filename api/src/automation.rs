@@ -94,11 +94,12 @@ pub fn check(value: Value) -> Check {
     let version = match value.get("version").and_then(Value::as_u64) {
         Some(1) => 1,
         Some(2) => 2,
+        Some(3) => 3,
         _ => return result,
     };
     let probes: Vec<_> = V1
         .iter()
-        .chain(if version == 2 { V2.iter() } else { [].iter() })
+        .chain(if version >= 2 { V2.iter() } else { [].iter() })
         .collect();
     let Some(fields) = value.as_object() else {
         return result;
@@ -165,7 +166,7 @@ mod tests {
         ));
         check(all_false(json!({"cdpDetected": true})));
         check(all_false(json!({})));
-        check(json!({"version": 3}));
+        check(json!({"version": 4}));
         let after = metrics();
         // Other tests share these statics, so assert increases only.
         assert!(value(&after, detected) >= value(&before, detected) + 2);
@@ -228,6 +229,21 @@ mod tests {
     }
 
     #[test]
+    fn version_three_carries_the_version_two_probes_and_echoes_its_version() {
+        let mut report = json!({"version": 3});
+        for (name, _) in V1.iter().chain(&V2) {
+            report[*name] = json!(false);
+        }
+        let clean = check(report.clone());
+        assert_eq!((clean.status, clean.rule_version), ("not_detected", 3));
+        report["nativeFunctionTampering"] = json!(true);
+        let result = check(report);
+        assert_eq!(result.status, "detected");
+        assert_eq!(result.indicators, ["native_function_tampering"]);
+        assert_eq!(check(json!({"version": 3})).unavailable_probes.len(), 14);
+    }
+
+    #[test]
     fn invalid_evidence_does_not_produce_a_verdict() {
         for value in [
             json!(null),
@@ -235,7 +251,7 @@ mod tests {
             json!([]),
             json!("automation"),
             json!({}),
-            json!({"version": 3}),
+            json!({"version": 4}),
             json!({"version": -1}),
             json!({"version": 1.5}),
             json!({"version": "1"}),
@@ -248,6 +264,8 @@ mod tests {
             json!({"version": 2, "extra": true}),
             json!({"version": 2, "cdpDetected": "true"}),
             json!({"version": 2, "softwareRenderer": 1}),
+            json!({"version": 3, "extra": true}),
+            json!({"version": 3, "nativeFunctionTampering": "true"}),
         ] {
             let result = check(value);
             assert_eq!(result.status, "invalid_input");

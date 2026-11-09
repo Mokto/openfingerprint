@@ -176,7 +176,8 @@ try {
 		try {
 			await page.goto(`${origin}/custom`);
 			const automation = await page.evaluate(() => OpenFingerprint.collectAutomation());
-			assert.equal(automation.version, 2);
+			assert.equal(automation.version, 3);
+			assert.equal(automation.nativeFunctionTampering, false, 'a clean page is not tampered');
 			for (const [key, value] of Object.entries(automation)) assert(key === 'version' || value === null || typeof value === 'boolean', key);
 			assert.equal(automation.softwareRenderer, null);
 			assert.equal(automation.notificationPermissionQuirk, null);
@@ -210,7 +211,7 @@ try {
 					assert.deepEqual(
 						Object.fromEntries(Object.entries(observed).slice(0, 5)),
 						{
-							version: 2,
+							version: 3,
 							webdriver: unreadable ? null : false,
 							headlessUserAgent: unreadable ? null : scenario === 'markers',
 							seleniumArtifacts: scenario === 'markers',
@@ -246,6 +247,41 @@ try {
 			} finally {
 				await spoof.close();
 			}
+			const probe = async (init, late) => {
+				const p = await fresh(init);
+				try {
+					return await p.evaluate((late) => {
+						if (late) document.createElement = () => { throw new Error('blocked'); };
+						return OpenFingerprint.collectAutomation().nativeFunctionTampering;
+					}, late);
+				} finally {
+					await p.close();
+				}
+			};
+			assert.equal(await probe(() => {
+				const original = Function.prototype.toString;
+				Function.prototype.toString = function toString(...args) { return original.apply(this, args); };
+			}), false, 'a delegating toString wrapper, as Sentry installs, is not tampering');
+			assert.equal(await probe(() => {
+				const original = Function.prototype.toString;
+				const masked = new WeakSet();
+				Function.prototype.toString = function toString(...args) {
+					return masked.has(this) ? 'function get webdriver() { [native code] }' : original.apply(this, args);
+				};
+				masked.add(Function.prototype.toString);
+				const patched = function () { return false; };
+				masked.add(patched);
+				Object.defineProperty(Navigator.prototype, 'webdriver', { configurable: true, get: patched });
+			}), true, 'a patched native hidden behind a masking toString is still found');
+			assert.equal(await probe(() => {
+				Permissions.prototype.query = function query() { return Promise.resolve({ state: 'prompt' }); };
+			}), true, 'a replaced Permissions.query is found');
+			assert.equal(await probe(undefined, true), null, 'no frame means unknown, not a verdict');
+			report.checks.push({
+				browser: name,
+				check: 'Native function probe ignores a delegating toString wrapper, finds masked patches and is unknown without a frame',
+				passed: true
+			});
 			report.checks.push({
 				browser: name,
 				check: 'Automation observations isolate throwing/missing properties and never execute artifact getters',
@@ -1052,7 +1088,7 @@ try {
 			assert(!diagnosticTimeout.excluded.includes('fonts'));
 			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
 			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
-			assert.equal(diagnosticTimeout.automation.version, 2);
+			assert.equal(diagnosticTimeout.automation.version, 3);
 			assert(diagnosticTimeout.components.canvas);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);
