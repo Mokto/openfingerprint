@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.16.0](https://github.com/Mokto/openfingerprint/compare/api-v0.15.0...api-v0.16.0) (2026-11-09)
+
+
+### Features
+
+* **api:** count automation verdicts and positive probes ([#81](https://github.com/Mokto/openfingerprint/issues/81)) ([19f6477](https://github.com/Mokto/openfingerprint/commit/19f64774fa56f487f395c8b0ba0a5db90c7c1cfd))
+* **api:** spread API pods one per node in the Helm chart ([#84](https://github.com/Mokto/openfingerprint/issues/84)) ([8ddeb29](https://github.com/Mokto/openfingerprint/commit/8ddeb29752374c6e691e2e3baa1a9de627199b91))
+* **chart:** fill domain data right after install with a post-install hook Job ([#83](https://github.com/Mokto/openfingerprint/issues/83)) ([dd5299e](https://github.com/Mokto/openfingerprint/commit/dd5299ea6be72d2727fd805698b91cbe65d8abf7))
+
 ## [0.15.0](https://github.com/Mokto/openfingerprint/compare/api-v0.14.0...api-v0.15.0) (2026-11-09)
 
 
