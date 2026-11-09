@@ -94,8 +94,8 @@ publishing checks the tag against `sdk/package.json`, builds and tests the SDK,
 verifies package contents and uses npm trusted publishing with provenance.
 API publishing builds and smoke-tests Linux AMD64/ARM64 API and domain-updater
 images, then publishes the Helm chart pinned to their digests. When the
-`DISPATCH_TARGET` and `DISPATCH_TOKEN` secrets are set, it then dispatches a
-deployment workflow; it never migrates callers. An SDK release does not release the API,
+`DISPATCH_TARGET`/`DISPATCH_TOKEN` and `DISPATCH_TARGET_K3S`/`DISPATCH_TOKEN_K3S` secret
+pairs are set, it then dispatches a deployment workflow for each pair; it never migrates callers. An SDK release does not release the API,
 and an API release does not release the SDK.
 
 `pnpm check` includes a release-wiring regression check. The shared workflow and

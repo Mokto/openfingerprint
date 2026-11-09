@@ -168,18 +168,26 @@ jobs:
     runs-on: ubuntu-24.04
     permissions: {}
     steps:
-      # DISPATCH_TARGET is the full workflow_dispatch URL of the deploying workflow, DISPATCH_TOKEN a token for it.
+      # Each DISPATCH_TARGET<suffix> is the full workflow_dispatch URL of a deploying workflow and
+      # DISPATCH_TOKEN<suffix> a token for it. The unsuffixed pair and the _K3S pair are independent.
       - name: Dispatch the deployment of this release's chart
         env:
           TARGET: ${{ secrets.DISPATCH_TARGET }}
           TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          TARGET_K3S: ${{ secrets.DISPATCH_TARGET_K3S }}
+          TOKEN_K3S: ${{ secrets.DISPATCH_TOKEN_K3S }}
           VERSION: ${{ needs.release.outputs.version }}
         run: |
-          if [ -z "$TARGET" ] || [ -z "$TOKEN" ]; then
-            echo "::notice::DISPATCH_TARGET or DISPATCH_TOKEN is not set; skipping the deployment dispatch"
-            exit 0
-          fi
-          curl -fsS --retry 3 -X POST "$TARGET" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d "{\"ref\":\"main\",\"inputs\":{\"version\":\"$VERSION\"}}"
+          failed=0
+          for pair in "$TARGET|$TOKEN" "$TARGET_K3S|$TOKEN_K3S"; do
+            target="${pair%%|*}" token="${pair#*|}"
+            if [ -z "$target" ] || [ -z "$token" ]; then
+              echo "::notice::A deployment dispatch target or token is not set; skipping it"
+              continue
+            fi
+            curl -fsS --retry 3 -X POST "$target" \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.github+json" \
+              -d "{\"ref\":\"main\",\"inputs\":{\"version\":\"$VERSION\"}}" || failed=1
+          done
+          exit "$failed"
