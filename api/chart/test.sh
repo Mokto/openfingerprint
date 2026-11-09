@@ -6,7 +6,12 @@ if [ ! -d charts ]; then
   helm_home=$(mktemp -d)
   export HELM_REPOSITORY_CONFIG="$helm_home/repositories.yaml" HELM_REPOSITORY_CACHE="$helm_home/cache"
   helm repo add dandydeveloper https://dandydeveloper.github.io/charts/ >/dev/null
-  helm dependency build . >/dev/null
+  # GitHub release downloads of the redis-ha tarball intermittently return 504.
+  for attempt in 1 2 3 4 5; do
+    helm dependency build . >/dev/null && break
+    [ "$attempt" -lt 5 ] || exit 1
+    sleep $((attempt * 15))
+  done
   rm -rf "$helm_home"
   unset HELM_REPOSITORY_CONFIG HELM_REPOSITORY_CACHE
 fi
