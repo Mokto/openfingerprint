@@ -72,6 +72,12 @@ callers send only the domain. Its policy allows UDP 53 to `networkPolicy.dnsTo`.
 `unavailable`.
 `openfingerprint_mx_lookups_total{result}` counts outcomes.
 
+## Scheduling
+
+`onePodPerNode` (default `true`) adds required pod anti-affinity so each node runs at most one API
+pod. A rolling update surges one extra pod, so it needs at least `replicaCount + 1` schedulable
+nodes; on fewer, set `onePodPerNode=false`. A non-empty `affinity` replaces it.
+
 ## Redis
 
 The API does not start without `OPENFINGERPRINT_REDIS_URL`. By default the chart

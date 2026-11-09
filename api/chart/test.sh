@@ -35,6 +35,7 @@ pod = deployment["spec"]["template"]["spec"]
 api = pod["containers"].first
 check.call(deployment["spec"]["template"]["metadata"]["labels"] == api_labels, "API pod labels")
 check.call(pod["automountServiceAccountToken"] == false, "API gets no Kubernetes token")
+check.call(pod["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"].first["labelSelector"]["matchLabels"] == api_labels, "One API pod per node")
 check.call(pod["securityContext"]["runAsUser"] == 65532 && pod["securityContext"]["runAsNonRoot"], "Non-root API")
 check.call(api["securityContext"] == {"readOnlyRootFilesystem" => true, "allowPrivilegeEscalation" => false, "capabilities" => {"drop" => ["ALL"]}}, "API hardening")
 check.call(api["image"].end_with?("@sha256:" + "a" * 64) && api["image"].start_with?("ghcr.io/mokto/openfingerprint-api:"), "Pinned API image")
