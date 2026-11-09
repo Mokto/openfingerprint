@@ -48,6 +48,7 @@ async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::respon
             + &state.countries.metrics()
             + &state.network.metrics()
             + &state.replay.metrics()
+            + &automation::metrics()
             + &metrics::render(),
     )
 }

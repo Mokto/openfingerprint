@@ -843,6 +843,10 @@ try {
     assert(await metric('openfingerprint_replay_checks_total{result="replayed"}') >= 2);
     assert(await metric('openfingerprint_replay_checks_total{result="new"}') >= 5);
     assert.equal(await metric('openfingerprint_replay_checks_total{result="error"}'), 0);
+    assert(await metric('openfingerprint_automation_checks_total{status="detected"}') >= 1);
+    assert(await metric('openfingerprint_automation_checks_total{status="not_detected"}') >= 1);
+    assert(await metric('openfingerprint_automation_indicators_total{indicator="webdriver"}') >= 1);
+    assert.equal(await metric('openfingerprint_automation_indicators_total{indicator="cdp_detected"}'), 0);
     console.log(`Snapshot reload, last-good retention and metrics passed (${mode}).`);
     phase = 'no request or credential logging';
     for (const sensitive of [
