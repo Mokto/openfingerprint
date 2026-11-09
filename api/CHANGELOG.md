@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/Mokto/openfingerprint/compare/api-v0.16.0...api-v0.17.0) (2026-11-09)
+
+
+### Features
+
+* **api:** add optional Sentry error reporting ([#89](https://github.com/Mokto/openfingerprint/issues/89)) ([dc68ae3](https://github.com/Mokto/openfingerprint/commit/dc68ae3d2f2c3c402791012a481b594972ec2bc3))
+
+
+### Bug Fixes
+
+* stop flagging a wrapped Function.prototype.toString as automation ([#87](https://github.com/Mokto/openfingerprint/issues/87)) ([3e0d86c](https://github.com/Mokto/openfingerprint/commit/3e0d86cb7c04fd3d2b4beb36a985deb272e51dab))
+
 ## [0.16.0](https://github.com/Mokto/openfingerprint/compare/api-v0.15.0...api-v0.16.0) (2026-11-09)
 
 
