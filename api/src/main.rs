@@ -105,6 +105,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !args.is_empty() {
         return Err("Unknown arguments".into());
     }
+    let mut options = sentry::ClientOptions::default();
+    options.release = sentry::release_name!();
+    options.before_send = Some(Arc::new(|mut event| {
+        event.request = None;
+        event.user = None;
+        event.breadcrumbs.values.clear();
+        Some(event)
+    }));
+    let _sentry = sentry::init(options);
     let state = Arc::new(check::AppState::from_env()?);
     if state.network.reloads() {
         let state = state.clone();

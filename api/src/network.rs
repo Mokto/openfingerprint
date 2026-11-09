@@ -488,6 +488,7 @@ impl Store {
             }
             Err(()) => {
                 self.failures.fetch_add(1, Ordering::Relaxed);
+                sentry::capture_message("network snapshot reload failed", sentry::Level::Error);
                 let mut data = self.data.write().unwrap();
                 if data.metadata.iter().all(Option::is_none) {
                     *data = Arc::new(Data::unavailable("invalid_data"));

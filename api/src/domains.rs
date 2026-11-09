@@ -574,6 +574,7 @@ impl DomainStore {
             self.loaded_at.store(now(), Ordering::Relaxed);
         } else {
             self.failures.fetch_add(1, Ordering::Relaxed);
+            sentry::capture_message("domain snapshot reload failed", sentry::Level::Error);
             if current.reason.is_some() {
                 *current = Arc::new(data);
             }

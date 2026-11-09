@@ -36,7 +36,8 @@ events for collection, subject to TTL and capacity limits below, and cached RDAP
 answers keyed by SHA-256 hashes of registered domains. Raw collection user
 agents/platforms are discarded after evaluation; request evidence and credentials
 are not logged. Outbound traffic consists of MX DNS queries, at most one RDAP
-request to the domain's registry per uncached check, and Redis commands.
+request to the domain's registry per uncached check, Redis commands and, only when
+`SENTRY_DSN` is set, error reports to Sentry.
 Country and network lookups use local datasets only. Their separate updaters
 download public datasets without receiving checked IPs or application credentials.
 Responses have `Cache-Control: no-store` and set no cookies. Domain/IP inputs are
@@ -120,6 +121,7 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_WHOIS_SERVERS` | Optional path to a `{"servers": {"tld": "host"}}` file replacing the bundled WHOIS server list; `host:port` is allowed, for local test servers. |
 | `OPENFINGERPRINT_RDAP_BOOTSTRAP` | Optional path to an IANA RDAP bootstrap file replacing the bundled one; read at startup. It may contain `http://` servers, for local test registries. |
 | `OPENFINGERPRINT_METRICS_ADDR` | Optional listener for Prometheus `GET /metrics`, for example `0.0.0.0:9180`. Keep it off the API port so network policy can expose it separately. |
+| `SENTRY_DSN` | Optional. Enables error reporting to Sentry: panics, HTTP 5xx responses and rejected snapshot reloads, as static messages with release (`CARGO_PKG_VERSION`) and stack traces. Request data, headers, IPs, users and breadcrumbs are removed before sending, so signals, hashes, credentials and event IDs are never reported. `SENTRY_ENVIRONMENT` optionally sets the environment. With `networkPolicy.enabled`, `networkPolicy.rdapTo` must allow HTTPS to your Sentry ingest host; the default allows all public addresses. |
 
 IDs are 1–64 ASCII characters, start with a letter and otherwise contain letters,
 digits, underscores or dots. Server keys are 32–128 URL-safe ASCII characters;

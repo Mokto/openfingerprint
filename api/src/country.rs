@@ -99,6 +99,7 @@ impl CountryStore {
             }
         }
         self.failures.fetch_add(1, Ordering::Relaxed);
+        sentry::capture_message("country snapshot reload failed", sentry::Level::Error);
     }
 
     pub fn check(&self, value: serde_json::Value) -> Check {
