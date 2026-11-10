@@ -178,9 +178,12 @@ try {
 		try {
 			await page.goto(`${origin}/custom`);
 			const automation = await page.evaluate(() => OpenFingerprint.collectAutomation());
-			assert.equal(automation.version, 4);
-			assert.equal(automation.nativeFunctionTampering, false, 'a clean page is not tampered');
+			assert.equal(automation.version, 5);
 			assert.equal(automation.cdpDetected, name === 'chromium' || name === 'chrome', 'Playwright enables CDP Runtime in Chromium only');
+			const headlessBrand = await page.evaluate(() =>
+				!!navigator.userAgentData?.brands.some((entry) => entry.brand === 'HeadlessChrome'));
+			for (const key of ['nativeFunctionTampering', 'driverArtifacts', 'engineMismatch', 'userAgentDataMismatch'])
+				assert.equal(automation[key], false, `a clean page has no ${key}`);
 			for (const [key, value] of Object.entries(automation)) assert(key === 'version' || value === null || typeof value === 'boolean', key);
 			assert.equal(automation.softwareRenderer, null);
 			assert.equal(automation.notificationPermissionQuirk, null);
@@ -188,7 +191,7 @@ try {
 			assert.equal(automation.webdriver, await page.evaluate(() =>
 				typeof navigator.webdriver === 'boolean' ? navigator.webdriver : null));
 			if (name === 'chromium' || name === 'chrome') assert.equal(automation.webdriver, true);
-			assert.equal(automation.headlessUserAgent, await page.evaluate(() =>
+			assert.equal(automation.headlessUserAgent, headlessBrand || await page.evaluate(() =>
 				/\bHeadlessChrome\//.test(navigator.userAgent)));
 			assert.equal(automation.seleniumArtifacts, false);
 			assert.equal(automation.phantomArtifacts, false);
@@ -206,6 +209,7 @@ try {
 					if (scenario === 'markers') {
 						Object.defineProperty(document, '__webdriver_script_fn', { get() { throw new Error('must not execute'); } });
 						Object.defineProperty(window, 'callPhantom', { get() { throw new Error('must not execute'); } });
+						Object.defineProperty(window, 'cdc_adoQpoasnfa76pfcZLmcfl_Array', { get() { throw new Error('must not execute'); } });
 					}
 				}, scenario);
 				try {
@@ -214,14 +218,17 @@ try {
 					assert.deepEqual(
 						Object.fromEntries(Object.entries(observed).slice(0, 5)),
 						{
-							version: 4,
+							version: 5,
 							webdriver: unreadable ? null : false,
-							headlessUserAgent: unreadable ? null : scenario === 'markers',
+							headlessUserAgent: unreadable ? null : scenario === 'markers' || headlessBrand,
 							seleniumArtifacts: scenario === 'markers',
 							phantomArtifacts: scenario === 'markers'
 						}
 					);
+					assert.equal(observed.driverArtifacts, scenario === 'markers');
 					if (unreadable) {
+						assert.equal(observed.engineMismatch, null);
+						assert.equal(observed.userAgentDataMismatch, null);
 						assert.equal(observed.platformMismatch, null);
 						assert.equal(observed.missingChromeObject, null);
 						assert.equal(observed.emptyPlugins, null);
@@ -244,6 +251,10 @@ try {
 				const spoofed = await spoof.evaluate(() => OpenFingerprint.collectAutomation());
 				for (const key of ['platformMismatch', 'missingChromeObject', 'emptyPlugins', 'emptyLanguages', 'zeroDimensions', 'nativeFunctionTampering'])
 					assert.equal(spoofed[key], true, key);
+				const blink = name === 'chromium' || name === 'chrome';
+				assert.equal(spoofed.engineMismatch, !blink, 'a Chrome user agent contradicts a non-V8 engine');
+				assert.equal(spoofed.userAgentDataMismatch, blink && await spoof.evaluate(() =>
+					navigator.userAgentData.brands.find((entry) => entry.brand === 'Chromium').version !== '156'));
 				const collected = await spoof.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
 				assert(['notificationPermissionQuirk', 'workerUserAgentMismatch'].every((key) => typeof collected.automation[key] === 'boolean'));
 				assert.equal(collected.automation.workerUserAgentMismatch, true);
@@ -319,6 +330,23 @@ try {
 			assert.equal(await probe(() => {
 				Permissions.prototype.query = function query() { return Promise.resolve({ state: 'prompt' }); };
 			}), true, 'a replaced Permissions.query is found');
+			assert.equal(await probe(() => {
+				Permissions.prototype.query = new Proxy(Permissions.prototype.query, {});
+			}), true, 'a Proxy around Permissions.query is found although toString calls it native');
+			assert.equal(await probe(() => {
+				Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+			}), true, 'a webdriver override on the navigator instance is found');
+			assert.equal(await probe(() => {
+				delete Navigator.prototype.webdriver;
+			}), true, 'a deleted webdriver getter is found');
+			assert.equal(await probe(() => {
+				const create = document.createElement.bind(document);
+				document.createElement = (tag) => {
+					const element = create(tag);
+					if (tag === 'iframe') Object.defineProperty(element, 'contentWindow', { get: () => window });
+					return element;
+				};
+			}), true, 'a detached frame with a window, as puppeteer-extra-plugin-stealth fakes, is found');
 			assert.equal(await probe(undefined, true), null, 'no frame means unknown, not a verdict');
 			assert.equal(await probe(undefined, true, 'cdpDetected'), null, 'no frame leaves CDP unknown');
 			const wrapped = await fresh(() => {
@@ -342,9 +370,28 @@ try {
 			}
 			report.checks.push({
 				browser: name,
-				check: 'Native function and CDP probes ignore page wrappers, leave page globals alone, find masked patches and are unknown without a frame',
+				check: 'Native function and CDP probes ignore page wrappers, leave page globals alone, find masked, proxied, deleted and instance patches and are unknown without a frame',
 				passed: true
 			});
+			// Playwright installs an exposed function's binding in every page of its context.
+			const isolated = await browser.newContext();
+			try {
+				const bound = await isolated.newPage();
+				await bound.exposeFunction('reportBack', () => true);
+				await bound.goto(`${origin}/custom`);
+				assert.equal(await bound.evaluate(() => OpenFingerprint.collectAutomation().driverArtifacts), true, 'a Playwright binding is a driver artifact');
+			} finally {
+				await isolated.close();
+			}
+			const background = await fresh(() => {
+				Object.defineProperty(window, 'outerWidth', { configurable: true, get: () => 0 });
+				Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+			});
+			try {
+				assert.equal(await background.evaluate(() => OpenFingerprint.collectAutomation().zeroDimensions), null, 'a hidden tab with a 0x0 window is unknown');
+			} finally {
+				await background.close();
+			}
 			report.checks.push({
 				browser: name,
 				check: 'Automation observations isolate throwing/missing properties and never execute artifact getters',
@@ -1150,7 +1197,7 @@ try {
 			assert(!diagnosticTimeout.excluded.includes('fonts'));
 			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
 			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
-			assert.equal(diagnosticTimeout.automation.version, 4);
+			assert.equal(diagnosticTimeout.automation.version, 5);
 			assert(diagnosticTimeout.components.canvas);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);
