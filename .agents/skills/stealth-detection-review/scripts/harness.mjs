@@ -1,0 +1,207 @@
+#!/usr/bin/env node
+// Opens a local page that runs the built SDK in each stealth/automation tool and reports which
+// automation and tampering probes fire. Tools install into ~/.cache/openfingerprint-stealth at
+// their latest versions, so each run tests what attackers would download that day.
+//
+// node harness.mjs [--sdk sdk/dist/index.iife.js] [--only name,name] [--headed] [--timeout 120]
+import { spawn, execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { parseArgs } from 'node:util';
+
+const { values } = parseArgs({
+	options: {
+		sdk: { type: 'string', default: 'sdk/dist/index.iife.js' },
+		only: { type: 'string' },
+		headed: { type: 'boolean', default: false },
+		timeout: { type: 'string', default: '120' }
+	}
+});
+const sdk = readFileSync(resolve(values.sdk), 'utf8');
+const cache = join(homedir(), '.cache', 'openfingerprint-stealth');
+mkdirSync(join(cache, 'results'), { recursive: true });
+const headless = !values.headed;
+
+const PAGE = `<!doctype html><html lang="en"><body><p>probe</p><script>${sdk.replace(/<\/script/gi, '<\\/script')}</script><script>
+setTimeout(async () => {
+	let body;
+	try {
+		const r = await OpenFingerprint.collect({ timeoutMs: 5000 });
+		body = { automation: r.automation, tampering: r.tampering, userAgent: navigator.userAgent,
+			brands: navigator.userAgentData?.brands ?? null, unavailable: r.unavailable };
+	} catch (error) {
+		body = { error: String(error && error.stack || error) };
+	}
+	await fetch('/result' + location.search, { method: 'POST', body: JSON.stringify(body) });
+}, 3000);
+</script></body></html>`;
+
+// Each Node driver opens the URL and stays open; the harness closes it once the page reports.
+const node = {
+	'playwright-chromium': async (url, m) => {
+		const browser = await m('playwright').chromium.launch({ headless });
+		await (await browser.newPage()).goto(url);
+		return () => browser.close();
+	},
+	'playwright-firefox': async (url, m) => {
+		const browser = await m('playwright').firefox.launch({ headless });
+		await (await browser.newPage()).goto(url);
+		return () => browser.close();
+	},
+	'playwright-extra-stealth': async (url, m) => {
+		const chromium = m('playwright-extra').addExtra(m('playwright').chromium);
+		chromium.use(m('puppeteer-extra-plugin-stealth')());
+		const browser = await chromium.launch({ headless });
+		await (await browser.newPage()).goto(url);
+		return () => browser.close();
+	},
+	patchright: async (url, m) => {
+		const { chromium } = m('patchright');
+		const context = await chromium.launchPersistentContext(join(cache, 'patchright-profile'), { headless, viewport: null });
+		await (await context.newPage()).goto(url);
+		return () => context.close();
+	},
+	'rebrowser-playwright': async (url, m) => {
+		const browser = await m('rebrowser-playwright').chromium.launch({ headless });
+		await (await browser.newPage()).goto(url);
+		return () => browser.close();
+	}
+};
+
+// Python drivers get the URL as argv[1] and Playwright's Chrome for Testing as argv[2], and sleep
+// until the harness kills their process group. The installed Google Chrome does not start under
+// chromedriver or nodriver on this Mac ("unable to discover open pages").
+const python = {
+	camoufox: {
+		packages: ['camoufox[geoip]'],
+		setup: 'import subprocess, sys; subprocess.run([sys.executable, "-m", "camoufox", "fetch"], check=True)',
+		code: `import sys, time
+from camoufox.sync_api import Camoufox
+with Camoufox(headless=${headless ? 'True' : 'False'}) as browser:
+    browser.new_page().goto(sys.argv[1])
+    time.sleep(600)`
+	},
+	nodriver: {
+		packages: ['nodriver'],
+		code: `import sys, asyncio, nodriver as uc
+async def main():
+    browser = await uc.start(headless=${headless ? 'True' : 'False'}, browser_executable_path=sys.argv[2])
+    # The first tab never navigates in current Chrome: nodriver picks a browser_ui target.
+    tab = await browser.get(sys.argv[1], new_tab=True)
+    await tab.activate()
+    await asyncio.sleep(600)
+uc.loop().run_until_complete(main())`
+	},
+	'seleniumbase-uc': {
+		packages: ['seleniumbase'],
+		code: `import sys, time
+from seleniumbase import Driver
+driver = Driver(uc=True, headless=${headless ? 'True' : 'False'}, binary_location=sys.argv[2])
+driver.uc_open_with_reconnect(sys.argv[1], 1)
+time.sleep(600)`
+	},
+	'selenium-chromedriver': {
+		packages: ['selenium'],
+		code: `import sys, time
+from selenium import webdriver
+options = webdriver.ChromeOptions()
+${headless ? "options.add_argument('--headless=new')" : ''}
+options.binary_location = sys.argv[2]
+driver = webdriver.Chrome(options=options)
+driver.get(sys.argv[1])
+driver.find_element('tag name', 'body')
+time.sleep(600)`
+	}
+};
+
+const selected = values.only?.split(',') ?? [...Object.keys(node), ...Object.keys(python)];
+const unknown = selected.filter((name) => !(name in node) && !(name in python));
+if (unknown.length) throw new Error(`Unknown drivers: ${unknown.join(', ')}`);
+
+const npmPackages = ['playwright', 'playwright-extra', 'puppeteer-extra-plugin-stealth', 'patchright', 'rebrowser-playwright'];
+const sh = (cmd, args, cwd = cache) => execFileSync(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+const setupErrors = {};
+if (selected.some((name) => name in node)) {
+	if (!existsSync(join(cache, 'package.json'))) writeFileSync(join(cache, 'package.json'), '{"private":true}');
+	try {
+		sh('npm', ['install', '--no-audit', '--no-fund', ...npmPackages.map((p) => `${p}@latest`)]);
+		sh('npx', ['playwright', 'install', 'chromium', 'firefox']);
+		sh('npx', ['patchright', 'install', 'chromium']);
+		sh('npx', ['rebrowser-playwright', 'install', 'chromium']);
+	} catch (error) {
+		setupErrors.npm = String(error.stderr || error.message).slice(-2000);
+	}
+}
+const load = createRequire(join(cache, 'package.json'));
+const versions = {};
+for (const name of npmPackages)
+	try {
+		versions[name] = JSON.parse(readFileSync(join(cache, 'node_modules', name, 'package.json'), 'utf8')).version;
+	} catch {}
+const testingChrome = () => load('playwright').chromium.executablePath();
+const uv = (packages, args) => ['run', '--quiet', '--no-project', '--python', '3.12', '--refresh', ...packages.flatMap((p) => ['--with', p]), 'python', ...args];
+
+const waiting = new Map();
+const server = createServer((req, res) => {
+	const url = new URL(req.url, 'http://localhost');
+	if (req.method === 'POST' && url.pathname === '/result') {
+		let body = '';
+		req.on('data', (chunk) => (body += chunk));
+		req.on('end', () => {
+			waiting.get(url.searchParams.get('driver'))?.(JSON.parse(body));
+			res.end('ok');
+		});
+		return;
+	}
+	res.setHeader('content-type', 'text/html; charset=utf-8');
+	res.end(PAGE);
+}).listen(0, '127.0.0.1');
+await new Promise((ok) => server.once('listening', ok));
+const base = `http://localhost:${server.address().port}/`;
+
+const results = {};
+for (const name of selected) {
+	const url = `${base}?driver=${encodeURIComponent(name)}`;
+	const reported = new Promise((ok) => waiting.set(name, ok));
+	const timeout = new Promise((ok) => setTimeout(() => ok({ error: `no report within ${values.timeout}s` }), Number(values.timeout) * 1000));
+	let close = async () => {};
+	try {
+		if (name in node) {
+			if (setupErrors.npm) throw new Error(`npm setup failed: ${setupErrors.npm}`);
+			close = await node[name](url, load);
+		} else {
+			const { packages, setup, code } = python[name];
+			if (setup) sh('uv', uv(packages, ['-c', setup]));
+			const child = spawn('uv', uv(packages, ['-c', code, url, testingChrome()]), { cwd: cache, detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+			let stderr = '';
+			child.stderr.on('data', (chunk) => (stderr = (stderr + chunk).slice(-2000)));
+			const exited = new Promise((ok) => child.on('exit', (code) => ok({ error: `exited ${code}: ${stderr}` })));
+			close = async () => {
+				try {
+					process.kill(-child.pid, 'SIGKILL');
+				} catch {}
+			};
+			results[name] = await Promise.race([reported, timeout, exited]);
+		}
+		results[name] ??= await Promise.race([reported, timeout]);
+	} catch (error) {
+		results[name] = { error: String(error.message || error).slice(0, 2000) };
+	} finally {
+		await Promise.resolve(close()).catch(() => {});
+	}
+	const r = results[name];
+	const fired = (section) => Object.entries(r[section] ?? {}).filter(([k, v]) => k !== 'version' && v === true).map(([k]) => k);
+	const unknown = Object.entries(r.automation ?? {}).filter(([, v]) => v === null).map(([k]) => k);
+	console.log(
+		r.error
+			? `- ${name}: error: ${r.error.split('\n')[0]}`
+			: `- ${name}: automation [${fired('automation').join(', ') || 'none'}] tampering [${fired('tampering').join(', ') || 'none'}] unknown [${unknown.join(', ') || 'none'}]`
+	);
+}
+server.close();
+const file = join(cache, 'results', `${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+writeFileSync(file, JSON.stringify({ versions, headless, results }, null, 2));
+console.log(`\nFull results: ${file}`);
