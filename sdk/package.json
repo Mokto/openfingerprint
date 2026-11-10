@@ -1,6 +1,6 @@
 {
 	"name": "@openfingerprint/sdk",
-	"version": "0.10.1",
+	"version": "0.10.2",
 	"description": "A standalone browser signal collector for fraud-prevention experiments.",
 	"keywords": [
 		"browser-fingerprinting",
