@@ -94,12 +94,12 @@ Every `collect()` result and `onIdentity` snapshot includes `automation`.
 Forward `{ signals: result.token }` to a compatible `/v1/check` to receive the evaluation
 in `response.automation` (`response.signals.automation` with `detail: true`). No opt-in or separate call is needed.
 Automation remains outside fingerprint hashes, so the identity schema is unchanged.
-Deploy the compatible API first: older versions reject this additional SDK field.
+Deploy the compatible API first: older versions reject automation evidence versions they do not define, including version 4.
 `collectAutomation()` remains available as a synchronous browser-only helper.
 
 | Field | Observation |
 | --- | --- |
-| `version` | Always `2`, independent of the fingerprint schema. |
+| `version` | Always `4`, independent of the fingerprint schema. |
 | `webdriver` | The boolean `navigator.webdriver` value. |
 | `headlessUserAgent` | A `HeadlessChrome/` token in the user-agent string. |
 | `seleniumArtifacts` | Presence of `__webdriver_evaluate`, `__selenium_evaluate`, `__webdriver_script_fn` or `__selenium_unwrapped` on `document`. |
@@ -111,7 +111,7 @@ Deploy the compatible API first: older versions reject this additional SDK field
 | `emptyLanguages` | Empty `navigator.languages`. |
 | `softwareRenderer` | Unmasked WebGL renderer matches SwiftShader, llvmpipe, softpipe, software rasterizer or Mesa offscreen. Taken from the GPU probe, so `collect()` only. |
 | `zeroDimensions` | Screen or outer-window width or height of 0. |
-| `cdpDetected` | A `stack` getter on an `Error` passed to `console.debug` was read, as CDP clients and open DevTools do. |
+| `cdpDetected` | An error passed to `console.debug` in a fresh same-origin frame had its stack formatted (V8 called that frame's `Error.prepareStackTrace`), which happens only while a CDP client has `Runtime.enable` on: Puppeteer, Playwright, ChromeDriver or open DevTools. Always false outside V8. Clients that avoid `Runtime.enable` are not seen. Unknown when no frame can be created. |
 | `nativeFunctionTampering` | The `navigator.webdriver` getter or `Permissions.prototype.query` is not native code when read with the `toString` of a fresh same-origin frame, or `Function.prototype.toString` accepts a non-function. A `toString` wrapper that still answers correctly, as error monitors install, is not reported. Unknown when no frame can be created. |
 | `workerUserAgentMismatch` | A blob dedicated worker reports a different UA or platform than the main thread. `collect()` only. |
 

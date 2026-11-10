@@ -95,6 +95,7 @@ pub fn check(value: Value) -> Check {
         Some(1) => 1,
         Some(2) => 2,
         Some(3) => 3,
+        Some(4) => 4,
         _ => return result,
     };
     let probes: Vec<_> = V1
@@ -166,7 +167,7 @@ mod tests {
         ));
         check(all_false(json!({"cdpDetected": true})));
         check(all_false(json!({})));
-        check(json!({"version": 4}));
+        check(json!({"version": 5}));
         let after = metrics();
         // Other tests share these statics, so assert increases only.
         assert!(value(&after, detected) >= value(&before, detected) + 2);
@@ -229,18 +230,26 @@ mod tests {
     }
 
     #[test]
-    fn version_three_carries_the_version_two_probes_and_echoes_its_version() {
-        let mut report = json!({"version": 3});
-        for (name, _) in V1.iter().chain(&V2) {
-            report[*name] = json!(false);
+    fn versions_three_and_four_carry_the_version_two_probes_and_echo_their_version() {
+        for version in [3, 4] {
+            let mut report = json!({"version": version});
+            for (name, _) in V1.iter().chain(&V2) {
+                report[*name] = json!(false);
+            }
+            let clean = check(report.clone());
+            assert_eq!(
+                (clean.status, clean.rule_version),
+                ("not_detected", version)
+            );
+            report["cdpDetected"] = json!(true);
+            let result = check(report);
+            assert_eq!(result.status, "detected");
+            assert_eq!(result.indicators, ["cdp_detected"]);
+            assert_eq!(
+                check(json!({"version": version})).unavailable_probes.len(),
+                14
+            );
         }
-        let clean = check(report.clone());
-        assert_eq!((clean.status, clean.rule_version), ("not_detected", 3));
-        report["nativeFunctionTampering"] = json!(true);
-        let result = check(report);
-        assert_eq!(result.status, "detected");
-        assert_eq!(result.indicators, ["native_function_tampering"]);
-        assert_eq!(check(json!({"version": 3})).unavailable_probes.len(), 14);
     }
 
     #[test]
@@ -251,7 +260,7 @@ mod tests {
             json!([]),
             json!("automation"),
             json!({}),
-            json!({"version": 4}),
+            json!({"version": 5}),
             json!({"version": -1}),
             json!({"version": 1.5}),
             json!({"version": "1"}),
@@ -266,6 +275,8 @@ mod tests {
             json!({"version": 2, "softwareRenderer": 1}),
             json!({"version": 3, "extra": true}),
             json!({"version": 3, "nativeFunctionTampering": "true"}),
+            json!({"version": 4, "extra": true}),
+            json!({"version": 4, "cdpDetected": "true"}),
         ] {
             let result = check(value);
             assert_eq!(result.status, "invalid_input");
