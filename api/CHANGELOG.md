@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.1](https://github.com/Mokto/openfingerprint/compare/api-v0.18.0...api-v0.18.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **api:** accept FakeFilter observation times rounded past the feed timestamp ([#104](https://github.com/Mokto/openfingerprint/issues/104)) ([20c12af](https://github.com/Mokto/openfingerprint/commit/20c12afe095e02d129d15cb316bdfd9ea48eb89b))
+* **data:** merge the weekly domain data refresh automatically after CI ([#106](https://github.com/Mokto/openfingerprint/issues/106)) ([4f3f75c](https://github.com/Mokto/openfingerprint/commit/4f3f75cda1bfbb423497adc0aefeaa3f91b7d76d))
+
 ## [0.18.0](https://github.com/Mokto/openfingerprint/compare/api-v0.17.0...api-v0.18.0) (2026-11-09)
 
 
