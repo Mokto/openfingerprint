@@ -18,7 +18,8 @@
       "package-name": "@openfingerprint/sdk",
       "component": "sdk",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.10.2"
     }
   }
 }
