@@ -178,8 +178,9 @@ try {
 		try {
 			await page.goto(`${origin}/custom`);
 			const automation = await page.evaluate(() => OpenFingerprint.collectAutomation());
-			assert.equal(automation.version, 3);
+			assert.equal(automation.version, 4);
 			assert.equal(automation.nativeFunctionTampering, false, 'a clean page is not tampered');
+			assert.equal(automation.cdpDetected, name === 'chromium' || name === 'chrome', 'Playwright enables CDP Runtime in Chromium only');
 			for (const [key, value] of Object.entries(automation)) assert(key === 'version' || value === null || typeof value === 'boolean', key);
 			assert.equal(automation.softwareRenderer, null);
 			assert.equal(automation.notificationPermissionQuirk, null);
@@ -213,7 +214,7 @@ try {
 					assert.deepEqual(
 						Object.fromEntries(Object.entries(observed).slice(0, 5)),
 						{
-							version: 3,
+							version: 4,
 							webdriver: unreadable ? null : false,
 							headlessUserAgent: unreadable ? null : scenario === 'markers',
 							seleniumArtifacts: scenario === 'markers',
@@ -289,13 +290,13 @@ try {
 				check: 'Spoofing evidence matches the headers the browser sends and is null when unreadable',
 				passed: true
 			});
-			const probe = async (init, late) => {
+			const probe = async (init, late, key = 'nativeFunctionTampering') => {
 				const p = await fresh(init);
 				try {
-					return await p.evaluate((late) => {
+					return await p.evaluate(([late, key]) => {
 						if (late) document.createElement = () => { throw new Error('blocked'); };
-						return OpenFingerprint.collectAutomation().nativeFunctionTampering;
-					}, late);
+						return OpenFingerprint.collectAutomation()[key];
+					}, [late, key]);
 				} finally {
 					await p.close();
 				}
@@ -319,9 +320,29 @@ try {
 				Permissions.prototype.query = function query() { return Promise.resolve({ state: 'prompt' }); };
 			}), true, 'a replaced Permissions.query is found');
 			assert.equal(await probe(undefined, true), null, 'no frame means unknown, not a verdict');
+			assert.equal(await probe(undefined, true, 'cdpDetected'), null, 'no frame leaves CDP unknown');
+			const wrapped = await fresh(() => {
+				const debug = console.debug;
+				window.stackReads = 0;
+				console.debug = function (...args) {
+					for (const arg of args) if (arg instanceof Error) (window.stackReads++, arg.stack);
+					return debug.apply(this, args);
+				};
+				Error.prepareStackTrace = (error) => String(error);
+			});
+			try {
+				const observed = await wrapped.evaluate(() => {
+					const prepare = Error.prepareStackTrace;
+					const cdp = OpenFingerprint.collectAutomation().cdpDetected;
+					return { cdp, stackReads: window.stackReads, untouched: Error.prepareStackTrace === prepare };
+				});
+				assert.deepEqual(observed, { cdp: name === 'chromium' || name === 'chrome', stackReads: 0, untouched: true });
+			} finally {
+				await wrapped.close();
+			}
 			report.checks.push({
 				browser: name,
-				check: 'Native function probe ignores a delegating toString wrapper, finds masked patches and is unknown without a frame',
+				check: 'Native function and CDP probes ignore page wrappers, leave page globals alone, find masked patches and are unknown without a frame',
 				passed: true
 			});
 			report.checks.push({
@@ -372,8 +393,7 @@ try {
 			);
 			valid(a);
 			const { notificationPermissionQuirk, workerUserAgentMismatch, softwareRenderer, ...rest } = a.automation;
-			for (const [key, value] of Object.entries(rest))
-				if (key !== 'cdpDetected') assert.equal(value, automation[key], key);
+			for (const [key, value] of Object.entries(rest)) assert.equal(value, automation[key], key);
 			for (const value of [notificationPermissionQuirk, workerUserAgentMismatch, softwareRenderer])
 				assert(value === null || typeof value === 'boolean');
 			assert(!('webdriver' in a.hints));
@@ -1130,7 +1150,7 @@ try {
 			assert(!diagnosticTimeout.excluded.includes('fonts'));
 			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
 			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
-			assert.equal(diagnosticTimeout.automation.version, 3);
+			assert.equal(diagnosticTimeout.automation.version, 4);
 			assert(diagnosticTimeout.components.canvas);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);

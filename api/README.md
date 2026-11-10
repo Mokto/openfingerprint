@@ -456,9 +456,10 @@ The response contains:
 }
 ```
 
-Evidence accepts `version: 1` with four optional booleans, or `version: 2` or `3`
-with those four plus ten more. Version 3 has the same fields as version 2; it only
-changes how the SDK observes `nativeFunctionTampering` (see the table). Each version
+Evidence accepts `version: 1` with four optional booleans, or `version: 2`, `3` or `4`
+with those four plus ten more. Versions 3 and 4 have the same fields as version 2; they
+only change how the SDK observes `nativeFunctionTampering` (3) and `cdpDetected` (4), as
+the table describes. Each version
 rejects any field it does not define, so a version-1 document cannot carry
 version-2 probes. `ruleVersion` echoes the
 evidence version. Null or omitted observations remain unknown. `indicators` and
@@ -477,7 +478,7 @@ evidence version. Null or omitted observations remain unknown. `indicators` and
 | `emptyLanguages` | `empty_languages` | 2 | `navigator.languages` is empty. |
 | `softwareRenderer` | `software_renderer` | 2 | Unmasked WebGL renderer is SwiftShader, llvmpipe, softpipe or similar. |
 | `zeroDimensions` | `zero_dimensions` | 2 | Screen or outer-window width/height is 0. |
-| `cdpDetected` | `cdp_detected` | 2 | A console-logged object's `stack` getter was read, as a CDP client or open DevTools does. |
+| `cdpDetected` | `cdp_detected` | 2 | Version 4: logging an error formatted its stack (V8 called `Error.prepareStackTrace`), which happens only while a CDP client has `Runtime.enable` on, as Puppeteer, Playwright, ChromeDriver and open DevTools do. Clients that avoid `Runtime.enable`, such as nodriver or rebrowser-patches, are not seen. Versions 2 and 3: a getter on the logged error's `stack` was read, which Chrome 137 and later never do, so their reports from current Chrome are false whether or not a client is attached. |
 | `nativeFunctionTampering` | `native_function_tampering` | 2 | Version 3: the `navigator.webdriver` getter or `Permissions.prototype.query` is not native when read with an untouched `toString`, or `Function.prototype.toString.call({})` does not throw. Version 2: also true when `Function.prototype.toString` itself is replaced, which error monitors such as Sentry do by default, so version-2 reports from such pages are positive on every visit; do not rely on it. |
 | `workerUserAgentMismatch` | `worker_user_agent_mismatch` | 2 | A dedicated worker reports a different UA or platform than the main thread. |
 
@@ -494,7 +495,7 @@ can be forged or hidden. `not_detected` is not proof of a human, and automation
 may be legitimate testing or assistive tooling, not malicious traffic. No
 good/bad bot classification, confidence, fraud score, retention or new outbound
 traffic is introduced. Deploy the compatible API before upgrading the SDK;
-older servers reject version-2 and -3 evidence.
+older servers reject evidence versions they do not define.
 
 #### Tampering indicators
 

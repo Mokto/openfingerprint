@@ -1,5 +1,5 @@
 export interface AutomationEvidence {
-	version: 3;
+	version: 4;
 	webdriver: boolean | null;
 	headlessUserAgent: boolean | null;
 	seleniumArtifacts: boolean | null;
@@ -65,51 +65,68 @@ export function isSoftwareRenderer(renderer: unknown): boolean | null {
 	return name ? /swiftshader|llvmpipe|softpipe|software rasterizer|mesa offscreen/i.test(name) : null;
 }
 
-function cdpDetected(): boolean {
-	let read = false;
-	const error = new Error();
-	Object.defineProperty(error, 'stack', {
-		get() {
-			read = true;
-			return '';
-		}
-	});
-	console.debug(error);
-	return read;
+type Frame = Window & typeof globalThis;
+
+// V8 formats a logged error's stack, running Error.prepareStackTrace, only while a CDP client has
+// Runtime.enable on: Puppeteer, Playwright, Selenium's ChromeDriver or open DevTools. Since
+// Chrome 137 it no longer runs a getter on error.stack, the older form of this check. The
+// frame's own Error and console keep page console wrappers that read .stack from tripping it.
+function cdpDetected(frame: Frame): boolean {
+	let formatted = false;
+	const probe = new frame.Error();
+	(frame.Error as { prepareStackTrace?: (error: unknown) => string }).prepareStackTrace = (error) => {
+		if (error === probe) formatted = true;
+		return '';
+	};
+	frame.console.debug(probe);
+	return formatted;
 }
 
 // Error monitors such as Sentry replace Function.prototype.toString with a wrapper that still
 // answers correctly, so its own source is not evidence of anything. The natives that automation
-// tooling patches are read with the toString of a fresh same-origin frame instead, which page
-// scripts have not touched. Without a frame the answer is unknown, never a guess.
-function nativeFunctionTampering(): boolean | null {
+// tooling patches are read with the toString of the fresh frame instead, which page scripts have
+// not touched.
+function nativeFunctionPatched(frame: Frame): boolean | null {
+	const untouched = frame.Function.prototype.toString;
+	if (typeof untouched !== 'function') return null;
+	const native = (fn: unknown) =>
+		typeof fn === 'function' &&
+		!('prototype' in fn) &&
+		/\{\s*\[native code\]\s*\}\s*$/.test(untouched.call(fn));
+	return ![
+		Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')?.get,
+		typeof Permissions === 'undefined' ? undefined : Permissions.prototype.query
+	].every((fn) => fn === undefined || native(fn));
+}
+
+// Without a fresh same-origin frame both answers are unknown, never a guess.
+function observeInFrame(): [boolean | null, boolean | null] {
+	try {
+		const parent = document.body ?? document.documentElement;
+		if (!parent) return [null, null];
+		const frame = document.createElement('iframe');
+		frame.style.display = 'none';
+		frame.setAttribute('aria-hidden', 'true');
+		frame.tabIndex = -1;
+		parent.appendChild(frame);
+		try {
+			const context = frame.contentWindow as Frame | null;
+			if (!context) return [null, null];
+			return [observe(() => cdpDetected(context)), observe(() => nativeFunctionPatched(context))];
+		} finally {
+			frame.remove();
+		}
+	} catch {
+		return [null, null];
+	}
+}
+
+function nativeFunctionTampering(patched: boolean | null): boolean | null {
 	try {
 		Function.prototype.toString.call({});
 		return true;
 	} catch (error) {
-		if (!(error instanceof TypeError)) return true;
-	}
-	const parent = document.body ?? document.documentElement;
-	if (!parent) return null;
-	const frame = document.createElement('iframe');
-	frame.style.display = 'none';
-	frame.setAttribute('aria-hidden', 'true');
-	frame.tabIndex = -1;
-	parent.appendChild(frame);
-	try {
-		const untouched = (frame.contentWindow as (Window & typeof globalThis) | null)?.Function.prototype
-			.toString;
-		if (typeof untouched !== 'function') return null;
-		const native = (fn: unknown) =>
-			typeof fn === 'function' &&
-			!('prototype' in fn) &&
-			/\{\s*\[native code\]\s*\}\s*$/.test(untouched.call(fn));
-		return ![
-			Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')?.get,
-			typeof Permissions === 'undefined' ? undefined : Permissions.prototype.query
-		].every((fn) => fn === undefined || native(fn));
-	} finally {
-		frame.remove();
+		return error instanceof TypeError ? patched : true;
 	}
 }
 
@@ -188,8 +205,9 @@ export function collectAutomation(): AutomationEvidence {
 		typeof document === 'undefined'
 	)
 		throw new Error('A browser context is required');
+	const [cdp, patched] = observeInFrame();
 	return {
-		version: 3,
+		version: 4,
 		webdriver: observe(() => navigator.webdriver),
 		headlessUserAgent: observe(() => {
 			const userAgent = navigator.userAgent;
@@ -220,8 +238,8 @@ export function collectAutomation(): AutomationEvidence {
 			const sizes = [screen.width, screen.height, outerWidth, outerHeight];
 			return sizes.every(Number.isFinite) ? sizes.includes(0) : null;
 		}),
-		cdpDetected: observe(cdpDetected),
-		nativeFunctionTampering: observe(nativeFunctionTampering),
+		cdpDetected: cdp,
+		nativeFunctionTampering: observe(() => nativeFunctionTampering(patched)),
 		workerUserAgentMismatch: null
 	};
 }
