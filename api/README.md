@@ -1,5 +1,7 @@
 # Experimental Rust check API
 
+Documentation: [openfingerprint.com/docs/api](https://openfingerprint.com/docs/api)
+
 A self-hosted, MIT-licensed backend companion to the browser SDK. The next release
 provides stateless `POST /v1/check` with independent browser, automation, domain
 and IP sections.

@@ -1,5 +1,7 @@
 # Open domain and country data
 
+Documentation: [openfingerprint.com/docs/data](https://openfingerprint.com/docs/data)
+
 `domains.json` is a versioned public-data snapshot, not visitor history. It includes
 source revisions, retrieval/expiry times, license texts and license SHA-256 values.
 It contains no email addresses, browser profiles, account associations or IP history.
