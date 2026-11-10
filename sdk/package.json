@@ -2,6 +2,13 @@
 	"name": "@openfingerprint/sdk",
 	"version": "0.10.1",
 	"description": "A standalone browser signal collector for fraud-prevention experiments.",
+	"keywords": [
+		"browser-fingerprinting",
+		"device-fingerprint",
+		"bot-detection",
+		"fraud-prevention",
+		"fingerprintjs-alternative"
+	],
 	"license": "MIT",
 	"author": "Théo Mathieu",
 	"type": "module",
@@ -14,7 +21,7 @@
 		"url": "git+https://github.com/Mokto/openfingerprint.git",
 		"directory": "sdk"
 	},
-	"homepage": "https://github.com/Mokto/openfingerprint/tree/main/sdk#readme",
+	"homepage": "https://openfingerprint.com/docs/sdk",
 	"bugs": {
 		"url": "https://github.com/Mokto/openfingerprint/issues"
 	},
