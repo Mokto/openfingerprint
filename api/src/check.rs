@@ -18,6 +18,7 @@ pub struct AppState {
     pub countries: crate::country::CountryStore,
     pub network: crate::network::Store,
     pub replay: crate::replay::Replay,
+    pub nonces: crate::nonce::Nonces,
 }
 impl AppState {
     pub fn from_env() -> Result<Self, &'static str> {
@@ -30,7 +31,8 @@ impl AppState {
         let mut state = Self::configure(
             crate::mx::Resolver::from_env()?,
             crate::rdap::Rdap::from_env(redis.clone())?,
-            crate::replay::Replay::from_env(redis)?,
+            crate::replay::Replay::from_env(redis.clone())?,
+            crate::nonce::Nonces::new(redis),
         );
         state.domains = crate::domains::DomainStore::from_env();
         state.countries = crate::country::CountryStore::from_env();
@@ -41,6 +43,7 @@ impl AppState {
         dns: crate::mx::Resolver,
         rdap: crate::rdap::Rdap,
         replay: crate::replay::Replay,
+        nonces: crate::nonce::Nonces,
     ) -> Self {
         Self {
             network: crate::network::Store::empty(),
@@ -50,6 +53,7 @@ impl AppState {
             dns,
             rdap,
             replay,
+            nonces,
             countries: crate::country::CountryStore::new(None),
         }
     }
@@ -128,6 +132,9 @@ struct Signals {
     /// Milliseconds since the Unix epoch on the collecting browser's clock.
     #[serde(default)]
     collected_at: Option<f64>,
+    /// A nonce from `/v1/nonce`, when the caller gave the SDK one.
+    #[serde(default)]
+    nonce: Option<String>,
     #[serde(default)]
     timings: BTreeMap<String, Timing>,
 }
@@ -208,6 +215,7 @@ impl Signals {
         let hashes = [&self.components, &self.hints];
         if self.version != 1
             || self.storage_id.is_some()
+            || self.nonce.as_ref().is_some_and(|n| n.len() > 64)
             || self
                 .collected_at
                 .is_some_and(|at| !(at.is_finite() && (0.0..=1e15).contains(&at)))
@@ -324,6 +332,9 @@ pub(crate) struct SignalCheck {
     /// Negative when that clock is ahead; absent without a collection time.
     #[serde(rename = "tokenAgeMs", skip_serializing_if = "Option::is_none")]
     token_age_ms: Option<i64>,
+    /// The outcome of the token's nonce. Absent when the token has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) nonce: Option<crate::nonce::Check>,
 }
 
 #[derive(Serialize)]
@@ -437,6 +448,11 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
                 out.insert(key.into(), value.clone());
             }
         }
+        match signals["nonce"]["status"].as_str() {
+            Some("valid") => out.insert("nonce".into(), json!(true)),
+            Some("reused" | "expired" | "not_issued") => out.insert("nonce".into(), json!(false)),
+            _ => None,
+        };
         if signals["status"] == "invalid_input" {
             invalid.push("signals");
         }
@@ -523,6 +539,7 @@ pub(crate) fn check_signals(
         return SignalCheck {
             token_age_ms: signals.collected_at.map(age_ms),
             replayed: None,
+            nonce: None,
             automation: signals.automation.map(crate::automation::check),
             tampering: signals.tampering.map(crate::tampering::check),
             spoofing: headers.map(|h| crate::spoofing::check(signals.spoofing.as_ref(), h)),
@@ -557,6 +574,7 @@ pub(crate) fn check_signals(
         reason: Some("invalid_signals"),
         evidence: None,
         replayed: None,
+        nonce: None,
         token_age_ms: None,
     }
 }
@@ -652,9 +670,18 @@ pub(crate) async fn evaluate(
             };
             if check.profile.status != "invalid_input" {
                 let key = crate::replay::key(&opened);
-                check.replayed = timed(Step::Replay, state.replay.first_seen(&key))
-                    .await
-                    .map(|first| !first);
+                let nonce = async {
+                    match opened.get("nonce").and_then(serde_json::Value::as_str) {
+                        Some(nonce) => Some(crate::nonce::Check {
+                            status: timed(Step::Nonce, state.nonces.consume(nonce)).await,
+                        }),
+                        None => None,
+                    }
+                };
+                let (first, nonce) =
+                    tokio::join!(timed(Step::Replay, state.replay.first_seen(&key)), nonce);
+                check.replayed = first.map(|first| !first);
+                check.nonce = nonce;
             }
             Some(check)
         }
@@ -735,6 +762,7 @@ pub(crate) mod tests {
             dns(),
             rdap(),
             crate::replay::Replay::new(crate::cache::tests::client_for(addr), 60),
+            crate::nonce::Nonces::new(crate::cache::tests::client_for(addr)),
         )
     }
     pub(crate) fn state() -> AppState {
@@ -859,6 +887,67 @@ pub(crate) mod tests {
             check_signals(serde_json::json!({}), None)
                 .token_age_ms
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_nonce_counts_once_even_when_the_rest_of_the_token_changes() {
+        let (addr, _) = crate::cache::tests::fake_redis(None).await;
+        let state = state_with_redis(&addr);
+        let (nonce, _) = state.nonces.issue(600).await.unwrap();
+        let with = |nonce: &str, duration: u32| {
+            let mut token = payload();
+            token["nonce"] = serde_json::json!(nonce);
+            token["durationMs"] = serde_json::json!(duration);
+            seal(&token, [1, 2, 3, 4])
+        };
+        let first = evaluate(&state, request(&with(&nonce, 1), true))
+            .await
+            .unwrap();
+        assert_eq!(
+            first["signals"]["nonce"],
+            serde_json::json!({"status":"valid"})
+        );
+        let edited = evaluate(&state, request(&with(&nonce, 2), false))
+            .await
+            .unwrap();
+        assert_eq!(
+            (&edited["nonce"], &edited["replayed"]),
+            (&serde_json::json!(false), &serde_json::json!(false)),
+            "new content is not replayed, but its nonce is spent"
+        );
+        let invented = evaluate(&state, request(&with(&"A".repeat(32), 3), true))
+            .await
+            .unwrap();
+        assert_eq!(invented["signals"]["nonce"]["status"], "expired");
+        let none = evaluate(&state, request(&seal(&payload(), [5, 6, 7, 8]), false))
+            .await
+            .unwrap();
+        assert!(
+            none.get("nonce").is_none(),
+            "a token without a nonce has no verdict"
+        );
+        assert_eq!(
+            check_signals(
+                {
+                    let mut long = payload();
+                    long["nonce"] = serde_json::json!("A".repeat(65));
+                    long
+                },
+                None
+            )
+            .profile
+            .status,
+            "invalid_input"
+        );
+
+        let down = state_with_redis("127.0.0.1:9");
+        let unknown = evaluate(&down, request(&with(&nonce, 4), false))
+            .await
+            .unwrap();
+        assert!(
+            unknown.get("nonce").is_none(),
+            "unknown when Redis cannot say"
         );
     }
 

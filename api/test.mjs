@@ -156,6 +156,11 @@ const redis = createTcpServer(socket => {
                 else { redisStore.set(args[1], args[2]); socket.write('+OK\r\n'); }
             }
             else if (args[0] === 'SET' && args[3] === 'EX') { redisStore.set(args[1], args[2]); socket.write('+OK\r\n'); }
+            else if (args[0] === 'SET' && args[3] === 'XX' && args[4] === 'KEEPTTL' && args[5] === 'GET') {
+                const previous = redisStore.get(args[1]);
+                if (previous === undefined) socket.write('$-1\r\n');
+                else { redisStore.set(args[1], args[2]); socket.write(`$${previous.length}\r\n${previous}\r\n`); }
+            }
             else socket.write('-ERR unsupported\r\n');
         }
     });
@@ -636,6 +641,42 @@ try {
     const spoofedViaConnect = await connectCheck({ signals: spoofedToken(), headers: { ...sent, secChUaPlatform: '"macOS"' } });
     assert.equal(spoofedViaConnect.status, 200);
     assert.equal((await spoofedViaConnect.json()).spoofing, true);
+    phase = 'nonces are minted for the backend and count once in checks';
+    const mint = (body, headers = {}) => fetch(origin + '/v1/nonce', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+    const minted = await mint({});
+    assert.equal(minted.status, 200);
+    const { nonce, expiresAt } = await minted.json();
+    assert.match(nonce, /^[A-Za-z0-9_-]{32}$/);
+    assert(Math.abs(expiresAt - (Date.now() / 1000 + 1800)) < 5, 'default lifetime is 30 minutes');
+    assert(Math.abs((await (await mint({ ttlSeconds: 120 })).json()).expiresAt - (Date.now() / 1000 + 120)) < 5);
+    for (const bad of [{ ttlSeconds: 10 }, { ttlSeconds: 86401 }, { ttl: 60 }])
+        assert.equal((await mint(bad)).status, 400, JSON.stringify(bad));
+    assert.equal((await mint({}, { origin: 'https://evil.test' })).status, 403);
+    const withNonce = (value) => ({ ...signals(), nonce: value });
+    const firstUse = await request('/v1/check', {}, { signals: withNonce(nonce) });
+    assert.deepEqual((await firstUse.json()).signals.nonce, { status: 'valid' });
+    assert.deepEqual(
+        await compactCall({ signals: seal(withNonce(nonce)) }),
+        { fingerprint: shortId(signals().fingerprint), replayed: false, nonce: false },
+        'a new token with a spent nonce: not replayed, nonce false'
+    );
+    const future = Buffer.alloc(24);
+    future.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000) + 600));
+    const invented = future.toString('base64url');
+    assert.deepEqual((await (await request('/v1/check', {}, { signals: withNonce(invented) })).json()).signals.nonce, { status: 'not_issued' });
+    assert.deepEqual((await (await request('/v1/check', {}, { signals: withNonce('A'.repeat(32)) })).json()).signals.nonce, { status: 'expired' });
+    assert.equal('nonce' in await compactCall({ signals: seal(signals()) }), false, 'no nonce, no verdict');
+    const rpcNonce = await fetch(origin + '/openfingerprint.v1.OpenFingerprint/CreateNonce', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ttlSeconds: 300 })
+    });
+    assert.equal(rpcNonce.status, 200);
+    const created = await rpcNonce.json();
+    assert(Math.abs(Number(created.expiresAt) - (Date.now() / 1000 + 300)) < 5);
+    const nonceViaConnect = await connectCheck({ signals: seal(withNonce(created.nonce)) });
+    assert.equal((await nonceViaConnect.json()).nonce, true);
+    assert.equal((await fetch(origin + '/openfingerprint.v1.OpenFingerprint/CreateNonce', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"ttlSeconds":5}'
+    })).status, 400);
     assert.equal((await fetch(origin + rpcCheck, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.test' }, body: '{"ip":"8.8.8.8"}' })).status, 403);
     console.log('All 15 input combinations, requested-only results, evidence counts and domain data state passed.');
     phase = `domain classification and source scope (${mode})`;
@@ -767,7 +808,8 @@ try {
     assert(rdapRequests.includes('mail.example') && !rdapRequests.some(name => name.split('.').length > 2), 'RDAP must query registrable domains only');
     assert.equal(rdapRequests.filter(name => name === 'rdapfound.example').length, 1, 'Cached registrations must not reach the registry again');
     assert.equal(rdapRequests.filter(name => name === 'rdapbroken.example').length, 1);
-    const rdapKeys = [...redisStore.keys()].filter(k => !k.startsWith('openfingerprint:replay:'));
+    assert([...redisStore.keys()].every(k => /^openfingerprint:(rdap:v2|replay:v1|nonce:v1):[0-9a-f]{64}$/.test(k)), 'Redis holds only hashed RDAP, replay and nonce keys');
+    const rdapKeys = [...redisStore.keys()].filter(k => k.startsWith('openfingerprint:rdap:'));
     assert(rdapKeys.length > 0 && rdapKeys.every(k => /^openfingerprint:rdap:v2:[0-9a-f]{64}$/.test(k)), 'Cache keys are hashed registered domains');
     assert(![...redisStore.values()].some(v => v === 'unavailable'), 'Unavailable answers are not cached');
     assert(!rdapRequests.some(name => /github|co\.uk|duckdns\.org$/.test(name) && name !== 'duckdns.org'), 'Private-namespace tenants and public suffixes are not registrable');
@@ -883,6 +925,12 @@ try {
     assert(await metric('openfingerprint_automation_indicators_total{indicator="webdriver"}') >= 1);
     assert.equal(await metric('openfingerprint_automation_indicators_total{indicator="cdp_detected"}'), 0);
     assert(await metric('openfingerprint_spoofing_checks_total{status="detected"}') >= 3);
+    assert(await metric('openfingerprint_nonces_total{result="issued"}') >= 3);
+    assert(await metric('openfingerprint_nonces_total{result="valid"}') >= 2);
+    assert(await metric('openfingerprint_nonces_total{result="reused"}') >= 1);
+    assert(await metric('openfingerprint_nonces_total{result="not_issued"}') >= 1);
+    assert(await metric('openfingerprint_nonces_total{result="expired"}') >= 1);
+    assert(await metric('openfingerprint_http_request_duration_seconds_count{route="nonce",status="2xx"}') >= 2);
     assert(await metric('openfingerprint_spoofing_checks_total{status="not_detected"}') >= 2);
     assert(await metric('openfingerprint_spoofing_indicators_total{indicator="user_agent_mismatch"}') >= 2);
     assert(await metric('openfingerprint_spoofing_indicators_total{indicator="client_hints_mismatch"}') >= 1);

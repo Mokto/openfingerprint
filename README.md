@@ -22,7 +22,8 @@ traffic by itself.
 The API has no authentication: run it on a private network behind your backend (see
 the [security notes](api/README.md#security)). Its checks verify submitted evidence
 without visitor storage or history; the Redis it requires holds cached registry
-answers and short-lived replay markers, nothing that identifies a person. Open
+answers, short-lived replay markers and optional single-use nonces, nothing that
+identifies a person. Open
 domain snapshots provide independent disposable, free-subdomain, public-mailbox,
 email-relay and scoped referrer-spam evidence, including recently monitored provider
 domains, provenance, expiry and exact reviewed disputes, plus typo suggestions for

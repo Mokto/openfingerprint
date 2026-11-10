@@ -466,6 +466,8 @@ export interface Options {
 	timeoutMs?: number;
 	storageKey?: string;
 	onIdentity?: (snapshot: Result) => unknown;
+	/** A nonce from the API's `/v1/nonce`, sealed into the token if it has resolved by then. */
+	nonce?: string | Promise<string>;
 }
 export interface Result {
 	automation: AutomationEvidence;
@@ -487,7 +489,8 @@ export interface Result {
 	token: string;
 }
 
-const tokenOf = ({ token: _, ...rest }: Result) => seal(rest);
+const tokenOf = ({ token: _, ...rest }: Result, nonce: string | undefined) =>
+	seal(nonce ? { ...rest, nonce } : rest);
 
 function storageId(key: string | undefined): string | null {
 	if (!key) return null;
@@ -505,6 +508,14 @@ function storageId(key: string | undefined): string | null {
 
 export async function collect(options: Options = {}): Promise<Result> {
 	const { timeoutMs = 2000, storageKey, onIdentity } = options;
+	let nonce: string | undefined;
+	if (options.nonce !== undefined)
+		Promise.resolve(options.nonce).then(
+			(value) => {
+				if (typeof value === 'string' && /^[A-Za-z0-9_-]{32}$/.test(value)) nonce = value;
+			},
+			() => {}
+		);
 	if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000)
 		throw new RangeError('timeoutMs must be between 1 and 5000');
 	if (
@@ -629,7 +640,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 				collectedAt: Date.now(),
 				durationMs: Math.round((performance.now() - start) * 10) / 10
 			};
-			snapshot.token = tokenOf(snapshot);
+			snapshot.token = tokenOf(snapshot, nonce);
 			try {
 				void Promise.resolve(onIdentity(snapshot)).catch(() => {});
 			} catch {}
@@ -639,7 +650,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		if (excluded.has('audio')) await run('audio');
 		result.collectedAt = Date.now();
 		result.durationMs = Math.round((performance.now() - start) * 10) / 10;
-		result.token = tokenOf(result);
+		result.token = tokenOf(result, nonce);
 		return result;
 	} finally {
 		controller.abort();

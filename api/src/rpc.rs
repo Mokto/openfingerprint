@@ -15,10 +15,13 @@ use crate::check::{ApiError, AppState, BODY_LIMIT, CheckRequest as Input};
 pub mod proto {
     connectrpc::include_generated!();
 }
-use proto::openfingerprint::v1::{CheckRequest, CheckResponse, OpenFingerprint};
+use proto::openfingerprint::v1::{
+    CheckRequest, CheckResponse, CreateNonceRequest, CreateNonceResponse, OpenFingerprint,
+};
 
-const PATHS: [&str; 3] = [
+const PATHS: [&str; 4] = [
     "/openfingerprint.v1.OpenFingerprint/Check",
+    "/openfingerprint.v1.OpenFingerprint/CreateNonce",
     "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
     "/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo",
 ];
@@ -33,6 +36,7 @@ impl From<ApiError> for ConnectError {
             StatusCode::FORBIDDEN => Self::permission_denied(reason),
             StatusCode::BAD_REQUEST => Self::invalid_argument(reason),
             StatusCode::PAYLOAD_TOO_LARGE => Self::resource_exhausted(reason),
+            StatusCode::SERVICE_UNAVAILABLE => Self::unavailable(reason),
             _ => Self::internal(reason),
         }
     }
@@ -74,6 +78,25 @@ impl OpenFingerprint for Check {
         Response::ok(
             serde_json::from_value(verdicts).map_err(|_| ConnectError::internal("encode"))?,
         )
+    }
+
+    async fn create_nonce(
+        &self,
+        _ctx: RequestContext,
+        request: ServiceRequest<'_, CreateNonceRequest>,
+    ) -> ServiceResult<CreateNonceResponse> {
+        let created = crate::nonce::create(
+            &self.0,
+            crate::nonce::CreateRequest {
+                ttl_seconds: request.ttl_seconds.map(u64::from),
+            },
+        )
+        .await?;
+        Response::ok(CreateNonceResponse {
+            nonce: created.nonce,
+            expires_at: created.expires_at as i64,
+            ..Default::default()
+        })
     }
 }
 
@@ -130,7 +153,7 @@ mod tests {
     fn every_compact_key_has_a_field_in_the_response_message() {
         let response: CheckResponse = serde_json::from_value(serde_json::json!({
             "fingerprint":"abc","automation":true,"tampering":false,"spoofing":true,"disposable":true,
-            "free":false,"spam":true,"relay":false,"cheapTld":true,"replayed":true,"tokenAgeMs":-1500,"mx":true,"country":"dk","vpn":true,
+            "free":false,"spam":true,"relay":false,"cheapTld":true,"replayed":true,"nonce":false,"tokenAgeMs":-1500,"mx":true,"country":"dk","vpn":true,
             "tor":false,"datacenter":true,"proxy":false,"invalid":["ip"]
         }))
         .unwrap();
@@ -171,6 +194,7 @@ mod tests {
             ]
         );
         assert_eq!(response.token_age_ms, Some(-1500));
+        assert_eq!(response.nonce, Some(false));
         assert_eq!(response.invalid, ["ip"]);
         assert_eq!(
             serde_json::from_value::<CheckResponse>(serde_json::json!({})).unwrap(),

@@ -90,6 +90,18 @@ for (const [name, code] of Object.entries(sources))
 		sha256: createHash('sha256').update(code).digest('hex')
 	};
 let pageHeaders = {};
+// The SDK's token obfuscation reversed (sdk/src/token.ts), to inspect what a token carries.
+const unseal = (token) => {
+	const bytes = Buffer.from(token, 'base64url');
+	let state = (bytes.readUInt32BE(0) ^ 0x6f667031) >>> 0;
+	const body = bytes.subarray(4).map((b) => {
+		state = (state + 0x6d2b79f5) >>> 0;
+		let t = Math.imul(state ^ (state >>> 15), state | 1);
+		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+		return b ^ ((t ^ (t >>> 14)) & 255);
+	});
+	return JSON.parse(Buffer.from(body).toString());
+};
 const server = createServer((req, res) => {
 	res.setHeader('Cache-Control', 'no-store');
 	res.setHeader(
@@ -299,6 +311,27 @@ try {
 			report.checks.push({
 				browser: name,
 				check: 'Spoofing evidence matches the headers the browser sends and is null when unreadable',
+				passed: true
+			});
+			const nonce = 'AAAAAGlJ8wBhYmNkZWZnaGlqa2xtbm9w';
+			const sealed = await page.evaluate(async (nonce) => {
+				const token = (options) => OpenFingerprint.collect({ timeoutMs: 5000, ...options }).then((r) => r.token);
+				return {
+					plain: await token({ nonce }),
+					promised: await token({ nonce: Promise.resolve(nonce) }),
+					pending: await token({ nonce: new Promise(() => {}) }),
+					rejected: await token({ nonce: Promise.reject(new Error('mint failed')) }),
+					malformed: await token({ nonce: 'not-a-nonce' }),
+					none: await token({})
+				};
+			}, nonce);
+			assert.equal(unseal(sealed.plain).nonce, nonce);
+			assert.equal(unseal(sealed.promised).nonce, nonce);
+			for (const kind of ['pending', 'rejected', 'malformed', 'none'])
+				assert.equal('nonce' in unseal(sealed[kind]), false, `${kind}: no nonce, and collect() still resolves`);
+			report.checks.push({
+				browser: name,
+				check: 'A nonce is sealed into the token when it resolves in time, and never delays or breaks collection',
 				passed: true
 			});
 			const probe = async (init, late, key = 'nativeFunctionTampering') => {

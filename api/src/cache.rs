@@ -312,6 +312,21 @@ pub mod tests {
                                     "+OK\r\n".to_owned()
                                 }
                             }
+                            "SET"
+                                if args.len() == 6
+                                    && args[3] == "XX"
+                                    && args[4] == "KEEPTTL"
+                                    && args[5] == "GET" =>
+                            {
+                                let mut store = store.lock().unwrap();
+                                match store.get_mut(&args[1]) {
+                                    Some((value, _)) => {
+                                        let previous = std::mem::replace(value, args[2].clone());
+                                        format!("${}\r\n{previous}\r\n", previous.len())
+                                    }
+                                    None => "$-1\r\n".to_owned(),
+                                }
+                            }
                             "SET" if args.len() == 5 && args[3] == "EX" => {
                                 store
                                     .lock()

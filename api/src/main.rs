@@ -8,6 +8,7 @@ mod mailauth;
 mod metrics;
 mod mx;
 mod network;
+mod nonce;
 mod providers;
 mod rdap;
 mod replay;
@@ -33,6 +34,7 @@ fn app(state: Arc<check::AppState>) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/v1/check", post(check::check))
+        .route("/v1/nonce", post(nonce::handler))
         .merge(rpc::routes(state.clone()))
         .layer(DefaultBodyLimit::max(check::BODY_LIMIT))
         .layer(middleware::from_fn(no_store))
@@ -49,6 +51,7 @@ async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::respon
             + &state.countries.metrics()
             + &state.network.metrics()
             + &state.replay.metrics()
+            + &state.nonces.metrics()
             + &automation::metrics()
             + &spoofing::metrics()
             + &metrics::render(),

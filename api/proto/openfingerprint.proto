@@ -8,6 +8,20 @@ package openfingerprint.v1;
 // private network. Server reflection is available.
 service OpenFingerprint {
   rpc Check(CheckRequest) returns (CheckResponse);
+  // A single-use nonce for one page: give it to the SDK (`collect({ nonce })`)
+  // and Check reports whether the token's nonce is valid.
+  rpc CreateNonce(CreateNonceRequest) returns (CreateNonceResponse);
+}
+
+message CreateNonceRequest {
+  // Lifetime, 60 to 86400 seconds. Default 1800.
+  optional uint32 ttl_seconds = 1;
+}
+
+message CreateNonceResponse {
+  string nonce = 1;
+  // Unix seconds.
+  int64 expires_at = 2;
 }
 
 // At least one field is required. `domain` and `email` are mutually exclusive.
@@ -56,6 +70,10 @@ message CheckResponse {
   // Milliseconds from the browser's collection time to now, by the browser's clock: negative
   // when that clock is ahead. Unset when the token has no collection time.
   optional int64 token_age_ms = 17;
+  // The token carries a nonce from CreateNonce that is unexpired and was not
+  // used before; false when it is reused, expired or was never issued. Unset
+  // when the token has no nonce or Redis cannot say.
+  optional bool nonce = 19;
   // Lowercase ISO 3166-1 alpha-2 code.
   optional string country = 9;
   optional bool vpn = 10;
