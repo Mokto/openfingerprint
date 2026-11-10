@@ -13,9 +13,11 @@ The SDK has zero runtime dependencies, no telemetry, remote code, WASM or
 import-time collection. `collect()` hashes identity locally and automatically
 includes bounded automation observations, with no networking: your backend sends
 the resulting token to the API. The token is unsigned, so the API reports whether the
-same evidence was checked before (`replayed`) and how old it is (`tokenAgeMs`). That
-limits reuse of a captured token; it does not stop forged browser observations or
-malicious traffic by itself.
+same evidence was checked before (`replayed`) and how old it is (`tokenAgeMs`). Given
+the headers of the request that carried it, it also reports whether the token
+contradicts that request (`spoofing`). That limits reuse of a captured token and
+catches careless forgery; it does not stop forged browser observations or malicious
+traffic by itself.
 
 The API has no authentication: run it on a private network behind your backend (see
 the [security notes](api/README.md#security)). Its checks verify submitted evidence

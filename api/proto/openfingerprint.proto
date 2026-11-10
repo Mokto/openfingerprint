@@ -4,8 +4,8 @@ package openfingerprint.v1;
 
 // The same compact verdicts as POST /v1/check, on the same listener, over
 // Connect (JSON or protobuf, any HTTP version), gRPC and gRPC-Web. gRPC needs
-// HTTP/2 without TLS here. Authenticate with `authorization: Bearer <key>`.
-// Server reflection is available and requires the same key.
+// HTTP/2 without TLS here. There is no authentication: keep the API on a
+// private network. Server reflection is available.
 service OpenFingerprint {
   rpc Check(CheckRequest) returns (CheckResponse);
 }
@@ -17,6 +17,19 @@ message CheckRequest {
   optional string domain = 2;
   optional string email = 3;
   optional string ip = 4;
+  // Headers of the browser request that carried `signals`, copied verbatim by
+  // the caller. Used only with `signals`, for the `spoofing` check.
+  optional RequestHeaders headers = 5;
+}
+
+// Each field is the raw value of one HTTP header; unset means the request did
+// not carry it.
+message RequestHeaders {
+  optional string user_agent = 1;
+  optional string accept_language = 2;
+  optional string sec_ch_ua = 3;
+  optional string sec_ch_ua_mobile = 4;
+  optional string sec_ch_ua_platform = 5;
 }
 
 // An unset field means unknown, not false.
@@ -25,6 +38,10 @@ message CheckResponse {
   optional string fingerprint = 1;
   optional bool automation = 2;
   optional bool tampering = 3;
+  // The browser's own report (user agent, client hints, language) contradicts
+  // the headers of the request that carried it. Unset without `headers` or when
+  // nothing could be compared.
+  optional bool spoofing = 18;
   optional bool disposable = 4;
   optional bool free = 5;
   optional bool spam = 6;
@@ -45,6 +62,7 @@ message CheckResponse {
   optional bool tor = 11;
   optional bool datacenter = 12;
   optional bool proxy = 13;
-  // Inputs that were rejected: signals, automation, tampering, domain, email, ip.
+  // Inputs that were rejected: signals, automation, tampering, spoofing, headers,
+  // domain, email, ip.
   repeated string invalid = 14;
 }

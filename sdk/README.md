@@ -6,7 +6,8 @@ A standalone, MIT-licensed TypeScript browser-signal collector with **zero runti
 
 The SDK has no telemetry, remote code, WASM or import-time collection. `collect()`
 hashes identity signals locally and always includes automation observations as
-unhashed booleans/nulls, with no network requests. You send the resulting `token`
+unhashed booleans/nulls, and the browser's user agent, language and client hints for
+the API's spoofing check, with no network requests. You send the resulting `token`
 with your form and your backend checks it. The optional self-hosted API provides
 stateless checks; it does not provide managed identification or visitor history.
 
@@ -41,7 +42,7 @@ pnpm build
 Node 24+ and pnpm 12.17.0 are used for development. Build outputs:
 
 - `dist/index.js`: standalone ES module.
-- `dist/index.iife.js`: script exposing `OpenFingerprint.collect` and `OpenFingerprint.collectAutomation`.
+- `dist/index.iife.js`: script exposing `OpenFingerprint.collect`, `OpenFingerprint.collectAutomation` and `OpenFingerprint.collectSpoofing`.
 - `dist/types/`: TypeScript declarations.
 
 The package exports resolve to the built ES module and declarations. Only
@@ -125,8 +126,8 @@ indicator, not proof.
 Each observation is `boolean | null`. Missing/non-boolean WebDriver values,
 empty/non-string user agents and throwing reads return null independently.
 Artifact checks inspect property presence without invoking getters or functions.
-The collector makes no network requests, writes no storage and returns no raw UA
-or artifact values.
+The automation collector makes no network requests, writes no storage and returns no
+raw UA or artifact values.
 
 These are client-reported, forgeable indicators, not a malicious-bot verdict.
 Hidden automation can evade them; applications can also define matching names.
@@ -145,6 +146,18 @@ it is not an automation signal and the SDK adds no verdict. The probes never aff
 the identity hashes, make no network requests and return no pixel or sample data. The
 [API](../api/README.md#tampering-indicators) evaluates it.
 
+### Spoofing evidence
+
+`collect()` also returns `spoofing`: `{ version: 1, userAgent, language, clientHints }`,
+read from `navigator.userAgent`, `navigator.language` and the low-entropy
+`navigator.userAgentData` (`{ brands, mobile, platform }`, null outside Chromium).
+These are the values the browser already sends as `User-Agent`, `Accept-Language` and
+`Sec-CH-UA*` headers, so they are kept as read, not hashed, and never affect the
+identity hashes. Unreadable or oversized values are null. Have your backend forward
+those five headers of the request that carried the token as `headers` in
+`/v1/check`; the [API](../api/README.md#spoofing-indicators) reports whether the two
+disagree. `collectSpoofing()` returns the same object synchronously.
+
 ### Sending the token
 
 `collect()` makes no network request. Send `result.token` to your backend with the
@@ -159,6 +172,10 @@ backend should act on them:
 - `tokenAgeMs`: how long ago the browser sealed the token, by the browser's clock
   (`collectedAt`). Browser clocks are often wrong, so use a generous limit and
   expect negative values.
+
+Forward the `User-Agent`, `Accept-Language` and `Sec-CH-UA*` headers of the same
+request as `headers`, and the API also reports `spoofing`: whether the token
+contradicts the request that carried it.
 
 Your backend can still compare the connection's IP address with what it expects,
 rate-limit by IP and fingerprint, and treat the same fingerprint across many new

@@ -89,6 +89,7 @@ for (const [name, code] of Object.entries(sources))
 		gzip_bytes: gzipSync(code).byteLength,
 		sha256: createHash('sha256').update(code).digest('hex')
 	};
+let pageHeaders = {};
 const server = createServer((req, res) => {
 	res.setHeader('Cache-Control', 'no-store');
 	res.setHeader(
@@ -100,6 +101,7 @@ const server = createServer((req, res) => {
 		res.setHeader('Content-Type', 'text/javascript');
 		res.end(sources[name]);
 	} else if (Object.hasOwn(runners, name)) {
+		pageHeaders = req.headers;
 		res.setHeader('Content-Type', 'text/html');
 		res.end(
 			`<!doctype html><html><meta charset="utf-8"><body><script>window.violations=[];document.addEventListener('securitypolicyviolation', e => violations.push(e.violatedDirective))</script><script src="/${name}.js"></script><script>window.run = ${runners[name]};</script></body></html>`
@@ -247,6 +249,46 @@ try {
 			} finally {
 				await spoof.close();
 			}
+			const own = await fresh();
+			try {
+				const sent = pageHeaders;
+				const claimed = await own.evaluate(() => OpenFingerprint.collectSpoofing());
+				const collected = await own.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }).then((r) => r.spoofing));
+				assert.deepEqual(collected, claimed);
+				assert.equal(claimed.version, 1);
+				assert.equal(claimed.userAgent, sent['user-agent'], 'the reported user agent is the one the browser sends');
+				const primary = (tag) => tag.split(/[-_]/)[0].toLowerCase();
+				if (sent['accept-language'])
+					assert.equal(primary(claimed.language), primary(sent['accept-language'].split(',')[0].split(';')[0]));
+				if (name === 'firefox' || name === 'webkit') {
+					assert.equal(claimed.clientHints, null);
+					assert.equal(sent['sec-ch-ua'], undefined);
+				} else {
+					const brands = [...sent['sec-ch-ua'].matchAll(/"([^"]*)";v="([^"]*)"/g)].map((m) => `${m[1]} ${m[2]}`).sort();
+					assert.deepEqual(claimed.clientHints.brands.map((b) => `${b.brand} ${b.version}`).sort(), brands);
+					assert.equal(`"${claimed.clientHints.platform}"`, sent['sec-ch-ua-platform']);
+					assert.equal(claimed.clientHints.mobile ? '?1' : '?0', sent['sec-ch-ua-mobile']);
+				}
+			} finally {
+				await own.close();
+			}
+			const unreadable = await fresh(() => {
+				Object.defineProperty(navigator, 'userAgent', { configurable: true, get() { throw new Error('blocked'); } });
+				Object.defineProperty(navigator, 'language', { configurable: true, get: () => 42 });
+				Object.defineProperty(Navigator.prototype, 'userAgentData', { configurable: true, get: () => ({ brands: 'x', mobile: false, platform: 'X' }) });
+			});
+			try {
+				assert.deepEqual(await unreadable.evaluate(() => OpenFingerprint.collectSpoofing()), {
+					version: 1, userAgent: null, language: null, clientHints: null
+				});
+			} finally {
+				await unreadable.close();
+			}
+			report.checks.push({
+				browser: name,
+				check: 'Spoofing evidence matches the headers the browser sends and is null when unreadable',
+				passed: true
+			});
 			const probe = async (init, late) => {
 				const p = await fresh(init);
 				try {
