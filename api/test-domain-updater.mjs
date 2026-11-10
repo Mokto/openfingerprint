@@ -19,6 +19,9 @@ const feed = () => ({ version: 1, t: now, domains: {
     'old.example': { provider: 'provider.example', firstseen: now - 30 * 86400, lastseen: now - 14 * 86400 - 1 }
 } });
 assert.deepEqual(monitoredDomains(JSON.stringify(feed()), now), ['boundary.example', 'recent.example']);
+const rounded = feed();
+rounded.domains['recent.example'].lastseen = now + 9999;
+assert.deepEqual(monitoredDomains(JSON.stringify(rounded), now), ['boundary.example', 'recent.example']);
 for (const change of [
     d => { d.version = 2; },
     d => { d.t = now - 3 * 86400 - 1; },
@@ -28,7 +31,7 @@ for (const change of [
     d => { d.domains['recent.example'].provider = null; },
     d => { d.domains['recent.example'].firstseen = now; },
     d => { d.domains['recent.example'].lastseen = 'yesterday'; },
-    d => { d.domains['recent.example'].lastseen = now + 301; },
+    d => { d.domains['recent.example'].lastseen = now + 10001; },
     d => { d.domains['RECENT.example'] = d.domains['recent.example']; },
     d => { d.domains['https://bad.example'] = d.domains['recent.example']; },
     d => { d.domains['old.example'].firstseen = -1; }

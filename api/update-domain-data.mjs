@@ -60,6 +60,9 @@ export function liveServiceDomains(text) {
     return domains(listed.map(([, domain]) => domain).join('\n'));
 }
 
+// FakeFilter rounds firstseen/lastseen to the nearest 10,000 s but stamps `t` exactly, so lastseen can be up to one step after `t`.
+const observationRounding = 10000;
+
 export function monitoredDomains(text, now) {
     const feed = JSON.parse(text);
     assert(feed && typeof feed === 'object' && !Array.isArray(feed), 'Invalid monitored envelope');
@@ -70,7 +73,7 @@ export function monitoredDomains(text, now) {
     for (const [, entry] of entries) {
         assert(entry && typeof entry === 'object' && !Array.isArray(entry), 'Invalid monitored observation');
         assert(typeof entry.provider === 'string' && entry.provider.length > 0 && entry.provider.length <= 256, 'Invalid monitored provider');
-        assert(Number.isSafeInteger(entry.firstseen) && entry.firstseen > 0 && Number.isSafeInteger(entry.lastseen) && entry.firstseen <= entry.lastseen && entry.lastseen <= feed.t + 300 && entry.lastseen <= now + 300, 'Invalid monitored observation time');
+        assert(Number.isSafeInteger(entry.firstseen) && entry.firstseen > 0 && Number.isSafeInteger(entry.lastseen) && entry.firstseen <= entry.lastseen && entry.lastseen <= feed.t + observationRounding && entry.lastseen <= now + observationRounding, 'Invalid monitored observation time');
     }
     return domains(entries.filter(([, entry]) => entry.lastseen >= now - 14 * 86400).map(([name]) => name).join('\n'));
 }
