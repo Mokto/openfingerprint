@@ -1,5 +1,7 @@
 # OpenFingerprint Helm chart
 
+Documentation: [openfingerprint.com/docs/deploy](https://openfingerprint.com/docs/deploy)
+
 Runs the check API and keeps its open domain and country data fresh, with the Redis
 it requires for the RDAP cache and token replay markers: bundled `redis-ha` or your own.
 When enabled, NetworkPolicies permit DNS, Redis, registry HTTPS and public HTTPS

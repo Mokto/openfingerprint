@@ -2,7 +2,7 @@
 
 A browser-signal SDK and an optional, experimental Rust check API. The code is MIT
 licensed and released independently; [datasets](api/data/README.md) retain their
-own licenses.
+own licenses. Documentation: [openfingerprint.com/docs](https://openfingerprint.com/docs).
 
 | Component | Purpose | Documentation |
 | --- | --- | --- |

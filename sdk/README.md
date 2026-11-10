@@ -1,5 +1,7 @@
 # OpenFingerprint browser SDK
 
+Documentation: [openfingerprint.com/docs/sdk](https://openfingerprint.com/docs/sdk)
+
 A standalone, MIT-licensed TypeScript browser-signal collector with **zero runtime dependencies**.
 
 The SDK has no telemetry, remote code, WASM or import-time collection. `collect()`

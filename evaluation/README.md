@@ -1,5 +1,7 @@
 # Identification measurement
 
+Documentation: [openfingerprint.com/docs/evaluation](https://openfingerprint.com/docs/evaluation)
+
 Offline tools for a **consented, independently labelled study**, not a visitor database,
 tracking endpoint or population-accuracy claim. SDK hashes and collection behavior are
 unchanged. The tools have no runtime dependencies beyond Node 24; the browser recorder
