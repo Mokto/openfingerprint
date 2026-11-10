@@ -12,6 +12,7 @@ mod providers;
 mod rdap;
 mod replay;
 mod rpc;
+mod spoofing;
 mod tampering;
 mod tld;
 mod whois;
@@ -49,6 +50,7 @@ async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::respon
             + &state.network.metrics()
             + &state.replay.metrics()
             + &automation::metrics()
+            + &spoofing::metrics()
             + &metrics::render(),
     )
 }

@@ -168,6 +168,7 @@ The JSON object accepts only these fields:
 | `domain` | Optional ASCII hostname, not a URL or complete email address. |
 | `email` | Optional full email address. Its domain gets the `domain` checks, so it cannot be combined with `domain`. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
+| `headers` | Optional object with the raw `userAgent`, `acceptLanguage`, `secChUa`, `secChUaMobile` and `secChUaPlatform` headers of the browser request that carried `signals`. Used only with `signals`, for [spoofing](#spoofing-indicators). |
 | `detail` | Optional boolean, default false. `true` returns the full response described in this guide, with evidence counts, rule metadata and per-source provenance. |
 
 By default the response is one flat object of verdicts:
@@ -178,6 +179,7 @@ By default the response is one flat object of verdicts:
  "tokenAgeMs":1830,
  "automation":true,
  "tampering":false,
+ "spoofing":false,
  "disposable":false,
  "free":true,
  "mx":true,
@@ -194,9 +196,10 @@ A key that is missing means unknown, so there are no `null` facts. Only the
 | `fingerprint` | From `signals`; `null` when the token is invalid or has no full ID. |
 | `replayed`, `tokenAgeMs` | From a valid `signals` token: whether the same evidence was checked before, and milliseconds since the browser sealed it. See [Replayed tokens](#replayed-tokens-and-token-age). |
 | `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
+| `spoofing` | The browser's own report contradicts the headers of the request that carried it. Only with `headers`. |
 | `disposable`, `free`, `spam`, `relay`, `cheapTld`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `cheapTld` says the TLD is one registrars sell at teaser prices; `mx` says the domain has mail servers. |
 | `country`, `vpn`, `tor`, `datacenter`, `proxy` | From `ip`. `country` is a lowercase ISO 3166-1 alpha-2 code. |
-| `invalid` | Only present when an input was rejected: a list of `signals`, `automation`, `tampering`, `domain`, `email` and/or `ip`. |
+| `invalid` | Only present when an input was rejected: a list of `signals`, `automation`, `tampering`, `spoofing`, `headers`, `domain`, `email` and/or `ip`. |
 
 `email` and `domain` give the same keys. Everything else (evidence counts, indicator
 lists, rule versions, role account, ASN and hosting provider, MX providers,
@@ -515,6 +518,42 @@ does not rule out tampering that spares these two reads, such as a spoofed value
 Deploy the API before upgrading the SDK: older servers reject the new `tampering`
 field in `signals`.
 
+#### Spoofing indicators
+
+`collect()` also puts the browser's own `navigator.userAgent`, `navigator.language` and
+low-entropy client hints (`navigator.userAgentData` brands, mobile, platform) in the
+token, as read, under `spoofing`. When your backend also sends `headers`, copied from
+the browser request that carried the token, `/v1/check` compares the two and returns
+`signals.spoofing` (compact: `spoofing`). The section has the automation shape
+(`status`, `ruleVersion: 1`, `source: "client_reported_vs_request_headers"`,
+`indicators`, `unavailableProbes`):
+
+| Name | `true` means | Unknown when |
+| --- | --- | --- |
+| `user_agent_mismatch` | The reported user agent differs from `User-Agent`. | Either side is missing. |
+| `client_hints_mismatch` | The reported brands (in any order), mobile flag or platform differ from `Sec-CH-UA`, `Sec-CH-UA-Mobile` and `Sec-CH-UA-Platform`. | Only one side has client hints, or a header does not parse. Neither side having them (Firefox, Safari) counts as agreement. |
+| `language_mismatch` | The primary subtag of the reported language differs from the first `Accept-Language` tag (`en-US` and `en` agree, as WebKit reports `ja` while sending `ja-JP`). | Either side is missing or `*`. |
+
+Both sides come from the same browser, so they agree for ordinary visitors in
+Chromium, Firefox and WebKit. A mismatch means the token and the request did not come
+from the same unmodified browser: a user-agent switcher that changes one side only, a
+token captured in one browser and sent from another client, or a forged token sent
+with a script's headers. It is not proof of intent. Anyone who reads this code can
+send matching headers, so `not_detected` does not show the browser is genuine.
+Headless Chromium sends no `Accept-Language` by default; that leaves the language
+probe unknown rather than positive. A time zone or IP comparison is deliberately not
+part of this check, since VPN users and travellers would fail it.
+
+Unlike `tampering`, which reports altered canvas or audio readback in the browser
+(often a privacy tool), `spoofing` compares the token with the request around it.
+Without `headers`, or for a token without `spoofing` evidence from an older SDK, the
+check is `unknown` or omitted. Malformed `headers` (unknown keys, non-strings, values
+over 1024 bytes) are `invalid_input` with `reason: invalid_headers`; malformed
+evidence is `invalid_input` with `reason: invalid_spoofing`. The user agent,
+language and client hints travel in the token readable by your backend, as they
+already do in the request headers; the API never logs or stores them. Deploy the API
+before upgrading the SDK: older servers reject a token with the `spoofing` field.
+
 #### Domain and IP boundaries
 
 Domains have at least two labels, each 1–63 ASCII letters/digits/hyphens, without
@@ -663,8 +702,8 @@ nothing more. The decoded object is validated as follows:
 | `collectedAt` | Optional finite number from 0 to 1e15: milliseconds since the Unix epoch on the browser's clock when the token was sealed. Older SDKs omit it. |
 
 Each map has at most 32 entries. Names are 1–64 ASCII characters, start with a
-letter and otherwise contain letters, digits, underscores or dots. `automation` is the only additional SDK field accepted and is evaluated separately
-from identity; it may be omitted by older SDKs. Unknown fields and unsolicited
+letter and otherwise contain letters, digits, underscores or dots. `automation`, `tampering` and `spoofing` are the only additional SDK fields accepted and are evaluated separately
+from identity; older SDKs may omit them. Unknown fields and unsolicited
 visitor metadata are rejected. Non-null IDs must match the
 canonical hash for the reported schema; changing only the version does not
 translate an identity between schemas.
@@ -770,6 +809,7 @@ contents, domains, addresses or credentials:
 | `openfingerprint_rdap_lookups_total{result}` | RDAP lookups by `registration.status` (not cache hits or `not_applicable`); `unsupported_tld` counts TLDs with neither RDAP nor WHOIS. |
 | `openfingerprint_whois_lookups_total{result}` | WHOIS lookups for TLDs without RDAP, by `registration.status`. |
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
+| `openfingerprint_spoofing_checks_total{status}`, `openfingerprint_spoofing_indicators_total{indicator}` | Tokens compared with their request `headers`, by verdict, and how often each comparison found a mismatch. They count evaluated tokens, not visitors. |
 | `openfingerprint_automation_checks_total{status}`, `openfingerprint_automation_indicators_total{indicator}` | Valid automation reports evaluated, by verdict (`detected`, `unknown`, `not_detected`), and how often each probe was positive. One positive probe is enough for `detected`, so the indicator counts show which probes fire in practice. They count evaluated reports, not visitors. |
 | `openfingerprint_replay_checks_total{result}` | Token replay checks: `new` (first sighting), `replayed` (seen before) and `error` (Redis could not answer, so `replayed` was left out). |
 | `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |

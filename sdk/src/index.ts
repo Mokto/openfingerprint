@@ -4,7 +4,8 @@ import { identityExclusions } from './policy';
 
 import { collectAutomation, isSoftwareRenderer, observeAsyncAutomation, type AutomationEvidence } from './automation';
 import { observeTampering, unobservedTampering, type TamperingEvidence } from './tampering';
-export { collectAutomation, type AutomationEvidence, type TamperingEvidence };
+import { collectSpoofing, type SpoofingEvidence } from './spoofing';
+export { collectAutomation, collectSpoofing, type AutomationEvidence, type SpoofingEvidence, type TamperingEvidence };
 
 const unsupported = Symbol();
 const unstable = Symbol();
@@ -469,6 +470,7 @@ export interface Options {
 export interface Result {
 	automation: AutomationEvidence;
 	tampering: TamperingEvidence;
+	spoofing: SpoofingEvidence;
 	version: 1;
 	excluded: Name[];
 	fingerprint: string | null;
@@ -525,6 +527,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 	const result: Result = {
 		automation: collectAutomation(),
 		tampering: unobservedTampering(),
+		spoofing: collectSpoofing(),
 		version: 1,
 		excluded: identityExclusions(navigator.userAgent, navigator.vendor),
 		fingerprint: null,
@@ -615,6 +618,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 				...result,
 				automation: { ...result.automation },
 				tampering: { ...result.tampering },
+				spoofing: collectSpoofing(),
 				excluded: [...result.excluded],
 				components: { ...result.components },
 				hints: { ...result.hints },

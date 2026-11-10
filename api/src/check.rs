@@ -113,6 +113,8 @@ impl AppState {
 struct Signals {
     automation: Option<serde_json::Value>,
     tampering: Option<serde_json::Value>,
+    #[serde(default)]
+    spoofing: Option<serde_json::Value>,
     version: u16,
     fingerprint: Option<String>,
     core_fingerprint: Option<String>,
@@ -276,6 +278,8 @@ pub(crate) struct CheckRequest {
     pub(crate) domain: Option<serde_json::Value>,
     pub(crate) email: Option<serde_json::Value>,
     pub(crate) ip: Option<serde_json::Value>,
+    /// Headers of the browser request that carried `signals`; used only with them.
+    pub(crate) headers: Option<serde_json::Value>,
     pub(crate) detail: Option<bool>,
 }
 
@@ -306,6 +310,8 @@ pub(crate) struct SignalCheck {
     automation: Option<crate::automation::Check>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tampering: Option<crate::tampering::Check>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spoofing: Option<crate::spoofing::Check>,
     #[serde(flatten)]
     profile: Verified,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -434,19 +440,23 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
         if signals["status"] == "invalid_input" {
             invalid.push("signals");
         }
-        for key in ["automation", "tampering"] {
+        for key in ["automation", "tampering", "spoofing"] {
             if let Some(check) = signals.get(key) {
                 map.entry(key).or_insert_with(|| check.clone());
             }
         }
     }
-    for key in ["automation", "tampering"] {
+    for key in ["automation", "tampering", "spoofing"] {
         if let Some(check) = map.remove(key) {
             match check["status"].as_str() {
                 Some("detected") => out.insert(key.into(), json!(true)),
                 Some("not_detected") => out.insert(key.into(), json!(false)),
                 Some("invalid_input") => {
-                    invalid.push(key);
+                    invalid.push(if check["reason"] == "invalid_headers" {
+                        "headers"
+                    } else {
+                        key
+                    });
                     None
                 }
                 _ => None,
@@ -502,7 +512,10 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
     *response = Value::Object(out);
 }
 
-pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
+pub(crate) fn check_signals(
+    value: serde_json::Value,
+    headers: Option<&serde_json::Value>,
+) -> SignalCheck {
     if let Ok(signals) = serde_json::from_value::<Signals>(value)
         && let Ok(profile) = signals.verified()
     {
@@ -512,6 +525,7 @@ pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
             replayed: None,
             automation: signals.automation.map(crate::automation::check),
             tampering: signals.tampering.map(crate::tampering::check),
+            spoofing: headers.map(|h| crate::spoofing::check(signals.spoofing.as_ref(), h)),
             profile,
             reason: None,
             evidence: Some(Evidence {
@@ -534,6 +548,7 @@ pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
     SignalCheck {
         automation: None,
         tampering: None,
+        spoofing: None,
         profile: Verified {
             status: "invalid_input",
             schema_version: None,
@@ -633,7 +648,7 @@ pub(crate) async fn evaluate(
             let opened = open(&token);
             let mut check = {
                 let _timer = start(Step::Signals);
-                check_signals(opened.clone())
+                check_signals(opened.clone(), input.headers.as_ref())
             };
             if check.profile.status != "invalid_input" {
                 let key = crate::replay::key(&opened);
@@ -760,6 +775,7 @@ pub(crate) mod tests {
             domain: None,
             email: None,
             ip: None,
+            headers: None,
             detail: detail.then_some(true),
         }
     }
@@ -830,16 +846,20 @@ pub(crate) mod tests {
         }
         let mut input = payload();
         input["collectedAt"] = serde_json::json!(now_ms() - 90_000.0);
-        let age = check_signals(input.clone()).token_age_ms.unwrap();
+        let age = check_signals(input.clone(), None).token_age_ms.unwrap();
         assert!((90_000..120_000).contains(&age), "{age}");
         input["collectedAt"] = serde_json::json!(now_ms() + 5_000.0);
-        let age = check_signals(input).token_age_ms.unwrap();
+        let age = check_signals(input, None).token_age_ms.unwrap();
         assert!(
             (-5_100..0).contains(&age),
             "a clock ahead gives a negative age: {age}"
         );
-        assert!(check_signals(payload()).token_age_ms.is_none());
-        assert!(check_signals(serde_json::json!({})).token_age_ms.is_none());
+        assert!(check_signals(payload(), None).token_age_ms.is_none());
+        assert!(
+            check_signals(serde_json::json!({}), None)
+                .token_age_ms
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -1008,6 +1028,28 @@ pub(crate) mod tests {
                 "country":"dk","tor":false,"datacenter":true,"proxy":true
             })
         );
+        for (spoofing, expected) in [
+            (
+                serde_json::json!({"status":"detected","indicators":["user_agent_mismatch"]}),
+                serde_json::json!({"fingerprint":"abc","spoofing":true}),
+            ),
+            (
+                serde_json::json!({"status":"unknown"}),
+                serde_json::json!({"fingerprint":"abc"}),
+            ),
+            (
+                serde_json::json!({"status":"invalid_input","reason":"invalid_headers"}),
+                serde_json::json!({"fingerprint":"abc","invalid":["headers"]}),
+            ),
+            (
+                serde_json::json!({"status":"invalid_input","reason":"invalid_spoofing"}),
+                serde_json::json!({"fingerprint":"abc","invalid":["spoofing"]}),
+            ),
+        ] {
+            let mut response = serde_json::json!({"signals":{"status":"ok","fingerprint":"abc","spoofing":spoofing}});
+            compact(&mut response);
+            assert_eq!(response, expected);
+        }
         let mut domain = serde_json::json!({"domain":{"status":"ok","mxLookup":"no_domain"}});
         compact(&mut domain);
         assert_eq!(domain, serde_json::json!({"mx":false}));
@@ -1025,7 +1067,7 @@ pub(crate) mod tests {
 
     #[test]
     fn signal_results_report_counts_not_confidence_or_core_fallbacks() {
-        let result = check_signals(payload());
+        let result = check_signals(payload(), None);
         assert_eq!(result.profile.status, "ok");
         let evidence = result.evidence.unwrap();
         assert_eq!(evidence.included_components, 1);
@@ -1036,7 +1078,7 @@ pub(crate) mod tests {
         let mut input = payload();
         input["components"]["canvas"] = serde_json::json!(sha256("diagnostic"));
         input["excluded"] = serde_json::json!(["canvas"]);
-        let result = check_signals(input);
+        let result = check_signals(input, None);
         assert_eq!(result.profile.status, "ok");
         let evidence = result.evidence.unwrap();
         assert_eq!(evidence.included_components, 1);
@@ -1044,7 +1086,7 @@ pub(crate) mod tests {
 
         let mut input = payload();
         input["fingerprint"] = serde_json::Value::Null;
-        let result = check_signals(input);
+        let result = check_signals(input, None);
         assert_eq!(result.profile.status, "insufficient_signals");
         assert!(result.profile.fingerprint.is_none());
         assert!(result.profile.schema_version.is_none());
@@ -1055,7 +1097,7 @@ pub(crate) mod tests {
             p["fingerprint"] = serde_json::json!("b".repeat(64));
             p
         }] {
-            let result = check_signals(input);
+            let result = check_signals(input, None);
             assert_eq!(result.profile.status, "invalid_input");
             assert_eq!(result.reason, Some("invalid_signals"));
             assert!(result.evidence.is_none());
