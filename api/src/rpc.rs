@@ -54,6 +54,20 @@ impl OpenFingerprint for Check {
             domain: text(request.domain),
             email: text(request.email),
             ip: text(request.ip),
+            headers: request.headers.as_option().map(|h| {
+                Value::Object(
+                    [
+                        ("userAgent", h.user_agent),
+                        ("acceptLanguage", h.accept_language),
+                        ("secChUa", h.sec_ch_ua),
+                        ("secChUaMobile", h.sec_ch_ua_mobile),
+                        ("secChUaPlatform", h.sec_ch_ua_platform),
+                    ]
+                    .into_iter()
+                    .filter_map(|(key, value)| Some((key.to_owned(), text(value)?)))
+                    .collect(),
+                )
+            }),
             detail: None,
         };
         let verdicts = crate::check::evaluate(&self.0, input).await?;
@@ -115,7 +129,7 @@ mod tests {
     #[test]
     fn every_compact_key_has_a_field_in_the_response_message() {
         let response: CheckResponse = serde_json::from_value(serde_json::json!({
-            "fingerprint":"abc","automation":true,"tampering":false,"disposable":true,
+            "fingerprint":"abc","automation":true,"tampering":false,"spoofing":true,"disposable":true,
             "free":false,"spam":true,"relay":false,"cheapTld":true,"replayed":true,"tokenAgeMs":-1500,"mx":true,"country":"dk","vpn":true,
             "tor":false,"datacenter":true,"proxy":false,"invalid":["ip"]
         }))
@@ -126,6 +140,7 @@ mod tests {
             [
                 response.automation,
                 response.tampering,
+                response.spoofing,
                 response.disposable,
                 response.free,
                 response.spam,
@@ -141,6 +156,7 @@ mod tests {
             [
                 Some(true),
                 Some(false),
+                Some(true),
                 Some(true),
                 Some(false),
                 Some(true),

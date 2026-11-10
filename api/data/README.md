@@ -117,9 +117,10 @@ domain (for example `gmail.com` or `google.com`), its subdomains and its parents
 and logs what it ignored. With MX inference, one such upstream mistake would accuse
 every domain whose mail those providers route.
 
-A weekly GitHub workflow proposes the refreshed bundled snapshot as a
-`chore(data)` pull request with per-source changes, so release images and
-self-hosters start from current data.
+A weekly GitHub workflow opens a `fix(data)` pull request with the refreshed
+bundled snapshot and per-source changes, and merges it once CI passes, so
+Release Please proposes an API release and release images and self-hosters start
+from current data. A failed CI run leaves the pull request open for review.
 
 A missing/malformed override produces unknown domain results, never a silent
 fallback to the bundled data. Browser verification remains available. `/health`

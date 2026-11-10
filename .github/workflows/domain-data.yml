@@ -1,6 +1,6 @@
 name: Domain data refresh
-# Proposes the refreshed bundled snapshot and IANA RDAP bootstrap weekly. Deployments refresh their own data with the
-# chart's CronJob; this keeps the copy built into release images and used by self-hosters current.
+# Refreshes the bundled snapshot, IANA RDAP bootstrap, WHOIS servers and TLD prices weekly, and merges the PR once CI
+# passes. The chart's CronJob refreshes only domains.json in deployments; the rest reaches them through a release.
 on:
   schedule:
     - cron: '23 5 * * 1'
@@ -13,18 +13,19 @@ concurrency:
 jobs:
   refresh:
     if: github.repository == 'Mokto/openfingerprint'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
     permissions:
       contents: write
       pull-requests: write
       actions: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24'
+          node-version: '26'
       - name: Refresh and propose the snapshot
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,7 +66,7 @@ jobs:
           git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
           gh auth setup-git
           git switch -c "$branch"
-          git commit -am "chore(data): refresh open domain snapshot ($today)"
+          git commit -am "fix(data): refresh open domain snapshot ($today)"
           git push origin "$branch"
           {
             echo "Refreshes the bundled open domain snapshot from the pinned public sources."
@@ -84,6 +85,16 @@ jobs:
             echo
             echo "Licenses are unchanged: the updater refuses changed source licenses. Reviewed sources keep their own review dates; renewing them needs a person to re-check the evidence."
           } > /tmp/body.md
-          gh pr create --head "$branch" --base main --title "chore(data): refresh open domain snapshot ($today)" --body-file /tmp/body.md
-          # PRs opened with GITHUB_TOKEN do not trigger CI; dispatch it explicitly.
+          gh pr create --head "$branch" --base main --title "fix(data): refresh open domain snapshot ($today)" --body-file /tmp/body.md
+          # PRs opened and merges made with GITHUB_TOKEN do not trigger workflows; dispatch CI and the release explicitly.
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+          run_id=""
+          for _ in $(seq 30); do
+            sleep 10
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$branch" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+            [ -n "$run_id" ] && break
+          done
+          [ -n "$run_id" ] || { echo "::error::No CI run found for $branch; the PR stays open"; exit 1; }
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --interval 30 --exit-status > /dev/null
+          gh pr merge "$branch" --repo "$GITHUB_REPOSITORY" --squash --delete-branch --match-head-commit "$(git rev-parse HEAD)"
+          gh workflow run release-please.yml --repo "$GITHUB_REPOSITORY" --ref main

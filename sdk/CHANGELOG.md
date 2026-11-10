@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/Mokto/openfingerprint/compare/sdk-v0.10.1...sdk-v0.10.2) (2026-11-10)
+
+
+### Documentation
+
+* link each synced README to its page on openfingerprint.com ([#99](https://github.com/Mokto/openfingerprint/issues/99)) ([597cbd4](https://github.com/Mokto/openfingerprint/commit/597cbd4de2e0346abecff927a31006267614219c))
+
 ## [0.10.1](https://github.com/Mokto/openfingerprint/compare/sdk-v0.10.0...sdk-v0.10.1) (2026-11-09)
 
 

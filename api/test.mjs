@@ -243,6 +243,7 @@ child.stderr.on('data', data => { serverOutput += data.toString(); });
 const shortId = (hex) => Buffer.from(hex, 'hex').subarray(0, 16).toString('base64url').slice(0, 21);
 const digest = (s) => createHash('sha256').update(s).digest('hex');
 let tokenCounter = 0;
+const spoofedAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 spoof-probe';
 function signals(locale = 'same', font = 'same', version = 1) {
 	const components = { fontFallbacks: digest('fallback'), fontPreferences: digest(font) };
 	const hints = { locale: digest(locale) };
@@ -603,6 +604,38 @@ try {
     assert.deepEqual(await viaConnect.json(), { fingerprint: shortId(signals().fingerprint), replayed: false, automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'] });
     assert.equal((await connectCheck({ ip: '8.8.8.8' })).status, 200);
     assert.equal((await connectCheck({})).status, 400);
+    phase = 'spoofing compares the token with the headers of its request';
+    const claims = {
+        version: 1, userAgent: spoofedAgent, language: 'en-US',
+        clientHints: { brands: [{ brand: 'Chromium', version: '140' }, { brand: 'Not=A?Brand', version: '24' }], mobile: false, platform: 'Windows' }
+    };
+    const sent = { userAgent: spoofedAgent, acceptLanguage: 'en-US,en;q=0.9', secChUa: '"Not=A?Brand";v="24", "Chromium";v="140"', secChUaMobile: '?0', secChUaPlatform: '"Windows"' };
+    const spoofing = (status, indicators, unavailableProbes) => ({ status, ruleVersion: 1, source: 'client_reported_vs_request_headers', indicators, unavailableProbes });
+    const allProbes = ['user_agent_mismatch', 'client_hints_mismatch', 'language_mismatch'];
+    for (const [evidence, headers, expected] of [
+        [claims, sent, spoofing('not_detected', [], [])],
+        [claims, { ...sent, userAgent: 'python-requests/2.32' }, spoofing('detected', ['user_agent_mismatch'], [])],
+        [claims, { ...sent, acceptLanguage: 'de-DE' }, spoofing('detected', ['language_mismatch'], [])],
+        [claims, { userAgent: spoofedAgent }, spoofing('unknown', [], ['client_hints_mismatch', 'language_mismatch'])],
+        [undefined, sent, spoofing('unknown', [], allProbes)],
+        [claims, { cookie: 'session' }, { ...spoofing('invalid_input', [], []), reason: 'invalid_headers' }],
+        [{ ...claims, version: 2 }, sent, { ...spoofing('invalid_input', [], []), reason: 'invalid_spoofing' }]
+    ]) {
+        const token = { ...signals(), ...(evidence ? { spoofing: evidence } : {}) };
+        const response = await request('/v1/check', {}, { signals: token, headers });
+        assert.equal(response.status, 200);
+        assert.deepEqual((await response.json()).signals.spoofing, expected);
+    }
+    assert.equal((await (await request('/v1/check', {}, { signals: signals() })).json()).signals.spoofing, undefined, 'no headers, no section');
+    const spoofedToken = () => seal({ ...signals(), spoofing: claims });
+    assert.equal((await compactCall({ signals: spoofedToken(), headers: { ...sent, userAgent: 'curl/8' } })).spoofing, true);
+    assert.equal((await compactCall({ signals: spoofedToken(), headers: sent })).spoofing, false);
+    assert.equal('spoofing' in await compactCall({ signals: spoofedToken(), headers: {} }), false, 'unknown leaves the key out');
+    assert.deepEqual((await compactCall({ signals: spoofedToken(), headers: { cookie: 'x' } })).invalid, ['headers']);
+    assert.deepEqual(await compactCall({ domain: 'mail.example', headers: sent }), await compactCall({ domain: 'mail.example' }), 'headers without signals are ignored');
+    const spoofedViaConnect = await connectCheck({ signals: spoofedToken(), headers: { ...sent, secChUaPlatform: '"macOS"' } });
+    assert.equal(spoofedViaConnect.status, 200);
+    assert.equal((await spoofedViaConnect.json()).spoofing, true);
     assert.equal((await fetch(origin + rpcCheck, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.test' }, body: '{"ip":"8.8.8.8"}' })).status, 403);
     console.log('All 15 input combinations, requested-only results, evidence counts and domain data state passed.');
     phase = `domain classification and source scope (${mode})`;
@@ -849,12 +882,16 @@ try {
     assert(await metric('openfingerprint_automation_checks_total{status="not_detected"}') >= 1);
     assert(await metric('openfingerprint_automation_indicators_total{indicator="webdriver"}') >= 1);
     assert.equal(await metric('openfingerprint_automation_indicators_total{indicator="cdp_detected"}'), 0);
+    assert(await metric('openfingerprint_spoofing_checks_total{status="detected"}') >= 3);
+    assert(await metric('openfingerprint_spoofing_checks_total{status="not_detected"}') >= 2);
+    assert(await metric('openfingerprint_spoofing_indicators_total{indicator="user_agent_mismatch"}') >= 2);
+    assert(await metric('openfingerprint_spoofing_indicators_total{indicator="client_hints_mismatch"}') >= 1);
     console.log(`Snapshot reload, last-good retention and metrics passed (${mode}).`);
     phase = 'no request or credential logging';
     for (const sensitive of [
         JSON.parse(legacySites)[0].secret_key,
         signals().fingerprint, shortId(signals().fingerprint), signals('same', 'same', 5).fingerprint,
-        signals().components.fontPreferences, 'unsolicited', 'ExAmPlE.test.', 'Support+EU', 'zq.person-7', '2001:db8::1', '192.0.2.1',
+        signals().components.fontPreferences, spoofedAgent, 'unsolicited', 'ExAmPlE.test.', 'Support+EU', 'zq.person-7', '2001:db8::1', '192.0.2.1',
         'mail.example', 'disputed.mail.example', 'child.disputed.mail.example', 'dnsmx.example', 'mx.other.example', 'rdapfound.example'
     ]) assert(!serverOutput.includes(sensitive));
     console.log('No request evidence, raw metadata or credentials appeared in server output.');
