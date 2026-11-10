@@ -95,14 +95,14 @@ Every `collect()` result and `onIdentity` snapshot includes `automation`.
 Forward `{ signals: result.token }` to a compatible `/v1/check` to receive the evaluation
 in `response.automation` (`response.signals.automation` with `detail: true`). No opt-in or separate call is needed.
 Automation remains outside fingerprint hashes, so the identity schema is unchanged.
-Deploy the compatible API first: older versions reject automation evidence versions they do not define, including version 4.
+Deploy the compatible API first: older versions reject automation evidence versions they do not define, including version 5.
 `collectAutomation()` remains available as a synchronous browser-only helper.
 
 | Field | Observation |
 | --- | --- |
-| `version` | Always `4`, independent of the fingerprint schema. |
+| `version` | Always `5`, independent of the fingerprint schema. |
 | `webdriver` | The boolean `navigator.webdriver` value. |
-| `headlessUserAgent` | A `HeadlessChrome/` token in the user-agent string. |
+| `headlessUserAgent` | A `HeadlessChrome/` token in the user-agent string, or a `HeadlessChrome` brand in `navigator.userAgentData`, which survives a replaced user-agent string. |
 | `seleniumArtifacts` | Presence of `__webdriver_evaluate`, `__selenium_evaluate`, `__webdriver_script_fn` or `__selenium_unwrapped` on `document`. |
 | `phantomArtifacts` | Presence of `callPhantom` or `_phantom` on `window`. |
 | `platformMismatch` | UA OS family differs from `navigator.platform` or `userAgentData.platform`. |
@@ -111,17 +111,21 @@ Deploy the compatible API first: older versions reject automation evidence versi
 | `emptyPlugins` | Desktop Chromium with an empty `navigator.plugins`. |
 | `emptyLanguages` | Empty `navigator.languages`. |
 | `softwareRenderer` | Unmasked WebGL renderer matches SwiftShader, llvmpipe, softpipe, software rasterizer or Mesa offscreen. Taken from the GPU probe, so `collect()` only. |
-| `zeroDimensions` | Screen or outer-window width or height of 0. |
+| `zeroDimensions` | Screen or outer-window width or height of 0. Unknown when only the outer window is 0 in a hidden document, as in a tab opened in the background. |
 | `cdpDetected` | An error passed to `console.debug` in a fresh same-origin frame had its stack formatted (V8 called that frame's `Error.prepareStackTrace`), which happens only while a CDP client has `Runtime.enable` on: Puppeteer, Playwright, ChromeDriver or open DevTools. Always false outside V8. Clients that avoid `Runtime.enable` are not seen. Unknown when no frame can be created. |
-| `nativeFunctionTampering` | The `navigator.webdriver` getter or `Permissions.prototype.query` is not native code when read with the `toString` of a fresh same-origin frame, or `Function.prototype.toString` accepts a non-function. A `toString` wrapper that still answers correctly, as error monitors install, is not reported. Unknown when no frame can be created. |
+| `nativeFunctionTampering` | The `navigator.webdriver` getter or `Permissions.prototype.query` is not native code when read with the `toString` of a fresh same-origin frame, or is a `Proxy` (which `toString` reports as native); `navigator` has its own `webdriver` property, or the getter is gone from a browser that defines it; a detached `srcdoc` frame has a window, as puppeteer-extra-plugin-stealth fakes; or `Function.prototype.toString` accepts a non-function. A `toString` wrapper that still answers correctly, as error monitors install, is not reported. Unknown when no frame can be created. |
 | `workerUserAgentMismatch` | A blob dedicated worker reports a different UA or platform than the main thread. `collect()` only. |
+| `driverArtifacts` | A global left by ChromeDriver (`cdc_…_Array` and similar, `$cdc_…`), other WebDriver and Watir bindings, Playwright's exposed-function binding, NightmareJS or Chrome's `domAutomation`, or a `selenium`, `webdriver` or `driver` attribute on `<html>`. |
+| `engineMismatch` | The JavaScript engine, told apart by its `RangeError` wording, is not the one the user agent claims: V8 for `Chrome/`, SpiderMonkey for `Firefox/`, JavaScriptCore for `Version/… Safari/`. iOS user agents and unrecognized engines are unknown. |
+| `userAgentDataMismatch` | The `Chromium` brand major version in `navigator.userAgentData` differs from the `Chrome/` major version in the user-agent string, as when a script or flag replaces only the string. |
 
 The standalone `collectAutomation()` returns `null` for the three `collect()`-only
 observations, which need async or GPU-probe results. The worker probe needs
 `worker-src blob:` in a strict CSP; a blocked worker is `null` (unknown) and logs
 a CSP violation. `cdpDetected` also fires with DevTools open, and real users with
-user-agent switchers or unusual setups can trip several probes. Treat each as an
-indicator, not proof.
+user-agent switchers, in-app browsers that rewrite the user agent or unusual setups
+can trip several probes, including `engineMismatch` and `userAgentDataMismatch`.
+Treat each as an indicator, not proof.
 
 Each observation is `boolean | null`. Missing/non-boolean WebDriver values,
 empty/non-string user agents and throwing reads return null independently.

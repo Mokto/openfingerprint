@@ -1,5 +1,5 @@
 export interface AutomationEvidence {
-	version: 4;
+	version: 5;
 	webdriver: boolean | null;
 	headlessUserAgent: boolean | null;
 	seleniumArtifacts: boolean | null;
@@ -14,6 +14,9 @@ export interface AutomationEvidence {
 	cdpDetected: boolean | null;
 	nativeFunctionTampering: boolean | null;
 	workerUserAgentMismatch: boolean | null;
+	driverArtifacts: boolean | null;
+	engineMismatch: boolean | null;
+	userAgentDataMismatch: boolean | null;
 }
 
 type AsyncKeys = 'notificationPermissionQuirk' | 'workerUserAgentMismatch';
@@ -46,6 +49,85 @@ function chromium(userAgent: string): boolean {
 
 function desktop(userAgent: string): boolean {
 	return !/Mobile|Android/.test(userAgent);
+}
+
+function brands(): { brand: string; version: string }[] | null {
+	const list = (navigator as { userAgentData?: { brands?: unknown } }).userAgentData?.brands;
+	return Array.isArray(list) ? list : null;
+}
+
+function userAgentDataMismatch(): boolean | null {
+	const ua = text(navigator.userAgent);
+	if (!ua) return null;
+	const major = /\bChrome\/(\d+)/.exec(ua)?.[1];
+	const chromium = brands()?.find((entry) => entry.brand === 'Chromium')?.version;
+	return !!major && !!chromium && chromium.split('.')[0] !== major;
+}
+
+const DRIVER_WINDOW = [
+	'domAutomation',
+	'domAutomationController',
+	'__nightmare',
+	'_Selenium_IDE_Recorder',
+	'_selenium',
+	'calledSelenium',
+	'__webdriverFunc',
+	'__lastWatirAlert',
+	'__lastWatirConfirm',
+	'__lastWatirPrompt',
+	'_WEBDRIVER_ELEM_CACHE',
+	'__playwright__binding__',
+	'__phantomas',
+	'wdioElectron'
+];
+const DRIVER_DOCUMENT = [
+	'__driver_evaluate',
+	'__driver_unwrapped',
+	'__webdriver_unwrapped',
+	'__fxdriver_evaluate',
+	'__fxdriver_unwrapped',
+	'__webdriver_script_func',
+	'__webdriver_script_function',
+	'$chrome_asyncScriptInfo',
+	'__$webdriverAsyncExecutor'
+];
+
+function driverArtifacts(): boolean {
+	return (
+		DRIVER_WINDOW.some((name) => name in window) ||
+		DRIVER_DOCUMENT.some((name) => name in document) ||
+		// ChromeDriver's cache globals, e.g. cdc_adoQpoasnfa76pfcZLmcfl_Array; undetected-chromedriver renames the prefix.
+		Object.getOwnPropertyNames(window).some((name) => /^[a-z]{3}_\w+_(Array|Promise|Symbol)$/.test(name)) ||
+		Object.getOwnPropertyNames(document).some((name) => /^\$cdc_/.test(name)) ||
+		['selenium', 'webdriver', 'driver'].some((name) => document.documentElement?.hasAttribute(name))
+	);
+}
+
+function engine(): string | null {
+	try {
+		(-1).toFixed(-1);
+	} catch (error) {
+		const message = error instanceof RangeError ? error.message : '';
+		if (/^toFixed\(\) digits argument/.test(message)) return 'v8';
+		if (/^precision -1 out of range/.test(message)) return 'spidermonkey';
+		if (/^toFixed\(\) argument must be/.test(message)) return 'jsc';
+	}
+	return null;
+}
+
+// iOS user agents are skipped: every iOS browser was WebKit, but EU builds may ship their own engine.
+function engineMismatch(): boolean | null {
+	const ua = text(navigator.userAgent);
+	const actual = engine();
+	if (!ua || !actual || /iphone|ipad|ipod/i.test(ua)) return null;
+	const claimed = /\b(Chrome|Chromium)\/\d/.test(ua)
+		? 'v8'
+		: /\bFirefox\/\d/.test(ua)
+			? 'spidermonkey'
+			: /\bVersion\/[\d.]+.*\bSafari\//.test(ua)
+				? 'jsc'
+				: null;
+	return !!claimed && claimed !== actual;
 }
 
 function platformMismatch(): boolean | null {
@@ -121,13 +203,40 @@ function observeInFrame(): [boolean | null, boolean | null] {
 	}
 }
 
+// A native function refuses a prototype chain through itself with a TypeError. A Proxy around
+// it, which toString reports as native code, lets the cycle through. The prototype is restored.
+function proxied(fn: unknown): boolean {
+	if (typeof fn !== 'function') return false;
+	const prototype = Object.getPrototypeOf(fn);
+	try {
+		Object.setPrototypeOf(fn, Object.create(fn));
+		return true;
+	} catch (error) {
+		return !(error instanceof TypeError);
+	} finally {
+		Object.setPrototypeOf(fn, prototype);
+	}
+}
+
 function nativeFunctionTampering(patched: boolean | null): boolean | null {
 	try {
 		Function.prototype.toString.call({});
 		return true;
 	} catch (error) {
-		return error instanceof TypeError ? patched : true;
+		if (!(error instanceof TypeError)) return true;
 	}
+	const webdriver = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver')?.get;
+	if (
+		Object.getOwnPropertyDescriptor(navigator, 'webdriver') ||
+		(!webdriver && CSS.supports('border-end-end-radius: initial')) ||
+		proxied(webdriver) ||
+		proxied(typeof Permissions === 'undefined' ? undefined : Permissions.prototype.query)
+	)
+		return true;
+	const detached = document.createElement('iframe');
+	detached.srcdoc = '<!doctype html>';
+	// puppeteer-extra-plugin-stealth hands a detached srcdoc frame a window; browsers return null.
+	return detached.contentWindow ? true : patched;
 }
 
 function settle(work: () => Promise<boolean | null>, signal: AbortSignal): Promise<boolean | null> {
@@ -207,12 +316,13 @@ export function collectAutomation(): AutomationEvidence {
 		throw new Error('A browser context is required');
 	const [cdp, patched] = observeInFrame();
 	return {
-		version: 4,
+		version: 5,
 		webdriver: observe(() => navigator.webdriver),
 		headlessUserAgent: observe(() => {
 			const userAgent = navigator.userAgent;
 			return typeof userAgent === 'string' && userAgent.length > 0
-				? /\bHeadlessChrome\//.test(userAgent)
+				? /\bHeadlessChrome\//.test(userAgent) ||
+						!!brands()?.some((entry) => entry.brand === 'HeadlessChrome')
 				: null;
 		}),
 		seleniumArtifacts: observe(() =>
@@ -236,10 +346,16 @@ export function collectAutomation(): AutomationEvidence {
 		softwareRenderer: null,
 		zeroDimensions: observe(() => {
 			const sizes = [screen.width, screen.height, outerWidth, outerHeight];
-			return sizes.every(Number.isFinite) ? sizes.includes(0) : null;
+			if (!sizes.every(Number.isFinite)) return null;
+			if (!screen.width || !screen.height) return true;
+			// A tab opened in the background reports a 0x0 outer window until it is shown.
+			return sizes.includes(0) && document.visibilityState === 'hidden' ? null : sizes.includes(0);
 		}),
 		cdpDetected: cdp,
 		nativeFunctionTampering: observe(() => nativeFunctionTampering(patched)),
-		workerUserAgentMismatch: null
+		workerUserAgentMismatch: null,
+		driverArtifacts: observe(driverArtifacts),
+		engineMismatch: observe(engineMismatch),
+		userAgentDataMismatch: observe(userAgentDataMismatch)
 	};
 }
