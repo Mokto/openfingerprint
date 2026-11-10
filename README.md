@@ -62,7 +62,7 @@ result schemas, browser limits and test methodology.
 
 ## Development
 
-Requires Node 24+, pnpm 12.11.2 and current stable Rust for API development.
+Requires Node 24+, pnpm 12.17.0 and current stable Rust for API development.
 
 ```sh
 git clone https://github.com/Mokto/openfingerprint.git

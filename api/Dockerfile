@@ -1,4 +1,4 @@
-FROM rust:1.99.1-slim-bookworm@sha256:ed2c95ca377d6571b124b05e75e01207973ded639dce7d5542eb7bcd797e32aa AS build
+FROM rust:1.99.1-slim-bookworm@sha256:f2c004e3d2d8b547e8cf7ffbc29205385f4e71d23e53e4e383065db5e9f822cd AS build
 WORKDIR /build
 COPY api/Cargo.toml api/Cargo.lock api/build.rs ./
 COPY api/proto ./proto
@@ -33,7 +33,7 @@ RUN set -eu; \
     cp target/release/openfingerprint-api /out/openfingerprint-api
 COPY LICENSE /out/licenses/openfingerprint-api/LICENSE
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:b8cec4b2f2126ff7bd034ec9ac207ffb3272667dfdc48376e3b035d3270549ba AS network-updater
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:088a01637f22908632ba09018be2e0b516f2fa6f7869c191d29491139db43c78 AS network-updater
 LABEL org.opencontainers.image.source="https://github.com/Mokto/openfingerprint" \
       org.opencontainers.image.description="Refreshes licensed local network intelligence for OpenFingerprint" \
       org.opencontainers.image.licenses="MIT"
@@ -45,7 +45,7 @@ ENV OPENFINGERPRINT_API_BINARY=/usr/local/bin/openfingerprint-api
 USER 65532:65532
 ENTRYPOINT ["/nodejs/bin/node", "/app/update-network-data.mjs"]
 
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 LABEL org.opencontainers.image.source="https://github.com/Mokto/openfingerprint" \
       org.opencontainers.image.description="Browser verification and open-data domain/network checks" \
       org.opencontainers.image.licenses="MIT"
