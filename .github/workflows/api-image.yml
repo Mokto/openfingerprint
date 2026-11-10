@@ -14,11 +14,11 @@ env:
   NETWORK_UPDATER: ghcr.io/mokto/openfingerprint-network-updater
 jobs:
   release:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -44,9 +44,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-26.04
             arch: amd64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -54,12 +54,12 @@ jobs:
       ARCH: ${{ matrix.arch }}
       VERSION: ${{ needs.release.outputs.version }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24'
+          node-version: '26'
           package-manager-cache: false
       - name: Build and smoke-test the API, domain-updater and network-updater images
         run: bash api/build-images.sh "$IMAGE:sha-$GITHUB_SHA-$ARCH" "$UPDATER:sha-$GITHUB_SHA-$ARCH" "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH"
@@ -72,7 +72,7 @@ jobs:
           docker push "$NETWORK_UPDATER:sha-$GITHUB_SHA-$ARCH"
   manifest:
     needs: [release, build]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       packages: write
       attestations: write
@@ -141,7 +141,7 @@ jobs:
           done
   chart:
     needs: [release, manifest]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: write
@@ -151,7 +151,7 @@ jobs:
       UPDATER_DIGEST: ${{ needs.manifest.outputs.updater-digest }}
       NETWORK_UPDATER_DIGEST: ${{ needs.manifest.outputs.network-updater-digest }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install Helm
@@ -186,7 +186,7 @@ jobs:
           }
   deploy:
     needs: [release, chart]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions: {}
     steps:
       # Each DISPATCH_TARGET<suffix> is the full workflow_dispatch URL of a deploying workflow and

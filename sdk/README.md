@@ -38,7 +38,7 @@ pnpm check
 pnpm build
 ```
 
-Node 24+ and pnpm 12.11.2 are used for development. Build outputs:
+Node 24+ and pnpm 12.17.0 are used for development. Build outputs:
 
 - `dist/index.js`: standalone ES module.
 - `dist/index.iife.js`: script exposing `OpenFingerprint.collect` and `OpenFingerprint.collectAutomation`.

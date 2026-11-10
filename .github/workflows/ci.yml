@@ -11,31 +11,31 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24'
-      - run: npm install --global pnpm@12.11.2
+          node-version: '26'
+      - run: npm install --global pnpm@12.17.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm build
       - run: pnpm --dir sdk exec playwright-core install --with-deps chromium firefox webkit
       - run: pnpm test
   api:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24'
+          node-version: '26'
       - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       # Only main writes caches: PRs read the default branch's entries without evicting them.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -51,13 +51,13 @@ jobs:
       - run: node api/test-network.mjs
       - run: bash api/chart/test.sh
   images:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24'
+          node-version: '26'
       - run: bash api/build-images.sh openfingerprint-api:ci openfingerprint-domain-updater:ci openfingerprint-network-updater:ci

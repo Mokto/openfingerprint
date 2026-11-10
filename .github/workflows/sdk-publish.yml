@@ -9,13 +9,13 @@ concurrency:
 jobs:
   publish:
     if: github.repository == 'Mokto/openfingerprint' && github.ref_type == 'tag' && startsWith(github.ref_name, 'sdk-v')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -32,9 +32,9 @@ jobs:
           JS
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24'
+          node-version: '26'
           registry-url: 'https://registry.npmjs.org'
-      - run: npm install --global pnpm@12.11.2
+      - run: npm install --global pnpm@12.17.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm build

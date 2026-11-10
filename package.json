@@ -5,7 +5,7 @@
 	"engines": {
 		"node": ">=24"
 	},
-	"packageManager": "pnpm@12.11.2",
+	"packageManager": "pnpm@12.17.0",
 	"scripts": {
 		"check": "node scripts/test-release.mjs && node evaluation/test.mjs && pnpm --dir sdk check",
 		"build": "pnpm --dir sdk build",
