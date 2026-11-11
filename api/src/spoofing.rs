@@ -26,10 +26,10 @@ const STATUSES: [&str; 3] = ["detected", "unknown", "not_detected"];
 static STATUS_COUNTS: [AtomicU64; STATUSES.len()] = [const { AtomicU64::new(0) }; STATUSES.len()];
 static INDICATOR_COUNTS: [AtomicU64; PROBES.len()] = [const { AtomicU64::new(0) }; PROBES.len()];
 
-/// Counts of evaluated tokens, by verdict and by indicator. Nothing identifies a visitor.
+/// Counts of evaluations, by verdict and by indicator. Nothing identifies a visitor.
 pub fn metrics() -> String {
     let mut out = String::from(
-        "# HELP openfingerprint_spoofing_checks_total Tokens compared with their request headers, by verdict.\n# TYPE openfingerprint_spoofing_checks_total counter\n",
+        "# HELP openfingerprint_spoofing_checks_total Evidence compared with the request that posted it, by verdict.\n# TYPE openfingerprint_spoofing_checks_total counter\n",
     );
     for (status, count) in STATUSES.iter().zip(&STATUS_COUNTS) {
         let _ = writeln!(
@@ -39,7 +39,7 @@ pub fn metrics() -> String {
         );
     }
     out.push_str(
-        "# HELP openfingerprint_spoofing_indicators_total Tokens in which each comparison found a mismatch.\n# TYPE openfingerprint_spoofing_indicators_total counter\n",
+        "# HELP openfingerprint_spoofing_indicators_total Evaluations in which each comparison found a mismatch.\n# TYPE openfingerprint_spoofing_indicators_total counter\n",
     );
     for (indicator, count) in PROBES.iter().zip(&INDICATOR_COUNTS) {
         let _ = writeln!(
@@ -73,6 +73,11 @@ pub struct Check {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
 }
+impl Check {
+    pub(crate) fn rejected(&self) -> bool {
+        self.status == "invalid_input"
+    }
+}
 
 #[derive(PartialEq, Debug)]
 struct ClientHints {
@@ -87,10 +92,10 @@ struct Evidence {
     client_hints: Option<ClientHints>,
 }
 
-/// Compares what the browser reported in the token (`evidence`, absent for SDKs that
-/// predate it) with the headers of the request that carried the token and, for events,
-/// with the TLS stack its ClientHello came from (`tls`: the JA4, `Some(None)` when none
-/// could be read). Token checks have no `tls` and no `tls_mismatch` probe.
+/// Compares what the browser reported in its evidence (`evidence`, when it has the
+/// `spoofing` part) with the headers of the request that posted it and with the TLS stack
+/// its ClientHello came from (`tls`: the JA4, `Some(None)` when none could be read; `None`
+/// leaves the `tls_mismatch` probe out).
 pub fn check(evidence: Option<&Value>, headers: &Value, tls: Option<Option<&str>>) -> Check {
     let mut result = Check {
         status: "invalid_input",
@@ -368,7 +373,7 @@ mod tests {
         assert_eq!(
             outcome(None, chrome_headers()),
             ("unknown", vec![], PROBES[..3].to_vec()),
-            "a token from an SDK without spoofing evidence"
+            "evidence without the spoofing part"
         );
         for (key, value) in [
             ("secChUa", json!(null)),

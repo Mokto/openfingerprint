@@ -1,4 +1,3 @@
-import { seal } from './token';
 import { environment } from './environment';
 import { identityExclusions } from './policy';
 
@@ -465,10 +464,14 @@ const probes = {
 type Name = keyof typeof probes;
 export interface Options {
 	timeoutMs?: number;
-	storageKey?: string;
-	onIdentity?: (snapshot: Result) => unknown;
-	/** The API's collection URL (`https://…/v1/events`): the token is posted there and `eventId` returned. */
-	endpoint?: string;
+}
+export interface IdentifyOptions extends Options {
+	/** The API's public identify URL, for example `https://identify.example.com/v1/identify`. */
+	endpoint: string;
+}
+export interface Identification {
+	/** Send this to your backend, which passes it to the API's internal `/v1/check`; null if posting failed. */
+	identificationId: string | null;
 }
 export interface Result {
 	automation: AutomationEvidence;
@@ -483,22 +486,22 @@ export interface Result {
 	components: Partial<Record<Name, string>>;
 	hints: Partial<Record<Name, string>>;
 	unavailable: Partial<Record<Name, Status>>;
-	storageId: string | null;
-	/** Milliseconds since the Unix epoch, by this browser's clock, when the token was sealed. */
-	collectedAt: number;
 	durationMs: number;
 	timings: Partial<Record<Name, { durationMs: number; blockingMs: number }>>;
-	/** Opaque string to send to the backend instead of the fields above. */
-	token: string;
-	/** With `endpoint`: the event to send to the backend instead of `token`; null if posting failed. */
-	eventId: string | null;
 }
-
-const tokenOf = ({ token: _, eventId: _event, ...rest }: Result) => seal(rest);
 
 const POST_TIMEOUT_MS = 3000;
 
-async function post(endpoint: string, token: string): Promise<string | null> {
+/**
+ * Collects in this browser and posts the evidence to the API's public identify listener,
+ * which observes the request itself. Resolves with `identificationId: null` when posting
+ * fails; never rejects except for invalid options.
+ */
+export async function identify(options: IdentifyOptions): Promise<Identification> {
+	const { endpoint, ...rest } = options ?? ({} as IdentifyOptions);
+	if (typeof endpoint !== 'string' || !/^https?:\/\/[^/]/.test(endpoint))
+		throw new TypeError('endpoint must be an http(s) URL');
+	const result = await collect(rest);
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), POST_TIMEOUT_MS);
 	try {
@@ -506,46 +509,28 @@ async function post(endpoint: string, token: string): Promise<string | null> {
 			method: 'POST',
 			// text/plain keeps this a simple CORS request, without a preflight round trip.
 			headers: { 'content-type': 'text/plain' },
-			body: token,
+			body: JSON.stringify(result),
 			credentials: 'omit',
 			signal: controller.signal
 		});
-		const { eventId } = response.ok ? await response.json() : {};
-		return typeof eventId === 'string' && /^[A-Za-z0-9_-]{22}$/.test(eventId) ? eventId : null;
+		const { identificationId } = response.ok ? await response.json() : {};
+		return {
+			identificationId:
+				typeof identificationId === 'string' && /^[A-Za-z0-9_-]{22}$/.test(identificationId)
+					? identificationId
+					: null
+		};
 	} catch {
-		return null;
+		return { identificationId: null };
 	} finally {
 		clearTimeout(timer);
 	}
 }
 
-function storageId(key: string | undefined): string | null {
-	if (!key) return null;
-	try {
-		const name = `stealth:${key}`;
-		const saved = localStorage.getItem(name);
-		if (saved && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(saved)) return saved;
-		const id = crypto.randomUUID();
-		localStorage.setItem(name, id);
-		return id;
-	} catch {
-		return null;
-	}
-}
-
 export async function collect(options: Options = {}): Promise<Result> {
-	const { timeoutMs = 2000, storageKey, onIdentity, endpoint } = options;
+	const { timeoutMs = 2000 } = options;
 	if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000)
 		throw new RangeError('timeoutMs must be between 1 and 5000');
-	if (
-		storageKey !== undefined &&
-		(typeof storageKey !== 'string' || !storageKey.length || storageKey.length > 128)
-	)
-		throw new TypeError('storageKey must contain 1–128 characters');
-	if (onIdentity !== undefined && typeof onIdentity !== 'function')
-		throw new TypeError('onIdentity must be a function');
-	if (endpoint !== undefined && !/^https?:\/\/[^/]/.test(String(endpoint)))
-		throw new TypeError('endpoint must be an http(s) URL');
 	if (typeof window === 'undefined' || !globalThis.crypto?.subtle)
 		throw new Error('A secure browser context is required');
 	const start = performance.now();
@@ -568,12 +553,8 @@ export async function collect(options: Options = {}): Promise<Result> {
 		components: {},
 		hints: {},
 		unavailable: {},
-		storageId: null,
-		collectedAt: 0,
 		durationMs: 0,
-		timings: {},
-		token: '',
-		eventId: null
+		timings: {}
 	};
 	const excluded = new Set(result.excluded);
 	const asyncAutomation = observeAsyncAutomation(controller.signal);
@@ -646,37 +627,11 @@ export async function collect(options: Options = {}): Promise<Result> {
 			]);
 			controller.signal.removeEventListener('abort', onAbort);
 		}
-		result.storageId = storageId(storageKey);
-		if (onIdentity) {
-			const snapshot: Result = {
-				...result,
-				automation: { ...result.automation },
-				tampering: { ...result.tampering },
-				spoofing: collectSpoofing(),
-				behavior: collectBehavior(),
-				excluded: [...result.excluded],
-				components: { ...result.components },
-				hints: { ...result.hints },
-				unavailable: { ...result.unavailable },
-				timings: Object.fromEntries(
-					Object.entries(result.timings).map(([name, timing]) => [name, { ...timing }])
-				),
-				collectedAt: Date.now(),
-				durationMs: Math.round((performance.now() - start) * 10) / 10
-			};
-			snapshot.token = tokenOf(snapshot);
-			try {
-				void Promise.resolve(onIdentity(snapshot)).catch(() => {});
-			} catch {}
-		}
 		// Diagnostic timeouts must not erase an already-computed identity.
 		for (const name of result.excluded) if (name !== 'audio') await run(name);
 		if (excluded.has('audio')) await run('audio');
 		result.behavior = collectBehavior();
-		result.collectedAt = Date.now();
 		result.durationMs = Math.round((performance.now() - start) * 10) / 10;
-		result.token = tokenOf(result);
-		if (endpoint) result.eventId = await post(endpoint, result.token);
 		return result;
 	} finally {
 		controller.abort();

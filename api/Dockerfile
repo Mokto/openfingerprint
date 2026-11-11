@@ -55,6 +55,6 @@ COPY --from=build /usr/share/doc/ca-certificates/copyright /usr/share/licenses/o
 COPY --from=build /out/openfingerprint-api /usr/local/bin/openfingerprint-api
 COPY --from=build /out/licenses /usr/share/licenses/openfingerprint-api
 ENV OPENFINGERPRINT_LISTEN_ADDR=0.0.0.0:8180
-EXPOSE 8180
+EXPOSE 8180 8443
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/openfingerprint-api"]

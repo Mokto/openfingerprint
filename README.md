@@ -7,26 +7,23 @@ own licenses. Documentation: [openfingerprint.com/docs](https://openfingerprint.
 | Component | Purpose | Documentation |
 | --- | --- | --- |
 | [`sdk/`](sdk/) | Standalone TypeScript browser collector, published as `@openfingerprint/sdk`. | [SDK guide](sdk/README.md) |
-| [`api/`](api/) | Self-hosted Rust backend for server-only signal, domain and IP checks. | [API guide](api/README.md) |
+| [`api/`](api/) | Rust backend: a public identify listener for browsers and an internal check API for identifications, domains and IPs. | [API guide](api/README.md) |
 
 The SDK has zero runtime dependencies, no telemetry, remote code, WASM or
-import-time collection. `collect()` hashes identity locally and automatically
-includes bounded automation observations, with no networking unless you give it an
-`endpoint`: by default your backend sends the resulting token to the API. The token is unsigned, so the API reports whether the
-same evidence was checked before (`replayed`) and how old it is (`tokenAgeMs`). Given
-the headers of the request that carried it, it also reports whether the token
-contradicts that request (`spoofing`). That limits reuse of a captured token and
-catches careless forgery; it does not stop forged browser observations or malicious
-traffic by itself. For more, the API can run a public collection listener: the browser
-posts its token there, and the API judges the request it received itself, including
-the TLS handshake, so a script posting a browser's token from Python, Go, curl or Node
-shows up ([browser collection](api/README.md#browser-collection-post-v1events)).
+import-time collection. It hashes identity locally and adds bounded automation,
+tampering and spoofing observations. `identify()` posts that evidence over TLS to the
+API's public `/v1/identify` listener, which observes the request itself, including the
+browser's TLS handshake (JA4), and returns an `identificationId`. Your backend sends that
+ID to the API's internal `/v1/check`, which reports the fingerprint, automation,
+tampering and spoofing verdicts, whether the identification was looked up before
+(`replayed`) and its age by the API's clock. A script that posts a browser's evidence
+from Python, Go, curl or Node shows up as `tls_mismatch`; a real browser driven by
+automation does not, which the automation probes cover.
 
-The API has no authentication: run it on a private network behind your backend (see
-the [security notes](api/README.md#security)). Its checks verify submitted evidence
-without visitor storage or history; the Redis it requires holds cached registry
-answers, short-lived replay markers and, with browser collection, hour-long events,
-nothing that identifies a person. Open
+The API's internal listener has no authentication: run it on a private network behind
+your backend (see the [security notes](api/README.md#security)); only the identify
+listener faces the Internet. There is no visitor history: the Redis it requires holds
+cached registry answers and hour-long identifications, nothing that identifies a person. Open
 domain snapshots provide independent disposable, free-subdomain, public-mailbox,
 email-relay and scoped referrer-spam evidence, including recently monitored provider
 domains, provenance, expiry and exact reviewed disputes, plus typo suggestions for
@@ -38,8 +35,8 @@ database, with provenance, expiry and automatic refresh in the Helm chart; they
 do not establish a person's location. Optional local network snapshots add
 Tor-exit, ASN and published cloud-range evidence with independent source expiry.
 Only an IP your backend passes is evaluated, and it is not retained. VPN/proxy
-classification remains unknown. The API does not collect browser signals,
-and the SDK does not depend on it. See the [data guide](api/data/README.md) for
+classification remains unknown. The API does not run browser probes; the SDK collects
+them and posts them to it. See the [data guide](api/data/README.md) for
 sources, licensing and refresh without image rebuilds.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Devices

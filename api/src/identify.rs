@@ -1,7 +1,7 @@
-//! Browser-facing collection: the SDK posts its token to `POST /v1/events` on a separate
-//! TLS listener. The API reads the request headers and the TLS ClientHello (JA4) itself,
-//! stores them with the token under a random event ID, and `/v1/check` evaluates the event
-//! by that ID. Off unless `OPENFINGERPRINT_COLLECT_ADDR` is set.
+//! The public listener: the SDK posts its evidence to `POST /v1/identify` over TLS. The API
+//! reads the request headers and the TLS ClientHello (JA4) itself, stores them with the
+//! evidence under a random identification ID, and the internal `/v1/check` evaluates the
+//! identification by that ID.
 
 use std::{
     collections::HashMap,
@@ -38,13 +38,12 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use crate::check::AppState;
 
 const REDIS_TIMEOUT: Duration = Duration::from_millis(250);
-pub const EVENT_TTL_SECONDS: u64 = 3600;
+pub const TTL_SECONDS: u64 = 3600;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_HANDSHAKES: usize = 1024;
 const MAX_RECORD: usize = 5 + 16384 + 2048;
 const CERT_RELOAD: Duration = Duration::from_secs(300);
-const EVENTS_PER_MINUTE: u32 = 60;
-const TOKEN_LIMIT: usize = 48 * 1024;
+const DEFAULT_PER_MINUTE: u32 = 60;
 
 const RESULTS: [&str; 5] = [
     "stored",
@@ -82,52 +81,55 @@ pub fn metrics() -> String {
         }
     };
     family(
-        "openfingerprint_events_total",
-        "Browser posts to /v1/events, by outcome.",
+        "openfingerprint_identifications_total",
+        "Browser posts to /v1/identify, by outcome.",
         "result",
         &RESULTS,
         &RESULT_COUNTS,
     );
     family(
-        "openfingerprint_event_lookups_total",
-        "Events looked up by /v1/check, by outcome.",
+        "openfingerprint_identification_lookups_total",
+        "Identifications looked up by /v1/check, by outcome.",
         "result",
         &LOOKUPS,
         &LOOKUP_COUNTS,
     );
     family(
-        "openfingerprint_event_tls_clients_total",
-        "Stored events by the TLS stack their ClientHello matched.",
+        "openfingerprint_identification_tls_clients_total",
+        "Stored identifications by the TLS stack their ClientHello matched.",
         "client",
         &CLIENTS,
         &CLIENT_COUNTS,
     );
     let _ = write!(
         out,
-        "# HELP openfingerprint_collect_certificates Certificates loaded for the collection listener.\n# TYPE openfingerprint_collect_certificates gauge\nopenfingerprint_collect_certificates {}\n# HELP openfingerprint_collect_certificate_reload_failures_total Certificate directory reloads that failed; the previous certificates stay in use.\n# TYPE openfingerprint_collect_certificate_reload_failures_total counter\nopenfingerprint_collect_certificate_reload_failures_total {}\n",
+        "# HELP openfingerprint_identify_certificates Certificates loaded for the identify listener.\n# TYPE openfingerprint_identify_certificates gauge\nopenfingerprint_identify_certificates {}\n# HELP openfingerprint_identify_certificate_reload_failures_total Certificate directory reloads that failed; the previous certificates stay in use.\n# TYPE openfingerprint_identify_certificate_reload_failures_total counter\nopenfingerprint_identify_certificate_reload_failures_total {}\n",
         CERTIFICATES.load(Ordering::Relaxed),
         CERT_RELOAD_FAILURES.load(Ordering::Relaxed),
     );
     out
 }
 
-/// What the API saw of the browser's request; stored with the token.
+/// The browser's evidence and what the API saw of its request.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Record {
-    pub token: String,
+    pub evidence: serde_json::Value,
     pub headers: serde_json::Value,
     pub ja4: Option<String>,
     pub origin: String,
     pub created_at_ms: u64,
 }
 
-pub struct Events {
+pub struct Identifications {
     link: crate::cache::Link,
 }
 
 pub fn key(id: &str) -> String {
-    format!("openfingerprint:event:v1:{}", crate::check::sha256(id))
+    format!(
+        "openfingerprint:identification:v1:{}",
+        crate::check::sha256(id)
+    )
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -158,7 +160,7 @@ fn new_id() -> Option<String> {
     )
 }
 
-impl Events {
+impl Identifications {
     pub fn new(client: redis::Client) -> Self {
         Self {
             link: crate::cache::Link::new(client),
@@ -173,7 +175,7 @@ impl Events {
             .arg(value)
             .arg("NX")
             .arg("EX")
-            .arg(EVENT_TTL_SECONDS);
+            .arg(TTL_SECONDS);
         let command = &command;
         let stored: Option<String> = self
             .link
@@ -184,7 +186,7 @@ impl Events {
         stored.map(|_| ()).ok_or(())
     }
 
-    /// `Ok(None)` when no such event exists or it expired.
+    /// `Ok(None)` when no such identification exists or it expired.
     pub async fn get(&self, id: &str) -> Result<Option<Record>, ()> {
         let key = key(id);
         let key = &key;
@@ -251,31 +253,39 @@ pub struct Config {
     certs: PathBuf,
     origins: Origins,
     proxy_protocol: bool,
+    per_minute: u32,
 }
 
-/// `None` when collection is off.
-pub fn config_from_env() -> Result<Option<Config>, &'static str> {
-    let Ok(addr) = std::env::var("OPENFINGERPRINT_COLLECT_ADDR") else {
-        return Ok(None);
-    };
-    let certs = std::env::var("OPENFINGERPRINT_COLLECT_CERTS").map_err(
-        |_| "OPENFINGERPRINT_COLLECT_CERTS is required with OPENFINGERPRINT_COLLECT_ADDR",
+pub fn config_from_env() -> Result<Config, &'static str> {
+    let addr = std::env::var("OPENFINGERPRINT_IDENTIFY_ADDR")
+        .map_err(|_| "OPENFINGERPRINT_IDENTIFY_ADDR is required, for example 0.0.0.0:8443")?;
+    let certs = std::env::var("OPENFINGERPRINT_IDENTIFY_CERTS").map_err(
+        |_| "OPENFINGERPRINT_IDENTIFY_CERTS is required: a directory with tls.crt and tls.key",
     )?;
-    let origins = std::env::var("OPENFINGERPRINT_COLLECT_ORIGINS")
+    let origins = std::env::var("OPENFINGERPRINT_IDENTIFY_ORIGINS")
         .ok()
         .and_then(|o| Origins::parse(&o))
-        .ok_or("OPENFINGERPRINT_COLLECT_ORIGINS must be * or a comma-separated list of origins such as https://app.example.com")?;
-    let proxy_protocol = match std::env::var("OPENFINGERPRINT_COLLECT_PROXY_PROTOCOL").as_deref() {
+        .ok_or("OPENFINGERPRINT_IDENTIFY_ORIGINS must be * or a comma-separated list of origins such as https://app.example.com")?;
+    let proxy_protocol = match std::env::var("OPENFINGERPRINT_IDENTIFY_PROXY_PROTOCOL").as_deref() {
         Err(_) | Ok("false") => false,
         Ok("true") => true,
-        Ok(_) => return Err("OPENFINGERPRINT_COLLECT_PROXY_PROTOCOL must be true or false"),
+        Ok(_) => return Err("OPENFINGERPRINT_IDENTIFY_PROXY_PROTOCOL must be true or false"),
     };
-    Ok(Some(Config {
+    let per_minute = match std::env::var("OPENFINGERPRINT_IDENTIFY_LIMIT_PER_MINUTE") {
+        Err(_) => DEFAULT_PER_MINUTE,
+        Ok(n) => n
+            .parse()
+            .ok()
+            .filter(|n| (1..=1_000_000).contains(n))
+            .ok_or("OPENFINGERPRINT_IDENTIFY_LIMIT_PER_MINUTE must be 1-1000000")?,
+    };
+    Ok(Config {
         addr,
         certs: certs.into(),
         origins,
         proxy_protocol,
-    }))
+        per_minute,
+    })
 }
 
 #[derive(Default)]
@@ -360,7 +370,7 @@ impl Certificates {
             Err(()) => {
                 CERT_RELOAD_FAILURES.fetch_add(1, Ordering::Relaxed);
                 sentry::capture_message(
-                    "Collection certificate reload failed; keeping the previous certificates",
+                    "Identify certificate reload failed; keeping the previous certificates",
                     sentry::Level::Warning,
                 );
             }
@@ -557,12 +567,20 @@ async fn handshake(
     ))
 }
 
-/// Events per client network per minute, per process.
+/// Identifications per client network per minute, per process.
 // ponytail: an in-memory fixed window per replica, so the real limit is this times the
 // replica count; move it to Redis if one replica set ever needs an exact shared limit.
-#[derive(Default)]
-struct Limiter(Mutex<HashMap<[u8; 8], (u64, u32)>>);
+struct Limiter {
+    per_minute: u32,
+    windows: Mutex<HashMap<[u8; 8], (u64, u32)>>,
+}
 impl Limiter {
+    fn new(per_minute: u32) -> Self {
+        Self {
+            per_minute,
+            windows: Mutex::default(),
+        }
+    }
     fn allow(&self, ip: IpAddr) -> bool {
         let network = match ip {
             IpAddr::V4(v4) => {
@@ -574,7 +592,7 @@ impl Limiter {
             IpAddr::V6(v6) => v6.octets()[..8].try_into().unwrap_or_default(),
         };
         let minute = now_ms() / 60_000;
-        let mut windows = self.0.lock().unwrap();
+        let mut windows = self.windows.lock().unwrap();
         if windows.len() > 100_000 {
             windows.retain(|_, (m, _)| *m == minute);
         }
@@ -583,11 +601,11 @@ impl Limiter {
             *window = (minute, 0);
         }
         window.1 += 1;
-        window.1 <= EVENTS_PER_MINUTE
+        window.1 <= self.per_minute
     }
 }
 
-struct Collector {
+struct Identify {
     state: Arc<AppState>,
     origins: Origins,
     limiter: Limiter,
@@ -627,27 +645,27 @@ fn observed_headers(headers: &HeaderMap) -> serde_json::Value {
     serde_json::Value::Object(out)
 }
 
-fn allowed_origin<'a>(collector: &Collector, headers: &'a HeaderMap) -> Option<&'a str> {
+fn allowed_origin<'a>(identify: &Identify, headers: &'a HeaderMap) -> Option<&'a str> {
     headers
         .get(header::ORIGIN)
         .and_then(|o| o.to_str().ok())
-        .filter(|o| collector.origins.allows(o))
+        .filter(|o| identify.origins.allows(o))
 }
 
 async fn create(
-    State(collector): State<Arc<Collector>>,
+    State(identify): State<Arc<Identify>>,
     ConnectInfo(peer): ConnectInfo<Peer>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Some(origin) = allowed_origin(&collector, &headers) else {
+    let Some(origin) = allowed_origin(&identify, &headers) else {
         return refuse(
             StatusCode::FORBIDDEN,
             "origin_not_allowed",
             "origin_refused",
         );
     };
-    if !collector.limiter.allow(peer.ip) {
+    if !identify.limiter.allow(peer.ip) {
         return cors(
             origin,
             refuse(
@@ -657,18 +675,19 @@ async fn create(
             ),
         );
     }
-    let token = std::str::from_utf8(&body).unwrap_or("").trim();
-    let valid = token.len() <= TOKEN_LIMIT
-        && crate::check::check_signals(crate::check::open(&token.into()), None, None).is_valid();
-    if !valid {
+    let evidence: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let observed = observed_headers(&headers);
+    if !crate::check::check_evidence(evidence.clone(), Some(&observed), Some(peer.ja4.as_deref()))
+        .is_valid()
+    {
         return cors(
             origin,
-            refuse(StatusCode::BAD_REQUEST, "invalid_signals", "invalid"),
+            refuse(StatusCode::BAD_REQUEST, "invalid_evidence", "invalid"),
         );
     }
     let record = Record {
-        token: token.to_owned(),
-        headers: observed_headers(&headers),
+        evidence,
+        headers: observed,
         ja4: peer.ja4.clone(),
         origin: origin.to_ascii_lowercase(),
         created_at_ms: now_ms(),
@@ -678,17 +697,23 @@ async fn create(
             origin,
             refuse(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "collection_unavailable",
+                "identify_unavailable",
                 "error",
             ),
         );
     };
-    if collector.state.events.store(&id, &record).await.is_err() {
+    if identify
+        .state
+        .identifications
+        .store(&id, &record)
+        .await
+        .is_err()
+    {
         return cors(
             origin,
             refuse(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "collection_unavailable",
+                "identify_unavailable",
                 "error",
             ),
         );
@@ -708,12 +733,12 @@ async fn create(
     count(&CLIENT_COUNTS, &CLIENTS, client);
     cors(
         origin,
-        Json(serde_json::json!({ "eventId": id })).into_response(),
+        Json(serde_json::json!({ "identificationId": id })).into_response(),
     )
 }
 
-async fn preflight(State(collector): State<Arc<Collector>>, headers: HeaderMap) -> Response {
-    let Some(origin) = allowed_origin(&collector, &headers) else {
+async fn preflight(State(identify): State<Arc<Identify>>, headers: HeaderMap) -> Response {
+    let Some(origin) = allowed_origin(&identify, &headers) else {
         return StatusCode::FORBIDDEN.into_response();
     };
     let mut response = StatusCode::NO_CONTENT.into_response();
@@ -733,22 +758,23 @@ async fn preflight(State(collector): State<Arc<Collector>>, headers: HeaderMap) 
     cors(origin, response)
 }
 
-fn router(collector: Arc<Collector>) -> Router {
+fn router(identify: Arc<Identify>) -> Router {
     Router::new()
-        .route("/v1/events", post(create).options(preflight))
+        .route("/v1/identify", post(create).options(preflight))
         .layer(DefaultBodyLimit::max(crate::check::BODY_LIMIT))
-        .with_state(collector)
+        .with_state(identify)
 }
 
-/// Binds the listener and serves collection until the process ends.
-pub async fn serve(
+/// Loads the certificates and binds the listener, so configuration errors stop startup;
+/// the returned future serves identification until the process ends.
+pub async fn bind(
     config: Config,
     state: Arc<AppState>,
     layers: impl FnOnce(Router) -> Router,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<impl Future<Output = std::io::Result<()>>, Box<dyn std::error::Error>> {
     let certificates = Arc::new(Certificates {
         loaded: RwLock::new(Arc::new(load(&config.certs).map_err(
-            |()| "No usable tls.crt and tls.key in OPENFINGERPRINT_COLLECT_CERTS",
+            |()| "No usable tls.crt and tls.key in OPENFINGERPRINT_IDENTIFY_CERTS",
         )?)),
         dir: config.certs,
     });
@@ -774,7 +800,7 @@ pub async fn serve(
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
     let listener = tokio::net::TcpListener::bind(&config.addr).await?;
     let local = listener.local_addr()?;
-    println!("collecting on {local}");
+    println!("identify on {local}");
     let (sender, receiver) = tokio::sync::mpsc::channel(256);
     let permits = Arc::new(tokio::sync::Semaphore::new(MAX_HANDSHAKES));
     let proxy_protocol = config.proxy_protocol;
@@ -801,17 +827,16 @@ pub async fn serve(
             });
         }
     });
-    let collector = Arc::new(Collector {
+    let identify = Arc::new(Identify {
         state,
         origins: config.origins,
-        limiter: Limiter::default(),
+        limiter: Limiter::new(config.per_minute),
     });
-    axum::serve(
+    Ok(axum::serve(
         Incoming { receiver, local },
-        layers(router(collector)).into_make_service_with_connect_info::<Peer>(),
+        layers(router(identify)).into_make_service_with_connect_info::<Peer>(),
     )
-    .await?;
-    Ok(())
+    .into_future())
 }
 
 #[cfg(test)]
@@ -862,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn event_ids_are_random_and_well_formed() {
+    fn identification_ids_are_random_and_well_formed() {
         let (a, b) = (new_id().unwrap(), new_id().unwrap());
         assert!(valid_id(&a) && valid_id(&b) && a != b, "{a} {b}");
         assert!(!valid_id("short") && !valid_id(&"!".repeat(22)));
@@ -870,13 +895,13 @@ mod tests {
 
     #[test]
     fn the_limit_applies_per_network() {
-        let limiter = Limiter::default();
+        let limiter = Limiter::new(DEFAULT_PER_MINUTE);
         let ip: IpAddr = "203.0.113.7".parse().unwrap();
-        assert!((0..EVENTS_PER_MINUTE).all(|_| limiter.allow(ip)));
+        assert!((0..DEFAULT_PER_MINUTE).all(|_| limiter.allow(ip)));
         assert!(!limiter.allow(ip));
         assert!(limiter.allow("203.0.113.8".parse().unwrap()));
         let v6 = |s: &str| s.parse::<IpAddr>().unwrap();
-        assert!((0..EVENTS_PER_MINUTE).all(|_| limiter.allow(v6("2001:db8::1"))));
+        assert!((0..DEFAULT_PER_MINUTE).all(|_| limiter.allow(v6("2001:db8::1"))));
         assert!(!limiter.allow(v6("2001:db8::ffff")), "the same /64");
     }
 }

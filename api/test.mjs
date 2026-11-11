@@ -11,7 +11,8 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, chmodSync, renameSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connect } from 'node:http2';
-import { seal } from '../sdk/src/token.ts';
+import { request as httpsRequest } from 'node:https';
+import { identifyEnvironment } from './test-certs.mjs';
 
 const { values } = parseArgs({
 	options: {
@@ -24,8 +25,6 @@ const { values } = parseArgs({
 		}
 	}
 });
-// The API has no authentication and ignores this old setting; it is passed to prove that.
-const legacySites = JSON.stringify([{ id: 'legacy', secret_key: randomBytes(32).toString('hex') }]);
 assert(!values.platform || values.image, '--platform requires --image');
 const container = values.image ? `openfingerprint-test-${randomBytes(8).toString('hex')}` : null;
 const mode = values['domain-data-mode'] ?? 'fresh';
@@ -171,12 +170,14 @@ const whois = createTcpServer(socket => socket.once('data', chunk => {
 await new Promise(resolve => whois.listen(0, container ? '0.0.0.0' : '127.0.0.1', resolve));
 writeFileSync(join(directory, 'whois.json'), JSON.stringify({ servers: { wtest: `${container ? 'dns.test' : '127.0.0.1'}:${whois.address().port}` } }), { mode: 0o644 });
 writeFileSync(join(directory, 'rdap.json'), JSON.stringify({ services: [[['example', 'test', 'org', 'io', 'uk'], [`http://${container ? 'dns.test' : '127.0.0.1'}:${rdap.address().port}/rdap/`]]] }), { mode: 0o644 });
+const identify = identifyEnvironment(directory, container ? { address: '0.0.0.0:8443' } : {});
 const args = container
 	? [
 			'run', '--rm', '--name', container, '--read-only', '--cap-drop=ALL',
-			'--security-opt=no-new-privileges', '-p', '127.0.0.1::8180', '-p', '127.0.0.1::9180',
+			'--security-opt=no-new-privileges', '-p', '127.0.0.1::8180', '-p', '127.0.0.1::9180', '-p', '127.0.0.1::8443',
 			'--env', 'OPENFINGERPRINT_LISTEN_ADDR',
-			'--env', 'OPENFINGERPRINT_SITES',
+			'--env', 'OPENFINGERPRINT_IDENTIFY_ADDR', '--env', 'OPENFINGERPRINT_IDENTIFY_CERTS',
+			'--env', 'OPENFINGERPRINT_IDENTIFY_ORIGINS', '--env', 'OPENFINGERPRINT_IDENTIFY_LIMIT_PER_MINUTE',
             '--env', 'OPENFINGERPRINT_METRICS_ADDR',
             '--env', 'OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS',
             '--env', 'OPENFINGERPRINT_DOMAIN_DATA',
@@ -187,7 +188,6 @@ const args = container
 			values.image
 		]
 	: [];
-delete process.env.OPENFINGERPRINT_SIGNING_KEY;
 delete process.env.OPENFINGERPRINT_REDIS_PASSWORD;
 delete process.env.OPENFINGERPRINT_REDIS_URL;
 delete process.env.OPENFINGERPRINT_NETWORK_DATA;
@@ -195,7 +195,9 @@ const child = spawn(container ? 'docker' : values.binary, args, {
 	env: {
 		...process.env,
 		OPENFINGERPRINT_LISTEN_ADDR: container ? '0.0.0.0:8180' : '127.0.0.1:0',
-		OPENFINGERPRINT_SITES: legacySites,
+		...identify,
+		...(container ? { OPENFINGERPRINT_IDENTIFY_CERTS: '/domain-data/identify-certs' } : {}),
+		OPENFINGERPRINT_IDENTIFY_LIMIT_PER_MINUTE: '100000',
         OPENFINGERPRINT_DOMAIN_DATA: container ? '/domain-data/domains.json' : dataPath,
         OPENFINGERPRINT_METRICS_ADDR: container ? '0.0.0.0:9180' : '127.0.0.1:0',
         OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS: '1',
@@ -210,6 +212,7 @@ let phase = 'startup';
 let timer;
 let serverOutput = '';
 let metricsOrigin;
+let identifyAddress;
 const base = new Promise((resolve, reject) => {
 	let output = '';
 	child.stdout.on('data', (data) => {
@@ -218,6 +221,10 @@ const base = new Promise((resolve, reject) => {
 		const metrics = /metrics on (127\.0\.0\.1:\d+|0\.0\.0\.0:9180)/.exec(output);
 		if (metrics && !metricsOrigin) {
 			metricsOrigin = `http://${container ? execFileSync('docker', ['port', container, '9180/tcp'], { encoding: 'utf8', timeout: 10000 }).trim() : metrics[1]}`;
+		}
+		const identified = /identify on (127\.0\.0\.1:\d+|0\.0\.0\.0:8443)/.exec(output);
+		if (identified && !identifyAddress) {
+			identifyAddress = container ? execFileSync('docker', ['port', container, '8443/tcp'], { encoding: 'utf8', timeout: 10000 }).trim() : identified[1];
 		}
 		const match = /listening on (127\.0\.0\.1:\d+|0\.0\.0\.0:8180)/.exec(output);
 		if (match) {
@@ -242,7 +249,7 @@ const base = new Promise((resolve, reject) => {
 child.stderr.on('data', data => { serverOutput += data.toString(); });
 const shortId = (hex) => Buffer.from(hex, 'hex').subarray(0, 16).toString('base64url').slice(0, 21);
 const digest = (s) => createHash('sha256').update(s).digest('hex');
-let tokenCounter = 0;
+let collections = 0;
 const spoofedAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 spoof-probe';
 function signals(locale = 'same', font = 'same', version = 1) {
 	const components = { fontFallbacks: digest('fallback'), fontPreferences: digest(font) };
@@ -260,18 +267,34 @@ function signals(locale = 'same', font = 'same', version = 1) {
 		hints,
 		excluded: ['audio', 'canvas', 'screen'],
 		unavailable: { audio: 'unstable', canvas: 'unsupported', screen: 'timeout' },
-		storageId: null,
-		// Each call is a new collection: identical content would count as a replayed token.
-		durationMs: 5 + (tokenCounter++ % 1000) / 1000,
+		durationMs: 5 + (collections++ % 1000) / 1000,
 		timings: { fontPreferences: { durationMs: 1, blockingMs: 0.1 } }
 	};
 }
 let origin;
 const plain = (value) => value && typeof value === 'object' && !Array.isArray(value);
-const prepared = (path, body) =>
-	path === '/v1/check' && plain(body)
-		? { detail: true, ...body, ...(plain(body.signals) ? { signals: seal(body.signals) } : {}) }
-		: body;
+const prepared = (path, body) => (path === '/v1/check' && plain(body) ? { detail: true, ...body } : body);
+const identifyRaw = (body, headers = {}) => new Promise((resolve, reject) => {
+	const [host, port] = identifyAddress.split(':');
+	const req = httpsRequest({
+		host, port, path: '/v1/identify', method: 'POST', servername: 'localhost', rejectUnauthorized: false,
+		headers: { origin: 'https://app.example.test', 'content-type': 'text/plain', ...headers }
+	}, (res) => {
+		let text = '';
+		res.on('data', (d) => (text += d));
+		res.on('end', () => resolve({ status: res.statusCode, body: text ? JSON.parse(text) : null }));
+	});
+	req.on('error', reject);
+	req.end(typeof body === 'string' ? body : JSON.stringify(body));
+});
+/** Posts evidence to the public listener, as the SDK does, and returns the identification ID. */
+const identified = async (evidence, headers) => {
+	const response = await identifyRaw(evidence, headers);
+	assert.equal(response.status, 200, JSON.stringify(response.body));
+	return response.body.identificationId;
+};
+/** What /v1/check reports about the identification apart from what the connection decides. */
+const core = ({ status, schema_version, fingerprint, evidence }) => ({ status, schema_version, fingerprint, evidence });
 async function request(path, headers, body, method = 'POST') {
 	return fetch(origin + path, {
 		method,
@@ -318,12 +341,10 @@ try {
     assert.equal(await health.text(), 'ok');
     assert.equal(health.headers.get('cache-control'), 'no-store');
     assert.equal(health.headers.get('set-cookie'), null);
-    for (const path of ['/v1/challenges', '/v1/collect', '/v1/events/consume'])
-        for (const method of ['GET', 'POST']) assert.equal((await request(path, {}, undefined, method)).status, 404, `${method} ${path} was removed`);
     assert.equal((await request('/v1/check', {}, undefined, 'GET')).status, 405);
     assert.equal((await request('/v1/check', {}, undefined, 'OPTIONS')).status, 405);
-    for (const method of ['GET', 'POST']) assert.equal((await request('/v1/verify', {}, undefined, method)).status, 404, `${method} /v1/verify was removed`);
-    console.log('Health and check routes are available; /v1/verify and the challenge-bound collection routes are gone.');
+    assert.equal((await request('/v1/identify', {}, '{}')).status, 404, 'identification is only on the public listener');
+    console.log('Health and check routes are available; identification is not on the internal port.');
 
     phase = 'no authentication and no browser access';
     for (const path of ['/v1/check']) {
@@ -344,29 +365,28 @@ try {
             assert.equal(forbidden.headers.get('cache-control'), 'no-store');
         }
     }
-    assert(serverOutput.includes('OPENFINGERPRINT_SITES is ignored'), 'the old setting is reported, not silently dropped');
     console.log('Requests need no credentials, ignore any that are sent, and refuse browser origins.');
 
     phase = 'canonical profiles';
     const checked = async (input, headers = {}) => {
-        const response = await request('/v1/check', headers, { signals: input });
+        const response = await request('/v1/check', {}, { identificationId: await identified(input, headers) });
         assert.equal(response.status, 200);
         assert.equal(response.headers.get('cache-control'), 'no-store');
         assert.equal(response.headers.get('set-cookie'), null);
         assert.equal(response.headers.get('access-control-allow-origin'), null);
-        return (await response.json()).signals;
+        return (await response.json()).identification;
     };
-    for (const headers of [{}, { Authorization: 'Bearer ignored' }]) {
-        const input = signals('same', 'same', 1);
-        const profile = await checked(input, headers);
-        assert.equal(profile.status, 'ok');
-        assert.equal(profile.schema_version, 1);
-        assert.equal(profile.fingerprint, shortId(input.fingerprint));
-    }
+    const first = await checked(signals('same', 'same', 1));
+    const nodeKnown = first.tlsClient === 'node';
+    assert(nodeKnown || first.tlsClient === undefined, 'a Node.js handshake is either measured as node or unknown');
+    assert.equal(first.origin, 'https://app.example.test');
+    assert.match(first.ja4, /^t13d\d{4}00_[0-9a-f]{12}_[0-9a-f]{12}$/);
+    assert.equal(first.status, 'ok');
+    assert.equal(first.schema_version, 1);
+    assert.equal(first.fingerprint, shortId(signals('same', 'same', 1).fingerprint));
     assert.equal((await checked({ ...signals('same', 'same', 1), coreFingerprint: null })).status, 'ok');
-    assert.equal((await checked(signals('same', 'same', 1))).fingerprint, (await checked(signals('same', 'same', 1))).fingerprint, 'the same identity gives the same ID in every collection');
-    assert.notEqual((await checked(signals('different', 'different', 1))).fingerprint, (await checked(signals('same', 'same', 1))).fingerprint);
-    assert.notEqual(signals('same', 'same', 1).fingerprint, signals('same', 'same', 2).fingerprint);
+    assert.equal((await checked(signals('same', 'same', 1))).fingerprint, (await checked(signals('same', 'same', 1))).fingerprint, 'the same identity gives the same ID in every identification');
+    assert.notEqual((await checked(signals('different', 'different', 1))).fingerprint, first.fingerprint);
     for (const insufficient of [
         { ...signals(), fingerprint: null },
         { ...signals(), fingerprint: null, coreFingerprint: null, components: {}, hints: {} }
@@ -378,121 +398,79 @@ try {
     }
     console.log('Canonical schema-1 profiles, repeat identities and unknown/core-only identities passed.');
 
-    phase = 'token replay and age';
-    const send = async (token) => (await fetch(origin + '/v1/check', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ signals: token })
+    phase = 'identification lookups, replay and age';
+    const lookup = async (id) => (await fetch(origin + '/v1/check', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ identificationId: id })
     })).json();
-    const collection = { ...signals('replay', 'replay'), collectedAt: Date.now() - 90000 };
-    const token = seal(collection);
-    const first = await send(token);
-    assert.equal(first.fingerprint, shortId(collection.fingerprint));
-    assert.equal(first.replayed, false);
-    assert(first.tokenAgeMs >= 90000 && first.tokenAgeMs < 100000, 'age by the browser clock');
-    assert.equal((await send(token)).replayed, true, 'the same token again');
-    assert.equal((await send(seal(collection))).replayed, true, 'the same evidence under a new random prefix');
-    assert.equal((await send(seal({ ...collection, durationMs: collection.durationMs + 1 }))).replayed, false, 'new evidence is new');
-    const ahead = await send(seal({ ...signals('ahead', 'ahead'), collectedAt: Date.now() + 5000 }));
-    assert(ahead.tokenAgeMs < 0 && ahead.tokenAgeMs > -6000, 'a browser clock that is ahead gives a negative age');
-    const old = await send(seal(signals('old', 'old')));
-    assert.equal(old.replayed, false);
-    assert.equal(old.tokenAgeMs, undefined, 'tokens from SDKs without a collection time have no age');
-    for (const collectedAt of [-1, 2e15, 'now']) {
-        assert.deepEqual(await send(seal({ ...signals(), collectedAt })), { fingerprint: null, invalid: ['signals'] });
-    }
-    assert.deepEqual(await send(seal({ nope: 1 })), { fingerprint: null, invalid: ['signals'] });
-    const detailed = await (await request('/v1/check', {}, { signals: { ...signals('detail', 'detail'), collectedAt: Date.now() } })).json();
-    assert.equal(detailed.signals.replayed, false);
-    assert(Number.isInteger(detailed.signals.tokenAgeMs));
-    console.log('Replayed tokens (even resealed), token age, old tokens and invalid collection times passed.');
+    const evidence = signals('replay', 'replay');
+    const id = await identified(evidence);
+    const once1 = await lookup(id);
+    assert.equal(once1.fingerprint, shortId(evidence.fingerprint));
+    assert.equal(once1.replayed, false);
+    assert(once1.ageMs >= 0 && once1.ageMs < 10000, 'age by the API clock');
+    assert.equal((await lookup(id)).replayed, true, 'the same identification looked up again');
+    assert.equal((await lookup(await identified(evidence))).replayed, false, 'a new identification of the same evidence is new');
+    for (const unknown of ['AAAAAAAAAAAAAAAAAAAAAA', 'short', 42])
+        assert.deepEqual(await lookup(unknown), { fingerprint: null, invalid: ['identificationId'] });
+    console.log('Lookups mark replays, age comes from the API clock, unknown identifications are invalid.');
 
     phase = 'independent requested checks and explicit unconfigured intelligence';
     const unknown = { status: 'unknown', reason: 'not_configured', network: { status: 'unknown', reason: 'non_global_ip', source: 'backend_supplied' } };
     const checkedProfile = input => ({
         status: 'ok', schema_version: input.version, fingerprint: shortId(input.fingerprint),
-        evidence: { includedComponents: 2, includedHints: 1, unavailableProbes: 3, excludedProbes: 3 },
-        replayed: false
+        evidence: { includedComponents: 2, includedHints: 1, unavailableProbes: 3, excludedProbes: 3 }
     });
-    for (const version of [1]) {
-        const input = signals('same', 'same', version);
-        const response = await request('/v1/check', {}, { signals: input });
-        assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), { signals: checkedProfile(input) });
-    }
-    const automation = { version: 1, webdriver: true, headlessUserAgent: false, seleniumArtifacts: false, phantomArtifacts: false };
-    const automationExpected = {
-        status: 'detected', ruleVersion: 1, source: 'client_reported',
-        indicators: ['webdriver'], unavailableProbes: []
-    };
-    const fields = { signals: signals(), domain: 'ExAmPlE.test.', ip: '2001:db8::1', automation };
-    for (let mask = 1; mask < 16; mask++) {
+    const fields = { identificationId: null, domain: 'ExAmPlE.test.', ip: '2001:db8::1' };
+    for (let mask = 1; mask < 8; mask++) {
         const selected = Object.fromEntries(Object.entries(fields).filter((_, i) => mask & (1 << i)));
-        if ('signals' in selected) selected.signals = signals();
+        const input = signals();
+        if ('identificationId' in selected) selected.identificationId = await identified(input);
         const response = await request('/v1/check', {}, selected);
         assert.equal(response.status, 200);
         assert.equal(response.headers.get('cache-control'), 'no-store');
-        assert.equal(response.headers.get('set-cookie'), null);
-        assert.equal(response.headers.get('access-control-allow-origin'), null);
+        const { identification, ...rest } = await response.json();
         const expected = {};
-        if ('signals' in selected) expected.signals = checkedProfile(selected.signals);
         if ('domain' in selected) expected.domain = domainExpected();
         if ('ip' in selected) expected.ip = unknown;
-        if ('automation' in selected) expected.automation = automationExpected;
-        assert.deepEqual(await response.json(), expected);
+        assert.deepEqual(rest, expected);
+        if ('identificationId' in selected) assert.deepEqual(core(identification), checkedProfile(input));
+        else assert.equal(identification, undefined);
     }
-    phase = 'automation evidence, unknowns and independent failures';
-    for (const [observations, status, indicators, unavailable] of [
-        [{ ...automation, webdriver: false }, 'not_detected', [], []],
-        [{ version: 1 }, 'unknown', [], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts']],
-        [{ ...automation, webdriver: null }, 'unknown', [], ['webdriver']],
-        [{ ...automation, headlessUserAgent: null }, 'detected', ['webdriver'], ['headless_user_agent']],
-        [{ ...automation, webdriver: false, headlessUserAgent: true }, 'detected', ['headless_user_agent'], []],
-        [{ version: 2, softwareRenderer: true, cdpDetected: false }, 'detected', ['software_renderer'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'zero_dimensions', 'native_function_tampering', 'worker_user_agent_mismatch']],
-        [{ version: 3, nativeFunctionTampering: true }, 'detected', ['native_function_tampering'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'worker_user_agent_mismatch']],
-        [{ version: 4, emptyLanguages: true, cdpDetected: false }, 'detected', ['empty_languages'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'software_renderer', 'zero_dimensions', 'native_function_tampering', 'worker_user_agent_mismatch']],
-        [{ version: 6, proportionalMonospace: true }, 'detected', ['proportional_monospace'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'native_function_tampering', 'worker_user_agent_mismatch', 'driver_artifacts', 'engine_mismatch', 'user_agent_data_mismatch', 'engine_api_mismatch']],
-        [{ version: 7, protocolScript: true }, 'detected', ['protocol_script'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'native_function_tampering', 'worker_user_agent_mismatch', 'driver_artifacts', 'engine_mismatch', 'user_agent_data_mismatch', 'proportional_monospace', 'engine_api_mismatch']]
+
+    phase = 'automation evidence, unknowns and invalid parts';
+    const probes = ['webdriver', 'headlessUserAgent', 'seleniumArtifacts', 'phantomArtifacts', 'platformMismatch', 'missingChromeObject', 'notificationPermissionQuirk', 'emptyPlugins', 'emptyLanguages', 'softwareRenderer', 'zeroDimensions', 'cdpDetected', 'nativeFunctionTampering', 'workerUserAgentMismatch', 'driverArtifacts', 'engineMismatch', 'userAgentDataMismatch', 'proportionalMonospace', 'engineApiMismatch', 'protocolScript'];
+    const snake = (name) => name.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
+    const automation = { version: 7, ...Object.fromEntries(probes.map((name) => [name, false])) };
+    const automationExpected = (status, indicators, unavailableProbes) => ({ status, ruleVersion: 7, source: 'client_reported', indicators, unavailableProbes });
+    for (const [observations, expected] of [
+        [automation, automationExpected('not_detected', [], [])],
+        [{ version: 7 }, automationExpected('unknown', [], probes.map(snake))],
+        [{ ...automation, protocolScript: null }, automationExpected('not_detected', [], ['protocol_script'])],
+        [{ ...automation, protocolScript: true }, automationExpected('detected', ['protocol_script'], [])],
+        [{ ...automation, webdriver: null }, automationExpected('unknown', [], ['webdriver'])],
+        [{ ...automation, webdriver: true, headlessUserAgent: null }, automationExpected('detected', ['webdriver'], ['headless_user_agent'])],
+        [{ ...automation, proportionalMonospace: true }, automationExpected('detected', ['proportional_monospace'], [])]
     ]) {
-        const response = await request('/v1/check', {}, { automation: observations, signals: signals() });
-        assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), {
-            automation: { status, ruleVersion: observations.version, source: 'client_reported', indicators, unavailableProbes: unavailable },
-            signals: checkedProfile(signals())
-        });
+        const result = await checked({ ...signals(), automation: observations });
+        assert.deepEqual(result.automation, expected);
+        assert.deepEqual(core(result), checkedProfile(signals()), 'automation never changes the identity');
     }
-    for (const invalid of [false, [], 'browser', {}, { version: 8 }, { version: 6, protocolScript: false }, { version: 4, extra: true }, { version: 4, engineMismatch: false }, { version: 5, proportionalMonospace: false }, { version: 5, engineApiMismatch: false }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
-        const response = await request('/v1/check', {}, { ...fields, signals: signals(), automation: invalid });
-        assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), {
-            automation: { ...automationExpected, status: 'invalid_input', indicators: [], reason: 'invalid_automation' },
-            signals: checkedProfile(signals()), domain: domainExpected(), ip: unknown
-        });
+    for (const invalid of [false, [], {}, { version: 6 }, { version: 8 }, { ...automation, extra: true }, { ...automation, webdriver: 'false' }]) {
+        const response = await identifyRaw({ ...signals(), automation: invalid });
+        assert.deepEqual([response.status, response.body], [400, { error: 'invalid_evidence' }], JSON.stringify(invalid));
     }
-    const invalidSignals = await request('/v1/check', {}, { automation, signals: false });
-    assert.equal(invalidSignals.status, 200);
-    assert.deepEqual(await invalidSignals.json(), {
-        automation: automationExpected,
-        signals: { status: 'invalid_input', reason: 'invalid_signals', schema_version: null, fingerprint: null, evidence: null }
-    });
-    const omittedAutomation = await request('/v1/check', {}, { automation: null, signals: signals() });
-    assert.deepEqual(await omittedAutomation.json(), { signals: checkedProfile(signals()) });
-    const nestedAutomation = await request('/v1/check', {}, { signals: { ...signals(), automation } });
-    assert.deepEqual(await nestedAutomation.json(), { signals: { ...checkedProfile(signals()), automation: automationExpected } });
-    const invalidNested = await request('/v1/check', {}, { signals: { ...signals(), automation: false } });
-    assert.deepEqual(await invalidNested.json(), { signals: { ...checkedProfile(signals()), automation: { ...automationExpected, status: 'invalid_input', indicators: [], reason: 'invalid_automation' } } });
     phase = 'tampering evidence stays separate from automation and identity';
-    const profile = checkedProfile(signals());
     for (const [tampering, expected] of [
         [{ version: 1, canvasReadbackAltered: false, audioRenderAltered: false }, { status: 'not_detected', indicators: [], unavailable_probes: [] }],
         [{ version: 1, canvasReadbackAltered: true, audioRenderAltered: null }, { status: 'detected', indicators: ['canvas_readback_altered'], unavailable_probes: ['audio_render_altered'] }],
         [{ version: 1 }, { status: 'unknown', indicators: [], unavailable_probes: ['canvas_readback_altered', 'audio_render_altered'] }]
     ]) {
-        const response = await request('/v1/check', {}, { signals: { ...signals(), automation, tampering } });
-        assert.deepEqual(await response.json(), { signals: { ...profile, automation: automationExpected, tampering: { rule_version: 1, source: 'client_reported', ...expected } } });
+        const result = await checked({ ...signals(), automation, tampering });
+        assert.deepEqual(result.tampering, { rule_version: 1, source: 'client_reported', ...expected });
+        assert.deepEqual(core(result), checkedProfile(signals()));
     }
-    for (const invalid of [false, [], { version: 2 }, { version: 1, extra: true }, { version: 1, audioRenderAltered: 'true' }]) {
-        const response = await request('/v1/check', {}, { signals: { ...signals(), tampering: invalid } });
-        assert.deepEqual(await response.json(), { signals: { ...profile, tampering: { status: 'invalid_input', rule_version: 1, source: 'client_reported', indicators: [], unavailable_probes: [], reason: 'invalid_tampering' } } });
-    }
+    for (const invalid of [false, [], { version: 2 }, { version: 1, extra: true }, { version: 1, audioRenderAltered: 'true' }])
+        assert.equal((await identifyRaw({ ...signals(), tampering: invalid })).status, 400);
     phase = 'behavior evidence reports input patterns without a verdict';
     const behavior = (counts) => ({ version: 1, watchedMs: 1200, pointerMoves: 0, mouseClicks: 0, clicksWithoutMovement: 0, centeredClicks: 0, keys: 0, instantKeys: 0, insertedTexts: 0, touches: 0, wheels: 0, untrustedEvents: 0, ...counts });
     for (const [counts, patterns] of [
@@ -500,51 +478,37 @@ try {
         [{ pointerMoves: 30, mouseClicks: 1, keys: 6, insertedTexts: 1 }, ['text_without_keys']],
         [{}, ['no_input']]
     ]) {
-        const response = await request('/v1/check', {}, { signals: { ...signals(), behavior: behavior(counts) } });
-        assert.deepEqual(await response.json(), { signals: { ...profile, behavior: { status: 'observed', ruleVersion: 1, source: 'client_reported', patterns } } });
+        const result = await checked({ ...signals(), behavior: behavior(counts) });
+        assert.deepEqual(result.behavior, { status: 'observed', ruleVersion: 1, source: 'client_reported', patterns });
     }
-    for (const invalid of [false, { version: 2 }, behavior({ keys: -1 }), behavior({ extra: 1 })]) {
-        const response = await request('/v1/check', {}, { signals: { ...signals(), behavior: invalid } });
-        assert.deepEqual(await response.json(), { signals: { ...profile, behavior: { status: 'invalid_input', ruleVersion: 1, source: 'client_reported', patterns: [], reason: 'invalid_behavior' } } });
-    }
-    const withTampering = await request('/v1/check', {}, { signals: { ...signals(), tampering: { version: 1, canvasReadbackAltered: true, audioRenderAltered: true } } });
-    assert.equal((await withTampering.json()).signals.fingerprint, profile.fingerprint);
-    console.log('Automation rules, all 15 input combinations, unknowns, stable identities and independent failures passed.');
-    const coreOnly = await request('/v1/check', {}, {
-        signals: { ...signals(), fingerprint: null }, domain: 'example.test'
-    });
-    assert.deepEqual(await coreOnly.json(), {
-        signals: { ...checkedProfile(signals()), status: 'insufficient_signals', schema_version: null, fingerprint: null },
-        domain: domainExpected()
-    });
-    const nulls = await request('/v1/check', {}, {
-        signals: null, domain: null, ip: '192.0.2.1'
-    });
-    assert.deepEqual(await nulls.json(), { ip: unknown });
+    for (const invalid of [false, { version: 2 }, behavior({ keys: -1 }), behavior({ extra: 1 })])
+        assert.equal((await identifyRaw({ ...signals(), behavior: invalid })).status, 400);
+    assert.equal((await checked(signals())).behavior, undefined, 'no watch(), no section');
+    console.log('Automation, tampering and behavior rules, unknowns, stable identities and rejected parts passed.');
+
+    phase = 'compact responses, gRPC and Connect';
     const compactCall = async (body) => (await fetch(origin + '/v1/check', {
-        method: 'POST', headers: { 'content-type': 'application/json', ...{} }, body: JSON.stringify(body)
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
     })).json();
-    const compactResult = await compactCall({
-        signals: seal({ ...signals(), automation: { version: 1, webdriver: true } }),
-        domain: 'mail.example', ip: '192.0.2.1'
-    });
-    assert.deepEqual(Object.keys(compactResult).filter(k => ['signals', 'domain', 'ip', 'email'].includes(k)), []);
+    const withoutAge = ({ ageMs, ...rest }) => {
+        assert(ageMs === undefined || (ageMs >= 0 && ageMs < 60000));
+        return rest;
+    };
+    const automated = () => identified({ ...signals(), automation: { ...automation, webdriver: true } });
+    const compactResult = withoutAge(await compactCall({ identificationId: await automated(), domain: 'mail.example', ip: '192.0.2.1' }));
+    assert.deepEqual(Object.keys(compactResult).filter(k => ['identification', 'domain', 'ip', 'email'].includes(k)), []);
     assert.equal(compactResult.fingerprint, shortId(signals().fingerprint));
     assert.match(compactResult.fingerprint, /^[A-Za-z0-9_-]{21}$/);
     assert.equal(compactResult.automation, true);
+    assert.equal(compactResult.replayed, false);
     assert.equal(compactResult.disposable, mode === 'fresh' ? true : undefined);
     assert.equal(compactResult.mx, false);
     const compactEmail = await compactCall({ email: 'Admin@mail.example' });
     assert.deepEqual(compactEmail, mode === 'fresh' ? { disposable: true, mx: false } : { mx: false });
     assert.deepEqual(await compactCall({ email: 'nope' }), { invalid: ['email'] });
-    const watched = { version: 1, watchedMs: 900, pointerMoves: 1, mouseClicks: 1, clicksWithoutMovement: 1, centeredClicks: 0, keys: 0, instantKeys: 0, insertedTexts: 0, touches: 0, wheels: 0, untrustedEvents: 0 };
-    assert.deepEqual((await compactCall({ signals: seal({ ...signals(), behavior: watched }) })).behavior, ['clicks_without_movement']);
-    assert.deepEqual((await compactCall({ signals: seal({ ...signals(), behavior: { ...watched, mouseClicks: 2 } }) })).behavior, []);
-    assert.deepEqual((await compactCall({ signals: seal({ ...signals(), behavior: { version: 1 } }) })).invalid, ['behavior']);
-    assert.deepEqual(await compactCall({ signals: 'not-a-token', ip: 'nope' }), {
-        fingerprint: null, invalid: ['signals', 'ip']
+    assert.deepEqual(await compactCall({ identificationId: 'not-an-id', ip: 'nope' }), {
+        fingerprint: null, invalid: ['identificationId', 'ip']
     });
-    assert.deepEqual(await compactCall({ signals: signals(), domain: 'mail.example' }), { fingerprint: null, invalid: ['signals'], ...await compactCall({ domain: 'mail.example' }) });
     const rpcCheck = '/openfingerprint.v1.OpenFingerprint/Check';
     const grpcCall = (fields, path = rpcCheck, headers = {}) => new Promise((resolve, reject) => {
         const session = connect(origin);
@@ -585,29 +549,34 @@ try {
                 const tag = field >> 3;
                 if ((field & 7) === 0) {
                     const value = varint();
-                    decoded[tag] = tag === 17 ? Number(BigInt.asIntN(64, value)) : value === 1n;
+                    decoded[tag] = tag === 20 ? Number(BigInt.asIntN(64, value)) : value === 1n;
                     continue;
                 }
                 const length = Number(varint());
                 assert(length < 128);
                 const text = body.subarray(i, i + length).toString();
                 i += length;
-                decoded[tag] = tag === 14 ? [...(decoded[tag] ?? []), text] : text;
+                decoded[tag] = tag === 14 || tag === 19 ? [...(decoded[tag] ?? []), text] : text;
             }
             resolve({ status: Number(trailers?.['grpc-status'] ?? NaN), decoded, raw });
         });
         stream.on('error', reject);
         stream.end(frame);
     });
-    const grpcResult = await grpcCall({ 1: seal({ ...signals(), automation: { version: 1, webdriver: true } }), 2: 'mail.example', 4: 'nope' });
+    const watched = { version: 1, watchedMs: 900, pointerMoves: 1, mouseClicks: 1, clicksWithoutMovement: 1, centeredClicks: 0, keys: 0, instantKeys: 0, insertedTexts: 0, touches: 0, wheels: 0, untrustedEvents: 0 };
+    assert.deepEqual((await compactCall({ identificationId: await identified({ ...signals(), behavior: watched }) })).behavior, ['clicks_without_movement']);
+    assert.deepEqual((await compactCall({ identificationId: await identified({ ...signals(), behavior: { ...watched, mouseClicks: 2 } }) })).behavior, []);
+    const grpcResult = await grpcCall({ 6: await identified({ ...signals(), automation: { ...automation, webdriver: true }, behavior: watched }), 2: 'mail.example', 4: 'nope' });
     assert.equal(grpcResult.status, 0);
     assert.equal(grpcResult.decoded[1], shortId(signals().fingerprint));
     assert.equal(grpcResult.decoded[2], true);
     assert.equal(grpcResult.decoded[4], mode === 'fresh' ? true : undefined);
     assert.equal(grpcResult.decoded[8], false);
     assert.equal(grpcResult.decoded[16], false, 'replayed');
-    assert.equal(grpcResult.decoded[17], undefined, 'no collection time, no age');
+    assert(grpcResult.decoded[20] >= 0, 'age');
+    assert.deepEqual(grpcResult.decoded[19], ['clicks_without_movement'], 'behavior');
     assert.deepEqual(grpcResult.decoded[14], ['ip']);
+    assert.equal((await grpcCall({ 1: 'a removed token field' })).status, 3, 'tokens are gone: an empty request');
     assert.equal((await grpcCall({ 2: 'mail.example' })).status, 0, 'no credentials needed');
     assert.equal((await grpcCall({ 2: 'mail.example' }, rpcCheck, { authorization: 'Bearer ignored' })).status, 0, 'and none read');
     assert.equal((await grpcCall({})).status, 3);
@@ -619,45 +588,42 @@ try {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body)
     });
-    const viaConnect = await connectCheck({ signals: seal({ ...signals(), automation: { version: 1, webdriver: true }, behavior: { version: 1, watchedMs: 900, pointerMoves: 0, mouseClicks: 0, clicksWithoutMovement: 0, centeredClicks: 0, keys: 3, instantKeys: 3, insertedTexts: 0, touches: 0, wheels: 0, untrustedEvents: 0 } }), domain: 'mail.example', ip: 'nope' });
+    const viaConnect = await connectCheck({ identificationId: await automated(), domain: 'mail.example', ip: 'nope' });
     assert.equal(viaConnect.status, 200);
-    assert.deepEqual(await viaConnect.json(), { fingerprint: shortId(signals().fingerprint), replayed: false, automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'], behavior: ['instant_keys'] });
+    assert.deepEqual(withoutAge(await viaConnect.json()), { fingerprint: shortId(signals().fingerprint), replayed: false, automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'] });
     assert.equal((await connectCheck({ ip: '8.8.8.8' })).status, 200);
     assert.equal((await connectCheck({})).status, 400);
-    phase = 'spoofing compares the token with the headers of its request';
+    assert.equal((await fetch(origin + rpcCheck, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.test' }, body: '{"ip":"8.8.8.8"}' })).status, 403);
+
+    phase = 'spoofing compares the evidence with the request the listener received';
     const claims = {
         version: 1, userAgent: spoofedAgent, language: 'en-US',
         clientHints: { brands: [{ brand: 'Chromium', version: '140' }, { brand: 'Not=A?Brand', version: '24' }], mobile: false, platform: 'Windows' }
     };
-    const sent = { userAgent: spoofedAgent, acceptLanguage: 'en-US,en;q=0.9', secChUa: '"Not=A?Brand";v="24", "Chromium";v="140"', secChUaMobile: '?0', secChUaPlatform: '"Windows"' };
-    const spoofing = (status, indicators, unavailableProbes) => ({ status, ruleVersion: 1, source: 'client_reported_vs_request_headers', indicators, unavailableProbes });
-    const allProbes = ['user_agent_mismatch', 'client_hints_mismatch', 'language_mismatch'];
-    for (const [evidence, headers, expected] of [
-        [claims, sent, spoofing('not_detected', [], [])],
-        [claims, { ...sent, userAgent: 'python-requests/2.32' }, spoofing('detected', ['user_agent_mismatch'], [])],
-        [claims, { ...sent, acceptLanguage: 'de-DE' }, spoofing('detected', ['language_mismatch'], [])],
-        [claims, { userAgent: spoofedAgent }, spoofing('unknown', [], ['client_hints_mismatch', 'language_mismatch'])],
-        [undefined, sent, spoofing('unknown', [], allProbes)],
-        [claims, { cookie: 'session' }, { ...spoofing('invalid_input', [], []), reason: 'invalid_headers' }],
-        [{ ...claims, version: 2 }, sent, { ...spoofing('invalid_input', [], []), reason: 'invalid_spoofing' }]
+    const sent = { 'user-agent': spoofedAgent, 'accept-language': 'en-US,en;q=0.9', 'sec-ch-ua': '"Not=A?Brand";v="24", "Chromium";v="140"', 'sec-ch-ua-mobile': '?0', 'sec-ch-ua-platform': '"Windows"' };
+    // Node's handshake is a library's under a Chrome user agent: tls_mismatch when this Node.js
+    // version is in the reference table, unknown otherwise.
+    const spoofing = (indicators, unavailableProbes) => {
+        const tls = nodeKnown ? [[...indicators, 'tls_mismatch'], unavailableProbes] : [indicators, [...unavailableProbes, 'tls_mismatch']];
+        return { status: tls[0].length ? 'detected' : tls[1].length ? 'unknown' : 'not_detected', ruleVersion: 1, source: 'client_reported_vs_request_headers', indicators: tls[0], unavailableProbes: tls[1] };
+    };
+    for (const [claimed, headers, expected] of [
+        [claims, sent, spoofing([], [])],
+        [claims, { ...sent, 'user-agent': 'python-requests/2.32' }, spoofing(['user_agent_mismatch'], [])],
+        [claims, { ...sent, 'accept-language': 'de-DE' }, spoofing(['language_mismatch'], [])],
+        [claims, { 'user-agent': spoofedAgent }, spoofing([], ['client_hints_mismatch', 'language_mismatch'])],
+        [undefined, sent, spoofing([], ['user_agent_mismatch', 'client_hints_mismatch', 'language_mismatch'])]
     ]) {
-        const token = { ...signals(), ...(evidence ? { spoofing: evidence } : {}) };
-        const response = await request('/v1/check', {}, { signals: token, headers });
-        assert.equal(response.status, 200);
-        assert.deepEqual((await response.json()).signals.spoofing, expected);
+        const result = await checked({ ...signals(), ...(claimed ? { spoofing: claimed } : {}) }, headers);
+        assert.deepEqual(result.spoofing, expected);
     }
-    assert.equal((await (await request('/v1/check', {}, { signals: signals() })).json()).signals.spoofing, undefined, 'no headers, no section');
-    const spoofedToken = () => seal({ ...signals(), spoofing: claims });
-    assert.equal((await compactCall({ signals: spoofedToken(), headers: { ...sent, userAgent: 'curl/8' } })).spoofing, true);
-    assert.equal((await compactCall({ signals: spoofedToken(), headers: sent })).spoofing, false);
-    assert.equal('spoofing' in await compactCall({ signals: spoofedToken(), headers: {} }), false, 'unknown leaves the key out');
-    assert.deepEqual((await compactCall({ signals: spoofedToken(), headers: { cookie: 'x' } })).invalid, ['headers']);
-    assert.deepEqual(await compactCall({ domain: 'mail.example', headers: sent }), await compactCall({ domain: 'mail.example' }), 'headers without signals are ignored');
-    const spoofedViaConnect = await connectCheck({ signals: spoofedToken(), headers: { ...sent, secChUaPlatform: '"macOS"' } });
-    assert.equal(spoofedViaConnect.status, 200);
-    assert.equal((await spoofedViaConnect.json()).spoofing, true);
-    assert.equal((await fetch(origin + rpcCheck, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.test' }, body: '{"ip":"8.8.8.8"}' })).status, 403);
-    console.log('All 15 input combinations, requested-only results, evidence counts and domain data state passed.');
+    assert.equal((await identifyRaw({ ...signals(), spoofing: { ...claims, version: 2 } }, sent)).status, 400);
+    const spoofedId = (headers) => identified({ ...signals(), spoofing: claims }, headers);
+    assert.equal((await compactCall({ identificationId: await spoofedId({ ...sent, 'user-agent': 'curl/8' }) })).spoofing, true);
+    const viaConnectSpoofed = await connectCheck({ identificationId: await spoofedId({ ...sent, 'sec-ch-ua-platform': '"macOS"' }) });
+    assert.equal(viaConnectSpoofed.status, 200);
+    assert.equal((await viaConnectSpoofed.json()).spoofing, true);
+    console.log('All input combinations, compact, gRPC and Connect results, and spoofing against the observed request passed.');
     phase = `domain classification and source scope (${mode})`;
     for (const [domain, expected] of [
         ['mail.example', { disposable: true }], ['Child.MAIL.example.', { disposable: true }],
@@ -672,9 +638,9 @@ try {
         ['notbad.customer.example', {}], ['innocent.github.io', { public_suffix_excluded: true, cheapTld: { value: false, status: 'not_cheap' }, registration: { status: 'not_applicable' } }],
         ['co.uk', { cheapTld: { value: false, status: 'not_cheap' }, registration: { status: 'not_applicable' }, mx_lookup: 'not_needed' }]
     ]) {
-        const response = await request('/v1/check', {}, { signals: signals(), domain });
+        const response = await request('/v1/check', {}, { domain });
         assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), { signals: checkedProfile(signals()), domain: domainExpected(expected) });
+        assert.deepEqual(await response.json(), { domain: domainExpected(expected) });
     }
     console.log(`Domain facts, label boundaries, provenance, unknowns and browser isolation passed (${mode}).`);
 
@@ -787,7 +753,8 @@ try {
     assert(rdapRequests.includes('mail.example') && !rdapRequests.some(name => name.split('.').length > 2), 'RDAP must query registrable domains only');
     assert.equal(rdapRequests.filter(name => name === 'rdapfound.example').length, 1, 'Cached registrations must not reach the registry again');
     assert.equal(rdapRequests.filter(name => name === 'rdapbroken.example').length, 1);
-    const rdapKeys = [...redisStore.keys()].filter(k => !k.startsWith('openfingerprint:replay:'));
+    assert([...redisStore.keys()].every(k => /^openfingerprint:(rdap:v2|replay:v2|identification:v1):[0-9a-f]{64}$/.test(k)), 'Redis holds only hashed RDAP, replay and identification keys');
+    const rdapKeys = [...redisStore.keys()].filter(k => k.startsWith('openfingerprint:rdap:'));
     assert(rdapKeys.length > 0 && rdapKeys.every(k => /^openfingerprint:rdap:v2:[0-9a-f]{64}$/.test(k)), 'Cache keys are hashed registered domains');
     assert(![...redisStore.values()].some(v => v === 'unavailable'), 'Unavailable answers are not cached');
     assert(!rdapRequests.some(name => /github|co\.uk|duckdns\.org$/.test(name) && name !== 'duckdns.org'), 'Private-namespace tenants and public suffixes are not registrable');
@@ -797,19 +764,20 @@ try {
     phase = 'independent field validation and bounded envelopes';
     for (const domain of ['', 'localhost', 'https://example.test', 'person@example.test', 'example.test:80', 'a..test', 'bücher.test', 'a'.repeat(64) + '.test', {}, 42]) {
         const response = await request('/v1/check', {}, {
-            signals: signals(), domain, ip: '192.0.2.1'
+            identificationId: await identified(signals()), domain, ip: '192.0.2.1'
         });
         assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), {
-            signals: checkedProfile(signals()), domain: { status: 'invalid_input', reason: 'invalid_domain' }, ip: unknown
-        });
+        const { identification, ...rest } = await response.json();
+        assert.deepEqual(core(identification), checkedProfile(signals()));
+        assert.deepEqual(rest, { domain: { status: 'invalid_input', reason: 'invalid_domain' }, ip: unknown });
     }
     for (const ip of ['', 'example.test', '192.0.2.1:80', '[2001:db8::1]', '192.0.2.0/24', 'fe80::1%eth0', [], true]) {
         const response = await request('/v1/check', {}, { domain: 'example.test', ip });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { domain: domainExpected(), ip: { status: 'invalid_input', reason: 'invalid_ip', network: { status: 'invalid_input', reason: 'invalid_ip', source: 'backend_supplied' } } });
     }
-    for (const body of [{}, { signals: null, domain: null, ip: null }, { automation: null }, [], null, 'not-json',
+    for (const body of [{}, { identificationId: null, domain: null, ip: null }, { automation: null }, [], null, 'not-json',
+        { signals: 'a removed token', domain: 'example.test' }, { headers: {}, domain: 'example.test' }, { event: 'x', domain: 'example.test' },
         { mx: ['mx.mail.example'] }, { domain: 'example.test', mx: ['mx.mail.example'] },
         { domain: 'example.test', email: 'a@example.test' },
         ...['visitor_token', 'account_id', 'userAgent', 'storageId'].map(k => ({ domain: 'example.test', [k]: 'unsolicited' }))]) {
@@ -828,7 +796,9 @@ try {
         { ...input, version: 2 },
         { ...input, version: 0 },
         { ...input, version: 6 },
-        { ...input, storageId: 'unsolicited' },
+        { ...input, storageId: null },
+        { ...input, collectedAt: Date.now() },
+        { ...input, token: 'unsolicited' },
         { ...input, excluded: ['canvas', 'canvas'] },
         { ...input, excluded: ['other'] },
         { ...input, components: { fonts: 'raw' } },
@@ -844,21 +814,9 @@ try {
             name => ({ ...input, [name]: 'unsolicited' })
         )
     ];
-    for (const body of invalid) {
-        const check = await request('/v1/check', {}, { signals: body, domain: 'example.test' });
-        assert.equal(check.status, 200);
-        assert.deepEqual(await check.json(), {
-            signals: { status: 'invalid_input', reason: 'invalid_signals', schema_version: null, fingerprint: null, evidence: null },
-            domain: domainExpected()
-        });
-    }
-    for (const signals of [false, [], 'not evidence']) {
-        const response = await request('/v1/check', {}, { signals, ip: '192.0.2.1' });
-        assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), {
-            signals: { status: 'invalid_input', reason: 'invalid_signals', schema_version: null, fingerprint: null, evidence: null },
-            ip: unknown
-        });
+    for (const body of [...invalid, false, [], 'not evidence']) {
+        const response = await identifyRaw(body);
+        assert.deepEqual([response.status, response.body], [400, { error: 'invalid_evidence' }], JSON.stringify(body));
     }
     assert.equal((await request('/v1/check', {}, 'not-json')).status, 400);
     assert.equal((await request('/v1/check', {}, JSON.stringify({
@@ -895,21 +853,22 @@ try {
     assert.equal(await metric('openfingerprint_rdap_lookups_total{result="found"}'), 1);
     assert(await metric('openfingerprint_rdap_cache_total{result="hit"}') >= 1);
     assert.equal(await metric('openfingerprint_rdap_cache_total{result="error"}'), 0);
-    assert(await metric('openfingerprint_replay_checks_total{result="replayed"}') >= 2);
+    assert(await metric('openfingerprint_replay_checks_total{result="replayed"}') >= 1);
     assert(await metric('openfingerprint_replay_checks_total{result="new"}') >= 5);
+    assert(await metric('openfingerprint_identifications_total{result="stored"}') >= 20);
+    assert(await metric('openfingerprint_identifications_total{result="invalid"}') >= 20);
+    assert(await metric('openfingerprint_identification_lookups_total{result="unknown"}') >= 1);
     assert.equal(await metric('openfingerprint_replay_checks_total{result="error"}'), 0);
     assert(await metric('openfingerprint_automation_checks_total{status="detected"}') >= 1);
     assert(await metric('openfingerprint_automation_checks_total{status="not_detected"}') >= 1);
     assert(await metric('openfingerprint_automation_indicators_total{indicator="webdriver"}') >= 1);
     assert.equal(await metric('openfingerprint_automation_indicators_total{indicator="cdp_detected"}'), 0);
     assert(await metric('openfingerprint_spoofing_checks_total{status="detected"}') >= 3);
-    assert(await metric('openfingerprint_spoofing_checks_total{status="not_detected"}') >= 2);
     assert(await metric('openfingerprint_spoofing_indicators_total{indicator="user_agent_mismatch"}') >= 2);
     assert(await metric('openfingerprint_spoofing_indicators_total{indicator="client_hints_mismatch"}') >= 1);
     console.log(`Snapshot reload, last-good retention and metrics passed (${mode}).`);
     phase = 'no request or credential logging';
     for (const sensitive of [
-        JSON.parse(legacySites)[0].secret_key,
         signals().fingerprint, shortId(signals().fingerprint), signals('same', 'same', 5).fingerprint,
         signals().components.fontPreferences, spoofedAgent, 'unsolicited', 'ExAmPlE.test.', 'Support+EU', 'zq.person-7', '2001:db8::1', '192.0.2.1',
         'mail.example', 'disputed.mail.example', 'child.disputed.mail.example', 'dnsmx.example', 'mx.other.example', 'rdapfound.example'
@@ -920,7 +879,7 @@ try {
 		const imageEnv = JSON.parse(execFileSync('docker', [
 			'image', 'inspect', '--format', '{{json .Config.Env}}', values.image
 		], { encoding: 'utf8' }));
-		assert(!imageEnv.some((value) => /^(OPENFINGERPRINT_SIGNING_KEY|OPENFINGERPRINT_SITES)=/.test(value)));
+		assert(!imageEnv.some((value) => /^OPENFINGERPRINT_(REDIS|IDENTIFY)_/.test(value)), 'no Redis or identify settings baked into the image');
 		assert.equal(
 			execFileSync('docker', ['exec', container, 'id', '-u'], { encoding: 'utf8' }).trim(),
 			'65532'
@@ -946,7 +905,8 @@ try {
 		assert.equal(signal, null);
 		console.log('Non-root, read-only image, retained licenses and graceful SIGTERM checks passed.');
 	}
-} catch {
+} catch (error) {
+	if (process.env.OPENFINGERPRINT_TEST_DEBUG) console.error(error);
 	console.error(
 		`API self-check failed during: ${phase}. Sensitive response/credential values suppressed.`
 	);
@@ -981,10 +941,10 @@ try {
 }
 
 if (!values['domain-data-mode'] && !process.exitCode) {
-    const env = { ...process.env, OPENFINGERPRINT_SITES: legacySites, OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_DNS: '127.0.0.1:9' };
+    const env = { ...process.env, OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_DNS: '127.0.0.1:9' };
     delete env.OPENFINGERPRINT_REDIS_URL;
     const noRedis = container
-        ? spawnSync('docker', ['run', '--rm', '--env', 'OPENFINGERPRINT_SITES', '--env', 'OPENFINGERPRINT_LISTEN_ADDR', '--env', 'OPENFINGERPRINT_DNS', values.image], { env, encoding: 'utf8', timeout: 30000 })
+        ? spawnSync('docker', ['run', '--rm', '--env', 'OPENFINGERPRINT_LISTEN_ADDR', '--env', 'OPENFINGERPRINT_DNS', values.image], { env, encoding: 'utf8', timeout: 30000 })
         : spawnSync(values.binary, [], { env, encoding: 'utf8', timeout: 30000 });
     assert(noRedis.status !== 0 && noRedis.stderr.includes('OPENFINGERPRINT_REDIS_URL is required'), 'The API must refuse to start without Redis');
     console.log('Startup without Redis refused.');

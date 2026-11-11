@@ -100,7 +100,7 @@ const line = JSON.stringify(sample);
 Transfer `line` through the approved study process and append the JSON object, one per line,
 to `samples.jsonl`. Do not include console quote wrappers. No submission happens automatically.
 The operator must verify the served bundle against the plan; a browser-supplied build label
-is not an integrity check. No `storageKey` is used, and the recorder does not retain raw probes,
+is not an integrity check. The SDK stores nothing in the browser, and the recorder does not retain raw probes,
 component/hint hashes, user agents, automation observations or storage identifiers.
 
 Record **failed attempts and null IDs**; do not retry until successful or replace a bad sample.

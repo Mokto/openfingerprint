@@ -137,15 +137,13 @@ spec:
             summary: OpenFingerprint rejected a changed network snapshot
             description: The last valid snapshot stays loaded without extending source expiry.
     {{- end }}
-    {{- if .Values.collect.enabled }}
-    - name: openfingerprint-collect
+    - name: openfingerprint-identify
       rules:
-        - alert: OpenFingerprintCollectCertificateReloadFailing
-          expr: increase(openfingerprint_collect_certificate_reload_failures_total{ {{- $selector -}} }[30m]) > 0
+        - alert: OpenFingerprintIdentifyCertificateReloadFailing
+          expr: increase(openfingerprint_identify_certificate_reload_failures_total{ {{- $selector -}} }[30m]) > 0
           labels:
             severity: warning
           annotations:
-            summary: OpenFingerprint cannot reload its collection certificates
-            description: The listener keeps serving the previous certificates, which expire unless the mounted TLS Secrets become readable again. Check the Secrets named in collect.certificates and cert-manager.
-    {{- end }}
+            summary: OpenFingerprint cannot reload its identify certificates
+            description: The listener keeps serving the previous certificates, which expire unless the mounted TLS Secrets become readable again. Check the Secrets named in identify.certificates and cert-manager.
 {{- end }}

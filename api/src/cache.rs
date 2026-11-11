@@ -20,11 +20,11 @@ const RESULTS: [&str; 3] = ["hit", "miss", "error"];
 const MAX_PENDING_WRITES: usize = 64;
 const IDLE: Duration = Duration::from_secs(60);
 
-/// The Redis shared by the RDAP cache and the token replay markers. Required: the API does not start
+/// The Redis shared by the RDAP cache, identifications and their lookup markers. Required: the API does not start
 /// without it, but each feature handles an unreachable Redis on its own.
 pub fn client_from_env() -> Result<redis::Client, &'static str> {
     let url = std::env::var("OPENFINGERPRINT_REDIS_URL").map_err(|_| {
-        "OPENFINGERPRINT_REDIS_URL is required: the Redis for the RDAP cache and token replay markers"
+        "OPENFINGERPRINT_REDIS_URL is required: the Redis for the RDAP cache and identifications"
     })?;
     client(&url, std::env::var("OPENFINGERPRINT_REDIS_PASSWORD").ok())
 }

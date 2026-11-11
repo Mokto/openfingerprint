@@ -4,34 +4,34 @@
 
 OpenFingerprint is an experimental browser-signal SDK and a self-hosted check API. It collects pseudonymous browser evidence for application security; it does not prove physical-device identity, attest browser execution or establish Fingerprint Pro accuracy.
 
-- `sdk/` is the TypeScript browser package, published as `@openfingerprint/sdk`. It collects rendering probes and environment hints, hashes identity locally with Web Crypto, and reports automation observations separately.
-- `api/` is a Rust service using Axum and Tokio. It verifies SDK profiles, evaluates automation evidence and provides domain intelligence. It has no authentication: deploy it on a private network. Redis holds cached RDAP registry answers, token replay markers and hour-long collection events, not a visitor-history database. The optional collection listener (`OPENFINGERPRINT_COLLECT_ADDR`) is the only browser-facing, TLS-terminating port.
-- The repository root is a private pnpm workspace for development, CI and release orchestration, not another published package. The SDK can be used without the API.
+- `sdk/` is the TypeScript browser package, published as `@openfingerprint/sdk`. It collects rendering probes and environment hints, hashes identity locally with Web Crypto, reports automation, tampering and spoofing observations separately, and `identify()` posts the evidence to the API.
+- `api/` is a Rust service using Axum and Tokio with two listeners. The public, TLS-terminating identify listener (`POST /v1/identify`, mandatory) receives evidence from browsers and records their headers and JA4 TLS fingerprint. The internal listener (`POST /v1/check` and gRPC/Connect) has no authentication and must stay on a private network; it evaluates identifications by ID and provides domain and IP intelligence. Redis holds cached RDAP registry answers, hour-long identifications and their lookup markers, not a visitor-history database.
+- The repository root is a private pnpm workspace for development, CI and release orchestration, not another published package.
 
 ## Code map
 
 | Location | Responsibility |
 | --- | --- |
-| [sdk/src/index.ts](sdk/src/index.ts) | Public `collect()` entry point, rendering probes, scheduling, result assembly and identity hashing. |
+| [sdk/src/index.ts](sdk/src/index.ts) | Public `identify()` and `collect()` entry points, rendering probes, scheduling, result assembly and identity hashing. |
 | [sdk/src/environment.ts](sdk/src/environment.ts), [sdk/src/policy.ts](sdk/src/policy.ts) | Environment hints and browser-specific exclusions from identity. Excluded probes can remain available as diagnostics. |
 | [sdk/src/automation.ts](sdk/src/automation.ts), [api/src/automation.rs](api/src/automation.rs) | Browser automation observations and their independent server-side evaluation rules. |
 | [sdk/src/watch.ts](sdk/src/watch.ts), [api/src/behavior.rs](api/src/behavior.rs) | `watch()`: traps for driver code calling DOM methods, input counts, and the API's behavior patterns. |
 | [api/src/main.rs](api/src/main.rs) | HTTP routes, process startup, snapshot reload scheduling, metrics listener and graceful shutdown. |
-| [api/src/check.rs](api/src/check.rs) | Browser-origin refusal, request validation, canonical profile/hash verification, and `/v1/check`. |
-| [api/src/replay.rs](api/src/replay.rs) | Redis token replay markers behind the `replayed` signal. |
-| [api/src/collect.rs](api/src/collect.rs), [api/src/tls.rs](api/src/tls.rs) | The browser collection listener (`POST /v1/events`: TLS, SNI certificates, PROXY protocol, origins, rate limit, events in Redis) and JA4 fingerprints with their reference table. |
+| [api/src/check.rs](api/src/check.rs) | Browser-origin refusal, request validation, canonical evidence/hash verification, and `/v1/check`. |
+| [api/src/identify.rs](api/src/identify.rs), [api/src/tls.rs](api/src/tls.rs) | The public identify listener (`POST /v1/identify`: TLS, SNI certificates, PROXY protocol, origins, rate limit, identifications in Redis) and JA4 fingerprints with their reference table. |
+| [api/src/replay.rs](api/src/replay.rs) | Redis lookup markers behind the `replayed` signal. |
 | [api/src/domains.rs](api/src/domains.rs), [api/src/mx.rs](api/src/mx.rs) | Licensed domain-snapshot matching, provenance/expiry and bounded DNS MX lookup/provider inference. |
 | [api/src/rdap.rs](api/src/rdap.rs), [api/src/cache.rs](api/src/cache.rs) | Registered-domain RDAP lookup and Redis cache/connection handling. |
 | [api/data/](api/data/), [api/update-domain-data.mjs](api/update-domain-data.mjs) | Bundled source/review metadata, RDAP bootstrap data and the validated domain-snapshot updater. Dataset licenses are separate from the code's MIT license. |
 | [sdk/test.mjs](sdk/test.mjs) | Playwright browser/reference checks. |
-| [api/test.mjs](api/test.mjs), [api/test-domain-updater.mjs](api/test-domain-updater.mjs) | HTTP/container and dataset-updater integration checks. Rust unit tests live alongside their modules. |
+| [api/test.mjs](api/test.mjs), [api/test-identify.mjs](api/test-identify.mjs), [api/test-domain-updater.mjs](api/test-domain-updater.mjs) | HTTP/container, identify-listener and dataset-updater integration checks; [api/test-certs.mjs](api/test-certs.mjs) makes the certificates the API needs to start. Rust unit tests live alongside their modules. |
 | [api/chart/](api/chart/), [api/Dockerfile](api/Dockerfile), [api/updater.Dockerfile](api/updater.Dockerfile) | Helm deployment, network policy, refresh/monitoring resources and runtime/updater images. |
 | [.github/workflows/](.github/workflows/), [scripts/test-release.mjs](scripts/test-release.mjs) | CI, component publishing, dataset refresh automation and release-configuration regression checks. |
 
 ## How the pieces connect
 
-- Local collection: `collect()` runs bounded browser probes and returns identity hashes, availability/timing diagnostics and separate automation evidence. Collection failures and browser-policy exclusions are not evidence of malicious behavior.
-- Token trust: the SDK token is obfuscated, not signed, so a script can build one. `/v1/check` reports `replayed` (the same evidence checked before, from a Redis marker) and `tokenAgeMs` (from the token's `collectedAt`) so the backend can limit reuse; neither stops a forger. With the collection listener, the browser posts the token itself and `/v1/check` takes the `event` ID: headers and the JA4 TLS fingerprint are then observed by the API, and a library's handshake under a browser user agent is `tls_mismatch`. Update the JA4 reference table in `tls.rs` from real measurements only; an unlisted fingerprint must stay unknown.
+- Collection: `collect()` runs bounded browser probes locally and returns identity hashes, availability/timing diagnostics and separate automation, tampering and spoofing evidence. Collection failures and browser-policy exclusions are not evidence of malicious behavior.
+- Identification: `identify()` posts that evidence to `/v1/identify`; the listener stores it for an hour with the headers and JA4 it observed and returns an `identificationId`. The backend passes the ID to `/v1/check`, which reports `replayed` (looked up before) and `ageMs` (by the API's clock), and `tls_mismatch` when a library's handshake carries a browser user agent. Evidence is client-reported: a real browser can still lie about it. Update the JA4 reference table in `tls.rs` from real measurements only; an unlisted fingerprint must stay unknown.
 - Direct checks: backends call `/v1/check` for independent requested sections. It does not execute browser probes.
 - Domain intelligence: the API matches versioned local snapshots, uses DNS MX evidence where applicable and obtains registered-domain registration dates through RDAP. The separate updater refreshes public datasets; source provenance, licensing and expiry travel with the data.
 
@@ -45,18 +45,18 @@ OpenFingerprint is an experimental browser-signal SDK and a self-hosted check AP
 
 ## Read the relevant guide
 
-- For browser collection, identity schemas or SDK transport, read the [SDK guide](sdk/README.md).
-- For API contracts, deployment security or replay signals, read the [API guide](api/README.md).
+- For browser collection, identity schemas or `identify()`, read the [SDK guide](sdk/README.md).
+- For API contracts, the identify listener, deployment security or replay signals, read the [API guide](api/README.md).
 - For dataset sources, matching, licensing or refresh, read the [data guide](api/data/README.md).
 - For deployment, network policy or monitoring, read the [Helm guide](api/chart/README.md).
 - For publishing changes, read [Releases](README.md#releases). The SDK and API release independently through Release Please.
 
 ## Preserve the boundaries
 
-- Keep the SDK free of runtime dependencies and import-time collection. Keep `collect()` network-free.
+- Keep the SDK free of runtime dependencies and import-time collection. Keep `collect()` network-free; only `identify()` posts, and only to the endpoint it is given.
 - Preserve existing fingerprint hashes and verification compatibility unless the task explicitly calls for a versioned migration. Keep diagnostic evidence outside identity hashes.
 - Preserve unknown results for missing, failed or stale evidence. Do not present browser observations as attestation or a negative detection as proof of trust.
-- Keep the API free of credentials and keep refusing any request with an `Origin` header: no browser may reach it. Keep protected decisions on the backend.
+- Keep the internal listener free of credentials and keep refusing any request with an `Origin` header: no browser may reach it. Only the identify listener faces browsers, and it accepts nothing but SDK evidence. Keep protected decisions on the backend.
 - Pin GitHub Actions and reusable workflows by commit SHA with a version comment, set `persist-credentials: false` on checkouts, and keep publishing credentials out of pull-request jobs. Renovate proposes the bumps.
 
 ## Verification

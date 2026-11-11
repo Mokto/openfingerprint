@@ -1,6 +1,5 @@
-//! Replay markers: has this exact SDK token been checked before? One hashed key per token with
-//! a TTL; no fingerprint, account or address is stored with it. Best effort: it catches a
-//! captured token submitted again, not an attacker who builds a fresh one.
+//! Replay markers: has this identification been looked up before? One hashed key per
+//! identification, expiring with it; nothing else is stored.
 
 use std::{
     fmt::Write as _,
@@ -12,54 +11,37 @@ use crate::cache::Link;
 
 const TIMEOUT: Duration = Duration::from_millis(250);
 const RESULTS: [&str; 3] = ["new", "replayed", "error"];
-const DEFAULT_WINDOW_SECONDS: u64 = 3600;
 
 pub struct Replay {
     link: Link,
-    window_seconds: u64,
     counts: [AtomicU64; 3],
 }
 
-/// The marker key of a decoded token. Hashing the content, not the sealed string, means
-/// re-sealing the same evidence under a new random prefix does not make it look new.
-pub fn key(content: &serde_json::Value) -> String {
+fn key(identification_id: &str) -> String {
     format!(
-        "openfingerprint:replay:v1:{}",
-        crate::check::sha256(&content.to_string())
+        "openfingerprint:replay:v2:{}",
+        crate::check::sha256(identification_id)
     )
 }
 
 impl Replay {
-    pub fn new(client: redis::Client, window_seconds: u64) -> Self {
+    pub fn new(client: redis::Client) -> Self {
         Self {
             link: Link::new(client),
-            window_seconds,
             counts: Default::default(),
         }
     }
 
-    pub fn from_env(client: redis::Client) -> Result<Self, &'static str> {
-        let seconds = match std::env::var("OPENFINGERPRINT_REPLAY_WINDOW_SECONDS") {
-            Err(_) => DEFAULT_WINDOW_SECONDS,
-            Ok(s) => s
-                .parse()
-                .ok()
-                .filter(|s| (1..=604_800).contains(s))
-                .ok_or("OPENFINGERPRINT_REPLAY_WINDOW_SECONDS must be 1-604800")?,
-        };
-        Ok(Self::new(client, seconds))
-    }
-
-    /// `Some(true)` the first time `key` is seen within the window, `Some(false)` after that,
+    /// `Some(true)` the first time an identification is looked up, `Some(false)` after that,
     /// `None` when Redis cannot say. Unknown is never reported as new or replayed.
-    pub async fn first_seen(&self, key: &str) -> Option<bool> {
+    pub async fn first_seen(&self, identification_id: &str) -> Option<bool> {
         let mut command = redis::cmd("SET");
         command
-            .arg(key)
+            .arg(key(identification_id))
             .arg(1)
             .arg("NX")
             .arg("EX")
-            .arg(self.window_seconds);
+            .arg(crate::identify::TTL_SECONDS);
         let command = &command;
         let reply: Result<Option<String>, ()> = self
             .link
@@ -78,7 +60,7 @@ impl Replay {
 
     pub fn metrics(&self) -> String {
         let mut out = String::from(
-            "# HELP openfingerprint_replay_checks_total Token replay checks by outcome: first sighting, seen before, or Redis unavailable.\n# TYPE openfingerprint_replay_checks_total counter\n",
+            "# HELP openfingerprint_replay_checks_total Identification lookups by outcome: first, looked up before, or Redis unavailable.\n# TYPE openfingerprint_replay_checks_total counter\n",
         );
         for (result, count) in RESULTS.iter().zip(&self.counts) {
             let _ = writeln!(
@@ -96,27 +78,22 @@ mod tests {
     use super::*;
     use crate::cache::tests::{client_for, fake_redis};
 
-    #[test]
-    fn the_key_depends_on_content_only() {
-        let a = serde_json::json!({"b": 1, "a": [1, 2]});
-        let reordered: serde_json::Value = serde_json::from_str(r#"{"a":[1,2],"b":1}"#).unwrap();
-        assert_eq!(key(&a), key(&reordered));
-        assert_ne!(key(&a), key(&serde_json::json!({"b": 2, "a": [1, 2]})));
-        let prefix = "openfingerprint:replay:v1:";
-        assert!(key(&a).starts_with(prefix) && key(&a).len() == prefix.len() + 64);
-    }
-
     #[tokio::test]
-    async fn marks_each_key_once_per_window_and_reports_unknown_when_redis_fails() {
+    async fn marks_each_identification_once_and_reports_unknown_when_redis_fails() {
         let (addr, store) = fake_redis(None).await;
-        let replay = Replay::new(client_for(&addr), 90);
+        let replay = Replay::new(client_for(&addr));
         assert_eq!(replay.first_seen("k").await, Some(true));
         assert_eq!(replay.first_seen("k").await, Some(false));
         assert_eq!(replay.first_seen("other").await, Some(true));
-        assert_eq!(store.lock().unwrap()["k"].1, "90", "always with a TTL");
+        let (stored, ttl) = store.lock().unwrap()[&key("k")].clone();
+        assert_eq!(
+            (stored.as_str(), ttl.as_str()),
+            ("1", "3600"),
+            "hashed, with the identification's TTL"
+        );
 
         let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let down = Replay::new(client_for(&closed.local_addr().unwrap().to_string()), 90);
+        let down = Replay::new(client_for(&closed.local_addr().unwrap().to_string()));
         drop(closed);
         assert_eq!(down.first_seen("k").await, None);
 

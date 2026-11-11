@@ -2,10 +2,10 @@ mod automation;
 mod behavior;
 mod cache;
 mod check;
-mod collect;
 mod country;
 mod domains;
 mod email;
+mod identify;
 mod mailauth;
 mod metrics;
 mod mx;
@@ -60,7 +60,7 @@ async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::respon
             + &state.replay.metrics()
             + &automation::metrics()
             + &spoofing::metrics()
-            + &collect::metrics()
+            + &identify::metrics()
             + &metrics::render(),
     )
 }
@@ -201,15 +201,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_state(state.clone());
         tokio::spawn(async move { axum::serve(listener, router).await });
     }
-    if let Some(config) = collect::config_from_env()? {
-        let state = state.clone();
-        tokio::spawn(async move {
-            if let Err(error) = collect::serve(config, state, observed).await {
-                eprintln!("Collection listener failed: {error}");
-                std::process::exit(1);
-            }
-        });
-    }
+    let identify = identify::bind(identify::config_from_env()?, state.clone(), observed).await?;
+    tokio::spawn(async move {
+        if let Err(error) = identify.await {
+            eprintln!("Identify listener failed: {error}");
+            std::process::exit(1);
+        }
+    });
     let addr =
         std::env::var("OPENFINGERPRINT_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8180".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;

@@ -2,8 +2,9 @@
 
 Documentation: [openfingerprint.com/docs/deploy](https://openfingerprint.com/docs/deploy)
 
-Runs the check API and keeps its open domain and country data fresh, with the Redis
-it requires for the RDAP cache and token replay markers: bundled `redis-ha` or your own.
+Runs the API, its public identify listener and its open domain and country data refresh,
+with the Redis it requires for the RDAP cache and identifications: bundled `redis-ha` or
+your own.
 When enabled, NetworkPolicies permit DNS, Redis, registry HTTPS and public HTTPS
 for country downloads. Policies apply to the entire pod, not individual containers.
 Disable `countryData.enabled` to remove country refresh and its HTTPS allowance;
@@ -11,10 +12,13 @@ the RDAP HTTPS allowance remains.
 
 ```sh
 helm install openfingerprint oci://ghcr.io/mokto/charts/openfingerprint \
-  --namespace openfingerprint --create-namespace
+  --namespace openfingerprint --create-namespace \
+  --set-json 'identify.origins=["https://app.example.com"]' \
+  --set-json 'identify.certificates=[{"host":"identify.example.com","secretName":"identify-example-com-tls"}]'
 ```
 
-The API has no authentication, so keep its Service private and isolate it: with the
+`identify.origins` and `identify.certificates` are required: see
+[Identify listener](#identify-listener). The internal API has no authentication, so keep its Service private and isolate it: with the
 default `networkPolicy.enabled=false`, any pod in the cluster can call it. Enable the
 policies and name its callers:
 
@@ -37,7 +41,7 @@ API and updater image digests.
 | NetworkPolicy `<release>-domain-data` (with `networkPolicy.enabled`) | The updater accepts nothing; it may reach DNS, HTTPS and `kubeApiServerPorts`. |
 | Sidecar `country-updater` and shared `emptyDir` | Downloads DB-IP Country Lite immediately, then daily; retries hourly after failures. Uses the pinned `domainData.refresh.image`, with no credentials or Kubernetes token. |
 | Sidecar `network-updater` and per-pod `emptyDir` (with `networkData.sidecar.enabled`) | Runs the pinned `networkData.refresh.image` in `--loop` mode: refreshes network intelligence hourly, retries hourly after failures (every minute until the first manifest exists) and prunes old ASN files. The API mounts the 64Mi volume read-only. No credentials or Kubernetes token. |
-| Service `<release>-collect` (with `collect.enabled`) | The public [browser collection](#browser-collection) listener on port 443 (container 8443), separate from the private API Service. |
+| Service `<release>-identify` | The public [identify listener](#identify-listener) on port 443 (container 8443), separate from the private API Service. |
 | ServiceMonitor, PrometheusRule | Optional domain/country dataset-health scraping and alerts. |
 | `redis-ha` (default; `redis-ha.enabled`) | The [DandyDeveloper redis-ha](https://github.com/DandyDeveloper/charts/tree/master/charts/redis-ha) chart: three Redis pods with Sentinel and two HAProxy pods, 64 MB, `noeviction`, no persistence or snapshots. Disable it to use your own Redis. |
 
@@ -104,12 +108,14 @@ To use a Redis or Valkey you already run, set `redis-ha.enabled=false`, add
 such as `redis://redis.shared.svc.cluster.local:6379/0`: with `ndots: 1`, a short
 name is first sent upstream as a public DNS query.
 
-Replay markers need one Redis shared by every replica. `redis-ha` fails over through
-Sentinel, which is asynchronous: a failover can lose the latest writes, so a token
-checked just before it may not show as replayed afterwards. That only weakens the
-`replayed` signal; checks keep working. The bundled instance uses `noeviction`, a 64 MB
-limit and no persistence; a full Redis rejects new writes, which leaves `replayed` out
-and turns RDAP caching off until keys expire.
+Identifications need one Redis shared by every replica. `redis-ha` fails over through
+Sentinel, which is asynchronous: a failover can lose the latest writes, so an
+identification stored just before it may be unknown afterwards, and one looked up just
+before it may not show as replayed. Domain and IP checks keep working. The bundled
+instance uses `noeviction`, a 64 MB limit and no persistence; a full Redis rejects new
+writes, which makes `/v1/identify` answer 503 and turns RDAP caching off until keys expire.
+An identification takes a few kilobytes for an hour, so size Redis for your peak hourly
+identifications.
 
 ## Access
 
@@ -120,39 +126,37 @@ carries an `Origin` header, so browsers cannot call it directly.
 
 `/health` checks process liveness, not Redis availability.
 
-## Browser collection
+## Identify listener
 
-With `collect.enabled`, the API also runs the public listener where browsers post their
-token themselves (`POST /v1/events`), so the API sees their headers and TLS handshake; see
-[Browser collection](../README.md#browser-collection-post-v1events) in the API guide. It is
-the only port meant for the internet, and it accepts nothing but events from
-`collect.origins`. The API terminates TLS itself to fingerprint the ClientHello, so:
+The API always runs the public listener where browsers post their evidence
+(`POST /v1/identify`), so it sees their headers and TLS handshake; see
+[`POST /v1/identify`](../README.md#post-v1identify-public) in the API guide. It is the only
+port meant for the internet, and it accepts nothing but evidence from `identify.origins`. The API terminates TLS itself to fingerprint the ClientHello, so:
 
 - Route it with TCP passthrough. A proxy that terminates TLS, including a CDN in proxy mode
   such as an orange-cloud Cloudflare record, replaces the browser's handshake with its own.
   Point a DNS-only record at your load balancer.
-- Give it a certificate per hostname in `collect.certificates`, from kubernetes.io/tls
+- Give it a certificate per hostname in `identify.certificates`, from kubernetes.io/tls
   Secrets. Renewed Secrets are picked up within about 6 minutes (kubelet sync plus the
   API's 5-minute reread). A pod does not start until every listed Secret exists.
-- Set `collect.proxyProtocol=true` when the hop in front sends the PROXY protocol, so the
+- Set `identify.proxyProtocol=true` when the hop in front sends the PROXY protocol, so the
   per-network rate limit sees client addresses rather than the proxy's. Connections without
   the header are then dropped.
 - With `networkPolicy.enabled`, list the peers that reach the port in
-  `networkPolicy.collectFrom`, such as the ingress controller's namespace.
+  `networkPolicy.identifyFrom`, such as the ingress controller's namespace.
 
 For example, behind Traefik on a load balancer that already sends it the PROXY protocol,
 with a cert-manager certificate:
 
 ```yaml
-collect:
-  enabled: true
+identify:
   origins: [https://app.example.com]
   proxyProtocol: true
   certificates:
-    - host: collect.example.com
-      secretName: collect-example-com-tls
+    - host: identify.example.com
+      secretName: identify-example-com-tls
 networkPolicy:
-  collectFrom:
+  identifyFrom:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: traefik
@@ -162,17 +166,17 @@ networkPolicy:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: collect-example-com
+  name: identify-example-com
   namespace: openfingerprint
 spec:
-  secretName: collect-example-com-tls
-  dnsNames: [collect.example.com]
+  secretName: identify-example-com-tls
+  dnsNames: [identify.example.com]
   issuerRef: {kind: ClusterIssuer, name: letsencrypt}
 ---
 apiVersion: traefik.io/v1alpha1
 kind: ServersTransportTCP
 metadata:
-  name: openfingerprint-collect
+  name: openfingerprint-identify
   namespace: openfingerprint
 spec:
   proxyProtocol:
@@ -181,24 +185,24 @@ spec:
 apiVersion: traefik.io/v1alpha1
 kind: IngressRouteTCP
 metadata:
-  name: openfingerprint-collect
+  name: openfingerprint-identify
   namespace: openfingerprint
 spec:
   entryPoints: [websecure]
   routes:
-    - match: HostSNI(`collect.example.com`)
+    - match: HostSNI(`identify.example.com`)
       services:
-        - name: openfingerprint-collect
+        - name: openfingerprint-identify
           port: 443
-          serversTransport: openfingerprint-collect
+          serversTransport: openfingerprint-identify
   tls:
     passthrough: true
 ```
 
-Without an ingress controller, set `collect.service.type=LoadBalancer` with your provider's
-PROXY protocol annotation in `collect.service.annotations`, and allow the load balancer's
-source addresses in `networkPolicy.collectFrom`. The rate limit is 60 events per minute per
-client network on each replica. `OpenFingerprintCollectCertificateReloadFailing` fires when
+Without an ingress controller, set `identify.service.type=LoadBalancer` with your provider's
+PROXY protocol annotation in `identify.service.annotations`, and allow the load balancer's
+source addresses in `networkPolicy.identifyFrom`. The rate limit is `identify.limitPerMinute` (default 60) identifications per minute
+per client network on each replica. `OpenFingerprintIdentifyCertificateReloadFailing` fires when
 the mounted certificates cannot be reread.
 
 ## RDAP registration dates
@@ -290,7 +294,7 @@ With `prometheusRule.enabled`:
 | `OpenFingerprintCountryDataUnavailable` | No country database for 30 minutes, or the metric is missing. |
 | `OpenFingerprintCountryDataExpiring` | The database expires within `expiryWarningDays` or has expired. |
 | `OpenFingerprintCountryDataReloadFailing` | The API rejected a changed country file in the last hour. |
-| `OpenFingerprintRedisErrors` | Redis calls from the registration cache failed for 15 minutes. Registries then get every lookup, and `replayed` is left out. |
+| `OpenFingerprintRedisErrors` | Redis calls from the registration cache failed for 15 minutes. Registries then get every lookup, and identifications are likely failing too. |
 | `OpenFingerprintMxLookupsFailing` | Over half of MX lookups were unavailable in 30 minutes (with at least `minLookups`, default 20), for 15 minutes: usually the nameserver or UDP 53 egress. |
 | `OpenFingerprintRegistryLookupsFailing` | Over half of RDAP and WHOIS lookups were unavailable in 30 minutes (with at least `minLookups`), for 30 minutes: usually TCP 443/43 egress. |
 | `OpenFingerprintNetworkSourceUnavailable` | With the sidecar or a network claim configured, any network source is missing, stale or future-dated for 15 minutes. |

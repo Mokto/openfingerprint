@@ -2,19 +2,22 @@
 
 Documentation: [openfingerprint.com/docs/api](https://openfingerprint.com/docs/api)
 
-A self-hosted, MIT-licensed backend companion to the browser SDK. The next release
-provides stateless `POST /v1/check` with independent browser, automation, domain
-and IP sections.
+A self-hosted, MIT-licensed backend companion to the browser SDK. It has two listeners:
 
-**The API has no authentication.** It is meant to sit on a private network behind
-your own backend, gateway or NetworkPolicy; see [Security](#security) before exposing it.
+- **Public, `POST /v1/identify`:** browsers post the SDK's evidence here over TLS. The API
+  reads the request's headers and TLS handshake itself, stores them with the evidence for
+  an hour, and answers with an `identificationId`.
+- **Internal, `POST /v1/check` (and the same check over Connect/gRPC):** your backend sends
+  the `identificationId` with any email, domain or IP and gets independent verdicts.
+
+**The internal listener has no authentication.** Keep it on a private network behind
+your own backend, gateway or NetworkPolicy; see [Security](#security).
 
 Domain and country intelligence run locally against openly licensed datasets:
 
 | Requested check | Available behavior |
 | --- | --- |
-| `signals` | Schema-1 verification of the SDK's opaque `token`, with a 21-character fingerprint, whether the same evidence was checked before (`replayed`) and the token's age. |
-| `automation` | Versioned rules for client-reported observations, now included automatically inside SDK `signals`. |
+| `identificationId` | Schema-1 verification of the browser's evidence, with a 21-character fingerprint, automation, tampering and spoofing verdicts, whether this identification was looked up before (`replayed`) and its age. |
 | `domain` | Disposable, free-subdomain, public-mailbox, email-relay and source-scoped referrer-spam evidence with provenance and expiry, typo suggestions, MX providers, registration dates and SPF/DMARC status. |
 | `email` | Role-account detection for a full address, plus every `domain` check for the address's domain. |
 | `ip` | Local country estimate plus independent Tor-exit, ASN and published cloud-range evidence under `network`, with source provenance and expiry. Missing facts remain unknown. |
@@ -25,8 +28,7 @@ uncovered domains remain null, not false. The API looks up MX hosts to detect
 mail routed to a listed disposable provider, and reports when the registered
 domain was created, from its registry over RDAP.
 VPN/proxy classification and domain authority are not implemented. The spam scope is specifically **referrer spam**,
-not email-sending reputation. See [sources, licenses and refresh](data/README.md). Older API releases, including 0.4.0, have a different
-`/v1/check` contract; this guide describes the next release, not a live upgrade.
+not email-sending reputation. See [sources, licenses and refresh](data/README.md).
 
 The API does not execute browser probes, recognize physical devices, execute
 signup decisions or provide Fingerprint Pro feature parity. Probe values can be
@@ -38,11 +40,10 @@ Stateless checks have no visitor database, observation cache or account history.
 Their evidence, email addresses, domains and IPs are dropped after processing; an
 email address is never logged, cached, echoed or used as a metric label.
 Redis holds three kinds of key, all with a TTL: cached RDAP answers keyed by SHA-256
-hashes of registered domains, token replay markers keyed by a SHA-256 hash of the
-token's content (see [Replayed tokens](#replayed-tokens-and-token-age)), and, with
-[browser collection](#browser-collection-post-v1events), events keyed by a SHA-256 hash
-of their ID for one hour. None stores an account, address or IP; an event holds the
-token, the browser's `User-Agent`, `Accept-Language` and `Sec-CH-UA*` headers, its JA4
+hashes of registered domains, identifications keyed by a SHA-256 hash of their ID for one
+hour, and lookup markers for `replayed`, also hashed and expiring with the
+identification. None stores an account, address or IP; an identification holds the
+browser's evidence, its `User-Agent`, `Accept-Language` and `Sec-CH-UA*` headers, its JA4
 TLS fingerprint and the page origin. Request evidence is not logged.
 Outbound traffic consists of MX DNS queries, at most one RDAP
 request to the domain's registry per uncached check, Redis commands and, only when
@@ -51,12 +52,12 @@ Country and network lookups use local datasets only. Their separate updaters
 download public datasets without receiving checked IPs or application credentials.
 Responses have `Cache-Control: no-store` and set no cookies. Domain/IP inputs are
 not echoed in responses. Checks never infer an IP from the connection or forwarded headers:
-only an `ip` your backend passes is evaluated. Signals-only calls do not run domain/IP checks.
+only an `ip` your backend passes is evaluated. Identification-only calls do not run domain/IP checks.
 
 The process retains read-only domain/country/network datasets; the RDAP cache and
-replay markers are shared in Redis, not an in-memory fallback. There is no visitor
-history. The API does no rate limiting of its own routes: apply quotas and request limits
-at your edge/gateway. The browser collection listener limits each client network.
+identifications are shared in Redis, not an in-memory fallback. There is no visitor
+history. The internal listener does no rate limiting: apply quotas at your gateway. The
+public listener limits each client network.
 
 A separate operator updater refreshes public snapshots without rebuilding the
 image; the API re-reads an override file every minute and swaps in a changed
@@ -99,12 +100,11 @@ to the namespace operator. The API needs HTTPS and TCP 43 to public addresses fo
 this; without them, results report `unavailable`.
 There are no lookup retries, remote-provider waits or visitor-history fallbacks.
 
-The SDK hashes identity signals locally and automatically includes bounded
-automation evidence outside those hashes. `collect()` has no networking: your
-backend sends the token. It writes no storage unless `collect()` opts into
-`storageKey`. Leave that option unset when sending results here. Hashes are pseudonymous, not anonymous. Your
-application and hosting proxy have their own logging, retention, disclosure and
-access-control responsibilities.
+The SDK hashes identity signals locally and includes bounded automation, tampering and
+spoofing evidence outside those hashes. `identify()` posts it to the public listener;
+the SDK writes no storage. Hashes are pseudonymous, not anonymous. Your application and
+hosting proxy have their own logging, retention, disclosure and access-control
+responsibilities.
 
 ## Configuration
 
@@ -113,16 +113,15 @@ build arguments, command-line arguments or logs.
 
 | Variable | Meaning |
 | --- | --- |
-| `OPENFINGERPRINT_SITES` | No longer used. The API has no credentials; if the variable is set it is ignored and the API logs one warning at startup, so old deployments keep starting. |
-| `OPENFINGERPRINT_LISTEN_ADDR` | Optional listener, default `127.0.0.1:8180`. |
-| `OPENFINGERPRINT_COLLECT_ADDR` | Optional public TLS listener for [browser collection](#browser-collection-post-v1events), for example `0.0.0.0:8443`. Off when unset; the next two variables are then required. |
-| `OPENFINGERPRINT_COLLECT_CERTS` | Directory of certificates for the collection listener: `tls.crt` and `tls.key` (PEM) at its root serve any hostname, and a subdirectory named after a hostname serves that name, which is how mounted Kubernetes TLS Secrets look. Reread every 5 minutes, so renewed certificates are picked up; a broken reload keeps the previous ones. |
-| `OPENFINGERPRINT_COLLECT_ORIGINS` | Page origins allowed to post events, comma-separated (`https://app.example.com,https://www.example.com`), or `*` for any. Other origins get HTTP 403. |
-| `OPENFINGERPRINT_COLLECT_PROXY_PROTOCOL` | `true` when a load balancer in front sends the PROXY protocol (v1 or v2), so the rate limit sees client addresses; connections without the header are then dropped. Default `false`. |
+| `OPENFINGERPRINT_LISTEN_ADDR` | Internal listener, default `127.0.0.1:8180`. |
+| `OPENFINGERPRINT_IDENTIFY_ADDR` | Required public TLS listener for [`POST /v1/identify`](#post-v1identify-public), for example `0.0.0.0:8443`. |
+| `OPENFINGERPRINT_IDENTIFY_CERTS` | Required directory of PEM certificates: `tls.crt` and `tls.key` at its root serve any hostname, and a subdirectory named after a hostname serves that name by SNI, which is how mounted Kubernetes TLS Secrets look. Reread every 5 minutes, so renewed and added certificates are picked up; a broken reload keeps the previous ones. |
+| `OPENFINGERPRINT_IDENTIFY_ORIGINS` | Required page origins allowed to post, comma-separated (`https://app.example.com,https://www.example.com`), or `*` for any. Other origins get HTTP 403. |
+| `OPENFINGERPRINT_IDENTIFY_LIMIT_PER_MINUTE` | Identifications per client network (an IPv4 address or IPv6 /64) per minute, per replica: 1–1000000, default 60. |
+| `OPENFINGERPRINT_IDENTIFY_PROXY_PROTOCOL` | `true` when a load balancer in front sends the PROXY protocol (v1 or v2), so the limit sees client addresses; connections without the header are then dropped. Default `false`. |
 | `OPENFINGERPRINT_NETWORK_DATA` | Optional network manifest path. Keep its content-addressed ASN files in the same directory. No bundled/live fallback; absent/invalid data is unknown. Checked every 60 seconds; invalid replacements retain last-good data without extending expiry. |
-| `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL for the RDAP cache, token replay markers and events; the API does not start without it. Supports `rediss://` with certificate validation. An unreachable Redis means uncached RDAP lookups and no `replayed` answer; checks keep working and there is no memory fallback. Each pod keeps one multiplexed connection for the RDAP cache and one for replay markers, replaced after any error, timeout or 60 s of idleness; commands are never retried. RDAP cache writes happen after the response (at most 64 in flight; extra writes are dropped and counted as cache errors). |
+| `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL for the RDAP cache, identifications and lookup markers; the API does not start without it. Supports `rediss://` with certificate validation. An unreachable Redis means uncached RDAP lookups, HTTP 503 from `/v1/identify` and unknown identifications; domain and IP checks keep working and there is no memory fallback. Each pod keeps one multiplexed connection for each of these, replaced after any error, timeout or 60 s of idleness; commands are never retried. RDAP cache writes happen after the response (at most 64 in flight; extra writes are dropped and counted as cache errors). |
 | `OPENFINGERPRINT_REDIS_PASSWORD` | Optional Redis password, overriding one in the URL, so the URL can live outside a Secret. |
-| `OPENFINGERPRINT_REPLAY_WINDOW_SECONDS` | How long a checked token is remembered: 1–604800 seconds, default 3600. Use identical settings on every replica. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
 | `OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS` | Seconds between checks of the override file, 1–86400, default 60. A changed file that fails to read or parse is rejected and the last valid snapshot stays until its sources expire. |
 | `OPENFINGERPRINT_COUNTRY_DATA` | Optional read-only DB-IP Country Lite MMDB path. Without it, IP checks return `unknown/not_configured`. Missing/invalid files yield unknown country results without disabling other checks. |
@@ -131,58 +130,87 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_WHOIS_SERVERS` | Optional path to a `{"servers": {"tld": "host"}}` file replacing the bundled WHOIS server list; `host:port` is allowed, for local test servers. |
 | `OPENFINGERPRINT_RDAP_BOOTSTRAP` | Optional path to an IANA RDAP bootstrap file replacing the bundled one; read at startup. It may contain `http://` servers, for local test registries. |
 | `OPENFINGERPRINT_METRICS_ADDR` | Optional listener for Prometheus `GET /metrics`, for example `0.0.0.0:9180`. Keep it off the API port so network policy can expose it separately. |
-| `SENTRY_DSN` | Optional. Enables error reporting to Sentry: panics, HTTP 5xx responses and rejected snapshot reloads, as static messages with release (`CARGO_PKG_VERSION`) and stack traces. Request data, headers, IPs, users and breadcrumbs are removed before sending, so signals, hashes, credentials and event IDs are never reported. `SENTRY_ENVIRONMENT` optionally sets the environment. With `networkPolicy.enabled`, `networkPolicy.rdapTo` must allow HTTPS to your Sentry ingest host; the default allows all public addresses. |
+| `SENTRY_DSN` | Optional. Enables error reporting to Sentry: panics, HTTP 5xx responses and rejected snapshot reloads, as static messages with release (`CARGO_PKG_VERSION`) and stack traces. Request data, headers, IPs, users and breadcrumbs are removed before sending, so evidence, hashes, credentials and identification IDs are never reported. `SENTRY_ENVIRONMENT` optionally sets the environment. With `networkPolicy.enabled`, `networkPolicy.rdapTo` must allow HTTPS to your Sentry ingest host; the default allows all public addresses. |
 
 ## Security
 
-The API has no authentication, no keys and no tenants. Whoever can reach it can use
-it, and each check makes DNS, RDAP and WHOIS requests from your server's addresses.
-Deploy it so that only your backend can connect:
+The internal listener has no authentication, no keys and no tenants. Whoever can reach
+it can use it, and each check makes DNS, RDAP and WHOIS requests from your server's
+addresses. Deploy it so that only your backend can connect:
 
-- Keep the Service private: no Ingress, no public load balancer. With the
+- Keep its Service private: no Ingress, no public load balancer. With the
   [Helm chart](chart/README.md), enable `networkPolicy` and list your backend's pods
   in `networkPolicy.apiFrom`; the chart's default allows any pod in the cluster.
 - If a gateway exposes it, put your own authentication, quotas and request limits there.
 - A request that carries an `Origin` header is refused (HTTP 403), so a web page cannot
-  call the API from a visitor's browser. There is no CORS and no preflight.
+  call it from a visitor's browser. There is no CORS and no preflight.
 - Every route requires `Content-Type: application/json`; bodies are limited to 64 KiB.
 
-The collection listener is the one exception: it is meant to be public, terminates TLS
-itself, accepts only `POST /v1/events` from the configured origins, and takes nothing but a
-token, so a page cannot make your server run domain or IP lookups through it.
+The public listener is meant to face the Internet. It terminates TLS itself, accepts only
+`POST /v1/identify` from the configured origins, limits each client network, and takes
+nothing but SDK evidence, so a page cannot make your server run domain or IP lookups
+through it.
 
-The API port does not terminate TLS. Terminate it in front if traffic leaves a trusted
-network; cluster-local HTTP and NetworkPolicy do not encrypt traffic. No dashboard,
-SDK hosting, billing or tenant-management endpoint is provided.
-
-Earlier releases required `Authorization: Bearer <secret>` and `OPENFINGERPRINT_SITES`.
-Both are ignored now, so callers may keep sending the header while they roll over.
+The internal listener does not terminate TLS. Terminate it in front if traffic leaves a
+trusted network; cluster-local HTTP and NetworkPolicy do not encrypt traffic. No
+dashboard, SDK hosting, billing or tenant-management endpoint is provided.
 
 ## Endpoints
 
-Routes require `Content-Type: application/json` and refuse any request with an `Origin`
-header. There is no authentication ([Security](#security)) and no CORS. The optional
-[collection listener](#browser-collection-post-v1events) on its own port is the only
-browser-facing route.
+The internal routes require `Content-Type: application/json` and refuse any request with
+an `Origin` header; there is no authentication ([Security](#security)) and no CORS.
+`POST /v1/identify` on the public listener is the only browser-facing route.
 
 ### `GET /health`
 
-No body. Returns HTTP 200 with plain text `ok`. This is process
+Internal listener. No body. Returns HTTP 200 with plain text `ok`. This is process
 liveness, not evidence quality, dataset coverage or identification accuracy.
 
-### `POST /v1/check`
+### `POST /v1/identify` (public)
+
+The SDK's `identify({ endpoint })` posts its evidence here as JSON in a `text/plain` body
+(a simple CORS request, no preflight). The listener:
+
+1. checks the `Origin` against `OPENFINGERPRINT_IDENTIFY_ORIGINS`, the per-network limit
+   and the evidence's validity;
+2. reads the JA4 fingerprint of the TLS ClientHello and the `User-Agent`,
+   `Accept-Language` and `Sec-CH-UA*` headers of the request;
+3. stores them with the evidence and the page origin for one hour under a random
+   128-bit ID, and answers `{"identificationId":"<22 characters>"}` with
+   `Access-Control-Allow-Origin`.
+
+Errors are `{"error":"<reason>"}`: 403 `origin_not_allowed`, 400 `invalid_evidence`,
+429 `rate_limited` and 503 `identify_unavailable` (Redis could not store it); the SDK
+then resolves with `identificationId: null`.
+
+The listener terminates TLS itself, because a proxy that terminates TLS hides the
+handshake. Route its port with TCP passthrough (a Kubernetes `LoadBalancer` Service,
+Traefik `IngressRouteTCP` with `passthrough`, nginx `stream` or HAProxy `mode tcp`) and set
+`OPENFINGERPRINT_IDENTIFY_PROXY_PROTOCOL=true` if the load balancer sends the PROXY
+protocol. It serves HTTP/1.1 and HTTP/2 with ALPN. To serve customers' own subdomains
+(`fp.customer.example` as a CNAME to the listener, which ad-block lists do not catch),
+add a certificate directory per hostname.
+
+What this proves and what it does not: a script must connect with its own TLS stack, and
+a library's handshake under a browser user agent is reported as
+[`tls_mismatch`](#spoofing-indicators). Unlisted handshakes (other browser versions,
+company TLS inspection) stay unknown rather than flagged. A real browser driven by
+automation has a real browser handshake, and libraries built to imitate Chrome's handshake
+exist, so `tls_mismatch: false` does not show a human; the automation probes cover the
+first case. The reference fingerprints in [src/tls.rs](src/tls.rs) were measured in
+November 2026 and need updating as browsers and libraries change. JA4 is the
+[FoxIO](https://github.com/FoxIO-LLC/ja4) TLS client fingerprint (BSD 3-Clause).
+
+### `POST /v1/check` (internal)
 
 The JSON object accepts only these fields:
 
 | Field | Shape |
 | --- | --- |
-| `signals` | Optional `token` string from the SDK result (`result.token`). Objects are rejected as `invalid_signals`. |
-| `automation` | Optional version-1, -2 or -3 SDK automation evidence, as described below. |
+| `identificationId` | Optional ID from `/v1/identify`, which your page passes to your backend. |
 | `domain` | Optional ASCII hostname, not a URL or complete email address. |
 | `email` | Optional full email address. Its domain gets the `domain` checks, so it cannot be combined with `domain`. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
-| `headers` | Optional object with the raw `userAgent`, `acceptLanguage`, `secChUa`, `secChUaMobile` and `secChUaPlatform` headers of the browser request that carried `signals`. Used only with `signals`, for [spoofing](#spoofing-indicators). |
-| `event` | Optional `eventId` from the SDK when it posted to the [collection listener](#browser-collection-post-v1events), instead of `signals`. Cannot be combined with `signals` or `headers`. |
 | `detail` | Optional boolean, default false. `true` returns the full response described in this guide, with evidence counts, rule metadata and per-source provenance. |
 
 By default the response is one flat object of verdicts:
@@ -190,7 +218,7 @@ By default the response is one flat object of verdicts:
 ```json
 {"fingerprint":"_AJUXF4ttBmXt1N1es89S",
  "replayed":false,
- "tokenAgeMs":1830,
+ "ageMs":1830,
  "automation":true,
  "tampering":false,
  "spoofing":false,
@@ -207,14 +235,14 @@ A key that is missing means unknown, so there are no `null` facts. Only the
 
 | Key | Meaning |
 | --- | --- |
-| `fingerprint` | From `signals` or `event`; `null` when the token is invalid, the event unknown or Redis unavailable, or there is no full ID. |
-| `replayed`, `tokenAgeMs` | From a valid `signals` token: whether the same evidence was checked before, and milliseconds since the browser sealed it. See [Replayed tokens](#replayed-tokens-and-token-age). |
+| `fingerprint` | From `identificationId`; `null` when the identification is unknown, expired or unavailable, or has no full ID. |
+| `replayed`, `ageMs` | Whether this identification was looked up before, and milliseconds since it was stored, by the API's clock. See [Replays and age](#replays-and-age). |
 | `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
-| `spoofing` | The browser's own report contradicts the headers of the request that carried it, or, for events, the TLS stack it connected with. Only with `headers` or `event`. |
+| `spoofing` | The browser's own report contradicts the request the public listener received: its headers or its TLS handshake. |
 | `behavior` | [Input patterns](#behavior-patterns) since the page called the SDK's `watch()`, as a list. Context, not a verdict. Only for pages that call `watch()`. |
 | `disposable`, `free`, `spam`, `relay`, `cheapTld`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `cheapTld` says the TLD is one registrars sell at teaser prices; `mx` says the domain has mail servers. |
 | `country`, `vpn`, `tor`, `datacenter`, `proxy` | From `ip`. `country` is a lowercase ISO 3166-1 alpha-2 code. |
-| `invalid` | Only present when an input was rejected: a list of `signals`, `event`, `automation`, `tampering`, `spoofing`, `behavior`, `headers`, `domain`, `email` and/or `ip`. An unknown or expired event is `event`. |
+| `invalid` | Only present when an input was rejected: a list of `identificationId` (malformed, unknown or expired), `domain`, `email` and/or `ip`. |
 
 `email` and `domain` give the same keys. Everything else (evidence counts, indicator
 lists, rule versions, role account, ASN and hosting provider, MX providers,
@@ -226,7 +254,7 @@ The rest of this guide describes the `detail: true` shape.
 Response keys are camelCase; enumerated values such as `not_listed` or
 `invalid_input` stay snake_case. At least one non-null field is required. Null is equivalent to omission. Results
 contain only requested non-null sections. Inputs can be combined in any order;
-there is no cross-input identity merging, and automation/domain/IP never change the browser ID.
+there is no cross-input identity merging, and domain/IP never change the browser ID.
 
 For example:
 
@@ -396,7 +424,7 @@ not establish mailbox spam or comprehensive abuse coverage. Neither disposable
 nor free-subdomain classifications set this fact. [Data details](data/README.md)
 include exact matching/expiry semantics and the bounded provider coverage.
 
-With valid full SDK evidence, the `signals` section is:
+With valid full SDK evidence, the `identification` section is:
 
 ```json
 {
@@ -408,9 +436,20 @@ With valid full SDK evidence, the `signals` section is:
     "includedHints":1,
     "unavailableProbes":3,
     "excludedProbes":3
-  }
+  },
+  "automation":{"status":"not_detected","ruleVersion":7,"source":"client_reported","indicators":[],"unavailableProbes":[]},
+  "tampering":{"status":"not_detected","rule_version":1,"source":"client_reported","indicators":[],"unavailable_probes":[]},
+  "spoofing":{"status":"not_detected","ruleVersion":1,"source":"client_reported_vs_request_headers","indicators":[],"unavailableProbes":[]},
+  "replayed":false,
+  "ageMs":1830,
+  "origin":"https://app.example.com",
+  "ja4":"t13d1517h2_8daaf6152771_cb7bf5808d99",
+  "tlsClient":"chromium"
 }
 ```
+
+`tlsClient` is the client the JA4 matched in the reference table (`chromium`, `firefox`,
+`apple`, `curl`, `python`, `go` or `node`), omitted when it matched none.
 
 `evidence.identityGroups` (omitted when empty) holds partial identity hashes
 for repeat-visit matching: `fonts`, `hardware`, `rendering` and `software`. Each
@@ -428,42 +467,35 @@ probes. Unavailable and excluded counts are separate and may overlap.
 
 The returned fingerprint is the first 126 bits of the full SHA-256, as 21
 base64url characters (`A-Za-z0-9_-`, case-sensitive; do not lowercase it). The API
-verifies the full hash inside the token.
+verifies the full hash inside the evidence.
 
 Valid evidence without a full ID has `status: insufficient_signals`, null schema
 and fingerprint, and evidence counts. A core ID never substitutes for a full ID.
-Invalid evidence has `status: invalid_input`, `reason: invalid_signals`, and null
-schema, fingerprint and evidence. That does not discard another section's result.
+An unknown or expired identification has `status: invalid_input` with `reason:
+unknown_identification` (or `invalid_identification_id` for a malformed ID) and null
+schema, fingerprint and evidence; when Redis cannot answer it has `status: unavailable`
+and `reason: identification_unavailable`. Neither discards another section's result.
 
 Domain/email/IP sections return `invalid_input` with `invalid_domain`, `invalid_email` or `invalid_ip`
-for invalid values, including wrong field types. The same field-level handling
-applies to malformed signal objects. HTTP 200 means the envelope was processed,
+for invalid values, including wrong field types. HTTP 200 means the envelope was processed,
 not that every check succeeded: inspect each requested section. Valid sections
 survive failures in other sections; there is no combined clean/fraud verdict.
 
 Malformed JSON, non-object envelopes, empty/all-null requests and unknown top-level
-fields, and `domain` together with `email`, return HTTP 400. Visitor tokens, account
-metadata and raw browser context are not additional inputs. All request bodies are limited to
+fields, and `domain` together with `email`, return HTTP 400. Account metadata and raw
+browser context are not additional inputs. All request bodies are limited to
 64 KiB, including nested evidence, before evaluation.
 
 #### Automation indicators
 
-`collect()` includes observations automatically as `signals.automation`, and
-`/v1/check` returns their evaluation as `signals.automation`. No additional SDK
-option or forwarding step is needed. Existing callers may still send standalone
-`automation` (including without a fingerprint):
-
-```json
-{"automation":{"version":2,"webdriver":true,"headlessUserAgent":false,"seleniumArtifacts":false,"phantomArtifacts":null,"cdpDetected":false}}
-```
-
-The response contains:
+The SDK reports automation observations in its evidence, and `/v1/check` returns their
+evaluation as `identification.automation`:
 
 ```json
 {
   "automation": {
     "status": "detected",
-    "ruleVersion": 2,
+    "ruleVersion": 7,
     "source": "client_reported",
     "indicators": ["webdriver"],
     "unavailableProbes": ["phantom_artifacts", "platform_mismatch"]
@@ -471,62 +503,51 @@ The response contains:
 }
 ```
 
-Evidence accepts `version: 1` with four optional booleans, `version: 2`, `3` or `4`
-with those four plus ten more, `version: 5` with three more after those, or `version: 6`
-with two more after the version 5 fields, or `version: 7` with one more after those. Versions 3
-and 4 have the same fields as version 2; they only change how the SDK observes
-`nativeFunctionTampering` (3) and `cdpDetected` (4), as the table describes. Version 5
-also widens how the SDK observes `headlessUserAgent`, `zeroDimensions` and
-`nativeFunctionTampering`. Each version
-rejects any field it does not define, so a version-1 document cannot carry
-version-2 probes. `ruleVersion` echoes the
-evidence version. Null or omitted observations remain unknown. `indicators` and
-`unavailableProbes` list snake_case names in this order:
+The evidence must be `version: 7` with these optional booleans and nothing else; the
+listener rejects other versions and unknown fields with `invalid_evidence`. Null or
+omitted observations remain unknown. `indicators` and `unavailableProbes` list
+snake_case names in this order:
 
-| Evidence field | Name | Since | `true` means |
-| --- | --- | --- | --- |
-| `webdriver` | `webdriver` | 1 | `navigator.webdriver` is true. |
-| `headlessUserAgent` | `headless_user_agent` | 1 | UA contains `HeadlessChrome/`. Version 5: or a `userAgentData` brand is `HeadlessChrome`. |
-| `seleniumArtifacts` | `selenium_artifacts` | 1 | A Selenium global exists on `document`. |
-| `phantomArtifacts` | `phantom_artifacts` | 1 | A Phantom global exists on `window`. |
-| `platformMismatch` | `platform_mismatch` | 2 | UA OS family contradicts `navigator.platform` or `userAgentData.platform`. |
-| `missingChromeObject` | `missing_chrome_object` | 2 | A Chromium UA (not WebView) without `window.chrome`. |
-| `notificationPermissionQuirk` | `notification_permission_quirk` | 2 | `Notification.permission` is `denied` while the Permissions API reports `prompt`. |
-| `emptyPlugins` | `empty_plugins` | 2 | Desktop Chromium with no `navigator.plugins`. |
-| `emptyLanguages` | `empty_languages` | 2 | `navigator.languages` is empty. |
-| `softwareRenderer` | `software_renderer` | 2 | Unmasked WebGL renderer is SwiftShader, llvmpipe, softpipe or similar. |
-| `zeroDimensions` | `zero_dimensions` | 2 | Screen or outer-window width/height is 0. Version 5: a 0x0 outer window in a hidden (background) tab is unknown instead. |
-| `cdpDetected` | `cdp_detected` | 2 | Version 4: logging an error formatted its stack (V8 called `Error.prepareStackTrace`), which happens only while a CDP client has `Runtime.enable` on, as Puppeteer, Playwright, ChromeDriver and open DevTools do. Clients that avoid `Runtime.enable`, such as nodriver or rebrowser-patches, are not seen. Versions 2 and 3: a getter on the logged error's `stack` was read, which Chrome 137 and later never do, so their reports from current Chrome are false whether or not a client is attached. |
-| `nativeFunctionTampering` | `native_function_tampering` | 2 | Version 5: also a `Proxy` around either native, an own `webdriver` on `navigator`, a deleted `webdriver` getter, or a detached `srcdoc` frame with a window (puppeteer-extra-plugin-stealth). Version 3: the `navigator.webdriver` getter or `Permissions.prototype.query` is not native when read with an untouched `toString`, or `Function.prototype.toString.call({})` does not throw. Version 2: also true when `Function.prototype.toString` itself is replaced, which error monitors such as Sentry do by default, so version-2 reports from such pages are positive on every visit; do not rely on it. |
-| `workerUserAgentMismatch` | `worker_user_agent_mismatch` | 2 | A dedicated worker reports a different UA or platform than the main thread. |
-| `driverArtifacts` | `driver_artifacts` | 5 | A ChromeDriver, WebDriver, Watir, Playwright-binding, NightmareJS or `domAutomation` global, or a driver attribute on `<html>`. |
-| `engineMismatch` | `engine_mismatch` | 5 | The JavaScript engine is not the one the UA claims (V8, SpiderMonkey or JavaScriptCore). |
-| `userAgentDataMismatch` | `user_agent_data_mismatch` | 5 | The `Chromium` brand major version differs from the UA's `Chrome/` major version. |
-| `proportionalMonospace` | `proportional_monospace` | 6 | The generic `monospace` font is not fixed-width (Camoufox claiming another OS than its host). |
-| `engineApiMismatch` | `engine_api_mismatch` | 6 | `userAgentData` is not a `NavigatorUAData`, or a Chrome 120+ UA lacks APIs Chrome shipped by version 105 (engines imitating Chrome, such as Obscura). |
-| `protocolScript` | `protocol_script` | 7 | After the SDK's `watch()`, code compiled by a debugging protocol (CDP `Runtime.evaluate`, Puppeteer, ChromeDriver, Firefox's Debugger API) called a trapped DOM method in the page's own world. Also set by typing in the DevTools console. |
+| Evidence field | Name | `true` means |
+| --- | --- | --- |
+| `webdriver` | `webdriver` | `navigator.webdriver` is true. |
+| `headlessUserAgent` | `headless_user_agent` | UA contains `HeadlessChrome/`, or a `userAgentData` brand is `HeadlessChrome`. |
+| `seleniumArtifacts` | `selenium_artifacts` | A Selenium global exists on `document`. |
+| `phantomArtifacts` | `phantom_artifacts` | A Phantom global exists on `window`. |
+| `platformMismatch` | `platform_mismatch` | UA OS family contradicts `navigator.platform` or `userAgentData.platform`. |
+| `missingChromeObject` | `missing_chrome_object` | A Chromium UA (not WebView) without `window.chrome`. |
+| `notificationPermissionQuirk` | `notification_permission_quirk` | `Notification.permission` is `denied` while the Permissions API reports `prompt`. |
+| `emptyPlugins` | `empty_plugins` | Desktop Chromium with no `navigator.plugins`. |
+| `emptyLanguages` | `empty_languages` | `navigator.languages` is empty. |
+| `softwareRenderer` | `software_renderer` | Unmasked WebGL renderer is SwiftShader, llvmpipe, softpipe or similar. |
+| `zeroDimensions` | `zero_dimensions` | Screen or outer-window width/height is 0 (a 0x0 outer window in a hidden, background tab is unknown instead). |
+| `cdpDetected` | `cdp_detected` | Logging an error formatted its stack (V8 called `Error.prepareStackTrace`), which happens only while a CDP client has `Runtime.enable` on, as Puppeteer, Playwright, ChromeDriver and open DevTools do. Clients that avoid `Runtime.enable`, such as nodriver or rebrowser-patches, are not seen. |
+| `nativeFunctionTampering` | `native_function_tampering` | The `navigator.webdriver` getter or `Permissions.prototype.query` is not native when read with an untouched `toString`, `Function.prototype.toString.call({})` does not throw, a `Proxy` wraps either native, `navigator` has an own `webdriver`, the `webdriver` getter was deleted, or a detached `srcdoc` frame has a window (puppeteer-extra-plugin-stealth). |
+| `workerUserAgentMismatch` | `worker_user_agent_mismatch` | A dedicated worker reports a different UA or platform than the main thread. |
+| `driverArtifacts` | `driver_artifacts` | A ChromeDriver, WebDriver, Watir, Playwright-binding, NightmareJS or `domAutomation` global, or a driver attribute on `<html>`. |
+| `engineMismatch` | `engine_mismatch` | The JavaScript engine is not the one the UA claims (V8, SpiderMonkey or JavaScriptCore). |
+| `userAgentDataMismatch` | `user_agent_data_mismatch` | The `Chromium` brand major version differs from the UA's `Chrome/` major version. |
+| `proportionalMonospace` | `proportional_monospace` | The generic `monospace` font is not fixed-width (Camoufox claiming another OS than its host). |
+| `engineApiMismatch` | `engine_api_mismatch` | `userAgentData` is not a `NavigatorUAData`, or a Chrome 120+ UA lacks APIs Chrome shipped by version 105 (engines imitating Chrome, such as Obscura). |
+| `protocolScript` | `protocol_script` | After the SDK's `watch()`, code compiled by a debugging protocol (CDP `Runtime.evaluate`, Puppeteer, ChromeDriver, Firefox's Debugger API) called a trapped DOM method in the page's own world. Also set by typing in the DevTools console. |
 
-Rules for every version report `detected` if any observation is true, `unknown`
-if none is true and any is unavailable, or `not_detected` only if every
-observation the version defines is false. The exception is `protocol_script`: it
-is null whenever the page did not call `watch()`, and in WebKit, so it is listed
-in `unavailableProbes` then but does not make the verdict `unknown`.
-Malformed evidence, unknown keys, unsupported versions and non-boolean/non-null
-observations produce `invalid_input` with `reason: invalid_automation` and empty
-indicator/unavailable arrays. Other sections still run. Top-level
-`automation: null` omits the section, like other optional inputs.
+
+The rule reports `detected` if any observation is true, `unknown` if none is true and
+any is unavailable, or `not_detected` only if every observation is false. The exception is
+`protocol_script`: it is null whenever the page did not call `watch()`, and in WebKit, so it
+is listed in `unavailableProbes` then but does not make the verdict `unknown`.
 
 These rules interpret client reports, not attested browser execution. Evidence
 can be forged or hidden. `not_detected` is not proof of a human, and automation
 may be legitimate testing or assistive tooling, not malicious traffic. No
 good/bad bot classification, confidence, fraud score, retention or new outbound
-traffic is introduced. Deploy the compatible API before upgrading the SDK;
-older servers reject evidence versions they do not define.
+traffic is introduced. Deploy the API before upgrading the SDK: the listener accepts
+only the evidence version it defines.
 
 #### Tampering indicators
 
-`collect()` also reports `signals.tampering`, and `/v1/check` returns its evaluation as
-`signals.tampering`, separate from `signals.automation` on purpose: privacy browsers
+The evidence also carries tampering observations, and `/v1/check` returns their
+evaluation as `identification.tampering`, separate from `automation` on purpose: privacy browsers
 and anti-fingerprinting extensions trigger it for ordinary people, so it must never
 read as automation. The response has the automation shape (`status`, `rule_version: 1`,
 `source: "client_reported"`, `indicators`, `unavailable_probes`) with these names:
@@ -537,20 +558,17 @@ read as automation. The response has the automation shape (`status`, `rule_versi
 | `audioRenderAltered` | `audio_render_altered` | An offline render of a constant 0.5 signal returned any other sample. |
 
 Evidence accepts only `version: 1` and these two optional booleans; anything else is
-`invalid_input` with `reason: invalid_tampering`. Missing or throwing probes stay null
-(unknown), and null or omitted `signals.tampering` omits the section. The probes use
+rejected by the listener. Missing or throwing probes stay null (unknown). The probes use
 fixed content, add no identity hash input and never change the fingerprint. A result
 shows that something altered readback in this browser, not who or why; a clean result
 does not rule out tampering that spares these two reads, such as a spoofed value.
-Deploy the API before upgrading the SDK: older servers reject the new `tampering`
-field in `signals`.
 
 #### Behavior patterns
 
-After the SDK's `watch()`, the token carries `behavior`: counts of trusted pointer,
+After the SDK's `watch()`, the evidence carries `behavior`: counts of trusted pointer,
 click, key, touch and wheel input since the page called it (see the
 [SDK guide](../sdk/README.md#watching-the-page)). `/v1/check` returns
-`signals.behavior` with `status: "observed"`, `ruleVersion: 1`,
+`identification.behavior` with `status: "observed"`, `ruleVersion: 1`,
 `source: "client_reported"` and the `patterns` that matched:
 
 | Pattern | Matches when |
@@ -563,48 +581,41 @@ click, key, touch and wheel input since the page called it (see the
 
 The compact response lists them as `behavior` (an empty list when none matched). These
 are context for your own rules, not a verdict, and they never change `automation`:
-keyboard-only users, autofill, dictation, on-screen keyboards and tokens collected
+keyboard-only users, autofill, dictation, on-screen keyboards and identifications made
 at page load match some of them. Evidence must be `version: 1` with every count as a
-non-negative integer; anything else is `invalid_input` with
-`reason: invalid_behavior`. A token without `watch()` has no section. Deploy the API
-before upgrading the SDK: older servers reject the `behavior` field in `signals`.
+non-negative integer; the listener rejects anything else. Evidence without `watch()` has
+no section.
 
 #### Spoofing indicators
 
-`collect()` also puts the browser's own `navigator.userAgent`, `navigator.language` and
-low-entropy client hints (`navigator.userAgentData` brands, mobile, platform) in the
-token, as read, under `spoofing`. When your backend also sends `headers`, copied from
-the browser request that carried the token, `/v1/check` compares the two and returns
-`signals.spoofing` (compact: `spoofing`). The section has the automation shape
-(`status`, `ruleVersion: 1`, `source: "client_reported_vs_request_headers"`,
-`indicators`, `unavailableProbes`):
+The SDK puts the browser's own `navigator.userAgent`, `navigator.language` and
+low-entropy client hints (`navigator.userAgentData` brands, mobile, platform) in its
+evidence, as read, under `spoofing`. `/v1/check` compares them with the request the public
+listener received and returns `identification.spoofing` (compact: `spoofing`). The section
+has the automation shape (`status`, `ruleVersion: 1`,
+`source: "client_reported_vs_request_headers"`, `indicators`, `unavailableProbes`):
 
 | Name | `true` means | Unknown when |
 | --- | --- | --- |
 | `user_agent_mismatch` | The reported user agent differs from `User-Agent`. | Either side is missing. |
 | `client_hints_mismatch` | The reported brands (in any order), mobile flag or platform differ from `Sec-CH-UA`, `Sec-CH-UA-Mobile` and `Sec-CH-UA-Platform`. | Only one side has client hints, or a header does not parse. Neither side having them (Firefox, Safari) counts as agreement. |
 | `language_mismatch` | The primary subtag of the reported language differs from the first `Accept-Language` tag (`en-US` and `en` agree, as WebKit reports `ja` while sending `ja-JP`). | Either side is missing or `*`. |
-| `tls_mismatch` | Events only. The TLS handshake matches a known client other than the browser the user agent names: a Chrome token posted by curl, Python, Go or Node, or a Firefox user agent on Chrome's handshake. | The JA4 is not in the reference table, or the user agent names no known browser. |
+| `tls_mismatch` | The TLS handshake matches a known client other than the browser the user agent names: Chrome evidence posted by curl, Python, Go or Node, or a Firefox user agent on Chrome's handshake. | The JA4 is not in the reference table, or the user agent names no known browser. |
 
 Both sides come from the same browser, so they agree for ordinary visitors in
-Chromium, Firefox and WebKit. A mismatch means the token and the request did not come
-from the same unmodified browser: a user-agent switcher that changes one side only, a
-token captured in one browser and sent from another client, or a forged token sent
-with a script's headers. It is not proof of intent. Anyone who reads this code can
-send matching headers, so `not_detected` does not show the browser is genuine.
-Headless Chromium sends no `Accept-Language` by default; that leaves the language
-probe unknown rather than positive. A time zone or IP comparison is deliberately not
-part of this check, since VPN users and travellers would fail it.
+Chromium, Firefox and WebKit. A mismatch means the evidence and the request did not come
+from the same unmodified browser: a user-agent switcher that changes one side only,
+evidence captured in one browser and posted from another client, or forged evidence
+posted by a script. It is not proof of intent. A script can send matching headers, and
+some libraries imitate a browser's handshake, so `not_detected` does not show the browser
+is genuine. Headless Chromium sends no `Accept-Language` by default; that leaves the
+language probe unknown rather than positive. A time zone or IP comparison is deliberately
+not part of this check, since VPN users and travellers would fail it.
 
-Unlike `tampering`, which reports altered canvas or audio readback in the browser
-(often a privacy tool), `spoofing` compares the token with the request around it.
-Without `headers`, or for a token without `spoofing` evidence from an older SDK, the
-check is `unknown` or omitted. Malformed `headers` (unknown keys, non-strings, values
-over 1024 bytes) are `invalid_input` with `reason: invalid_headers`; malformed
-evidence is `invalid_input` with `reason: invalid_spoofing`. The user agent,
-language and client hints travel in the token readable by your backend, as they
-already do in the request headers; the API never logs or stores them. Deploy the API
-before upgrading the SDK: older servers reject a token with the `spoofing` field.
+Unlike `tampering`, which reports altered canvas or audio readback in the browser (often a
+privacy tool), `spoofing` compares the evidence with the request around it. The user
+agent, language and client hints are stored with the identification for its hour, as the
+request headers they are compared with are; the API never logs them.
 
 #### Domain and IP boundaries
 
@@ -716,8 +727,8 @@ runs (CI, the CronJob) are unchanged. A manifest that does not exist yet is unkn
 Tor snapshot entries are `{"ip":"8.8.8.8","observed_at_unix":<Unix seconds>}`;
 duplicate addresses keep their latest observation. Positive Tor facts carry
 `expiresAtUnix`, bounded by both that observation's 24-hour window and the
-snapshot expiry. The API rechecks both limits on lookup and event consumption,
-without retaining the checked address in the event.
+snapshot expiry. The API rechecks both limits on each lookup and retains no checked
+address.
 
 Upgrade API readers before the network updater. Old bare-address Tor entries
 remain readable alongside other sources, but their matches are unknown with
@@ -735,10 +746,7 @@ without server credentials or networking.
 
 ### SDK evidence
 
-`/v1/check` takes the SDK's opaque `token`, not the readable
-fields. The token is obfuscated, not encrypted: the scheme is public, so it hides
-evidence from casual inspection and makes repeat visits look different on the wire,
-nothing more. The decoded object is validated as follows:
+`/v1/identify` validates the evidence the SDK posts as follows:
 
 | Field | Shape |
 | --- | --- |
@@ -750,102 +758,29 @@ nothing more. The decoded object is validated as follows:
 | `excluded` | Unique subset of `audio`, `canvas`, `screen`. |
 | `durationMs` | Finite number from 0 to 60000. |
 | `timings` | Optional object of `{ "durationMs": number, "blockingMs": number }` per probe, same numeric bounds. |
-| `storageId` | Omitted or null only. |
-| `collectedAt` | Optional finite number from 0 to 1e15: milliseconds since the Unix epoch on the browser's clock when the token was sealed. Older SDKs omit it. |
+| `automation`, `tampering`, `spoofing`, `behavior` | Optional evidence, as described above. |
 
 Each map has at most 32 entries. Names are 1–64 ASCII characters, start with a
-letter and otherwise contain letters, digits, underscores or dots. `automation`, `tampering` and `spoofing` are the only additional SDK fields accepted and are evaluated separately
-from identity; older SDKs may omit them. Unknown fields and unsolicited
-visitor metadata are rejected. Non-null IDs must match the
-canonical hash for the reported schema; changing only the version does not
-translate an identity between schemas.
+letter and otherwise contain letters, digits, underscores or dots. Unknown fields and
+unsolicited visitor metadata are rejected. Non-null IDs must match the canonical hash
+for the reported schema; changing only the version does not translate an identity
+between schemas.
 
-#### Browser collection (`POST /v1/events`)
+#### Replays and age
 
-The token alone is unsigned: a script can build one and send it with any headers. With
-`OPENFINGERPRINT_COLLECT_ADDR` set, the API also runs a public TLS listener where the
-browser posts its token itself, so the API observes the request instead of trusting a
-copy of it:
+- `replayed` (`identification.replayed` with `detail: true`): `false` the first time an
+  identification is looked up, `true` after that. One hashed marker per identification,
+  expiring with it. When Redis cannot answer, the field is absent, never `false`.
+- `ageMs` (`identification.ageMs`): milliseconds since the listener stored the
+  identification, by the API's clock.
 
-1. The page calls `collect({ endpoint: 'https://collect.example.com/v1/events' })`. The SDK
-   posts `result.token` as `text/plain` (a simple CORS request, no preflight) and returns
-   `result.eventId`.
-2. The listener checks the `Origin` against `OPENFINGERPRINT_COLLECT_ORIGINS`, the token's
-   validity and a limit of 60 events per minute per client network (an IPv4 address or
-   IPv6 /64, per replica), then stores the token, the browser's headers, the page origin
-   and the JA4 fingerprint of its TLS ClientHello for one hour. It answers
-   `{"eventId":"<22 characters>"}` with `Access-Control-Allow-Origin`.
-3. Your backend sends `{"event":"<eventId>"}` to `POST /v1/check` (or `event` in the RPC)
-   instead of `signals`. The response has the same keys as for a token. The difference is
-   in where the facts come from:
-
-| Fact | Token (`signals`) | Event (`event`) |
-| --- | --- | --- |
-| Headers compared by `spoofing` | Whatever your backend forwards | What the listener received |
-| `tls_mismatch` | Not available | From the browser's own TLS handshake |
-| `tokenAgeMs` | The browser's clock | The API's clock, since the event was stored |
-| `replayed` | The same token content seen before | The same event looked up before |
-| Proof a browser connected | None | The event exists only if a request reached the listener |
-
-With `detail: true`, `signals.event` has the `origin`, the `ja4` string and `tlsClient`
-(`chromium`, `firefox`, `apple`, `curl`, `python`, `go`, `node` or `null` for an unlisted
-fingerprint). An unknown or expired event is `invalid_input` with
-`reason: unknown_event` (compact: `invalid: ["event"]`); when Redis cannot answer, the
-section is `status: unavailable` and the compact `fingerprint` is `null` without an
-`invalid` entry. An event can be looked up more than once within the hour, so a signup
-flow that checks twice keeps working; `replayed` tells the second lookup apart.
-
-The listener terminates TLS itself, because a proxy that terminates TLS would hide the
-handshake. Route its port with TCP passthrough (a Kubernetes `LoadBalancer` Service,
-Traefik `IngressRouteTCP` with `passthrough`, nginx `stream` or HAProxy `mode tcp`) and
-set `OPENFINGERPRINT_COLLECT_PROXY_PROTOCOL=true` if the load balancer sends the PROXY
-protocol. It serves HTTP/1.1 and HTTP/2 with ALPN. Its errors are `{"error":"<reason>"}`:
-403 `origin_not_allowed`, 400 `invalid_signals`, 429 `rate_limited` and 503
-`collection_unavailable` (Redis could not store the event); the SDK then returns
-`eventId: null` and you can still send the `token`.
-
-What this does and does not prove: a script must now connect with its own TLS stack, and
-a library's handshake contradicts a browser user agent. Unlisted handshakes (other browser
-versions, company TLS inspection) stay unknown rather than flagged. A real browser driven
-by automation has a real browser handshake, and libraries built to imitate Chrome's
-handshake exist, so `tls_mismatch: false` does not show a human; the automation probes
-cover the first case. The reference fingerprints in [src/tls.rs](src/tls.rs) were measured
-in November 2026 and need updating as browsers and libraries change. JA4 is the
-[FoxIO](https://github.com/FoxIO-LLC/ja4) TLS client fingerprint (BSD 3-Clause).
-
-#### Replayed tokens and token age
-
-The token is client-supplied and unsigned, so a script can build one. Two fields help
-your backend judge a token that arrives:
-
-- `replayed` (`signals.replayed` with `detail: true`): `true` when the same evidence was
-  already checked within `OPENFINGERPRINT_REPLAY_WINDOW_SECONDS` (default one hour). The
-  API stores one marker per token in Redis, keyed by a SHA-256 hash of the decoded
-  content, with a TTL: nothing identifies a device, account or address. The first check
-  of a token returns `false` and marks it; later ones return `true`. Hashing the
-  content, not the sealed string, means re-sealing a captured token under a new random
-  prefix still counts as a replay. Invalid tokens leave no marker. When Redis cannot answer, the field is absent, never `false`.
-- `tokenAgeMs` (`signals.tokenAgeMs`): milliseconds from the browser's `collectedAt` to
-  now. It uses the browser's clock, which is often wrong: expect negative values and use
-  a generous limit. Absent for tokens without `collectedAt`.
-
-A legitimate token can be checked more than once (a form re-submitted after a
-validation error, a signup validated twice), so treat `replayed` as a signal for your
-own rules, not as a block. Neither field stops a forger who builds a fresh token for
-every request: both are cheap protection against reusing a captured one.
-
-### Removed: `POST /v1/verify`
-
-Earlier releases had `POST /v1/verify`, which took the unwrapped evidence object and
-returned `{"status","schema_version","fingerprint"}`. It was removed after 0.14.0 and now
-answers 404. Send `result.token` as `signals` to `POST /v1/check` and read
-`response.fingerprint`, or `response.signals` with `detail: true` (`status`,
-`schema_version`, `fingerprint`, `evidence`). Keep strict schema/ID matching and
-fail-closed identity writes: a missing `fingerprint` means unknown.
+An identification can be looked up more than once within its hour, so a signup flow that
+checks it at two steps keeps working; treat `replayed` as a signal for your own rules,
+such as one identification per signup, not as a block.
 
 ### Connect, gRPC and gRPC-Web (`openfingerprint.v1.OpenFingerprint/Check`)
 
-The compact `/v1/check` verdicts are also an RPC, on the same listener, without
+The compact `/v1/check` verdicts are also an RPC, on the same internal listener, without
 authentication and refusing any `Origin` header. It speaks the [Connect](https://connectrpc.com/) protocol, gRPC and gRPC-Web, so any of
 these work:
 
@@ -862,10 +797,9 @@ buf curl --reflect -d '{"domain":"gmail.com"}' \
 ```
 
 [`proto/openfingerprint.proto`](proto/openfingerprint.proto) is the contract.
-`CheckRequest` has `signals` (the SDK `token`), `domain`, `email`, `ip`, `headers` and
-`event`;
+`CheckRequest` has `identification_id`, `domain`, `email` and `ip`;
 `CheckResponse` has the same fields as the compact JSON, with an unset optional
-field meaning unknown. `detail` and standalone `automation` evidence are JSON-only.
+field meaning unknown. `detail` is JSON-only.
 Reflection (`grpc.reflection.v1` and `v1alpha`) is open like the rest.
 
 The listener speaks HTTP/2 without TLS (as it does HTTP/1.1), so terminate TLS in
@@ -884,8 +818,8 @@ A rejected field (such as an invalid `ip`) is not an error: it comes back in `in
 ### HTTP errors and application use
 
 Errors return
-`{"error":"<reason>"}`: 400 invalid envelope/evidence, 403 browser
-Origin, or 413 oversized body. Unsupported methods return 405.
+`{"error":"<reason>"}`: 400 invalid envelope, 403 browser Origin, or 413 oversized body.
+Unsupported methods return 405.
 
 Use a background flow where missing/failed verification leaves the ID unknown,
 not blocked authentication. Applications may save a full ID and schema alongside
@@ -915,15 +849,15 @@ contents, domains, addresses or credentials:
 | `openfingerprint_rdap_lookups_total{result}` | RDAP lookups by `registration.status` (not cache hits or `not_applicable`); `unsupported_tld` counts TLDs with neither RDAP nor WHOIS. |
 | `openfingerprint_whois_lookups_total{result}` | WHOIS lookups for TLDs without RDAP, by `registration.status`. |
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
-| `openfingerprint_spoofing_checks_total{status}`, `openfingerprint_spoofing_indicators_total{indicator}` | Tokens compared with their request `headers`, by verdict, and how often each comparison found a mismatch. They count evaluated tokens, not visitors. |
+| `openfingerprint_spoofing_checks_total{status}`, `openfingerprint_spoofing_indicators_total{indicator}` | Evidence compared with the request the public listener received, by verdict, and how often each comparison found a mismatch. They count evaluations, not visitors. |
 | `openfingerprint_automation_checks_total{status}`, `openfingerprint_automation_indicators_total{indicator}` | Valid automation reports evaluated, by verdict (`detected`, `unknown`, `not_detected`), and how often each probe was positive. One positive probe is enough for `detected`, so the indicator counts show which probes fire in practice. They count evaluated reports, not visitors. |
-| `openfingerprint_events_total{result}` | Browser posts to the collection listener: `stored`, `origin_refused`, `rate_limited`, `invalid` (not a valid token) and `error` (Redis could not store it). |
-| `openfingerprint_event_lookups_total{result}` | Events looked up by `/v1/check`: `found`, `unknown` (never stored or expired) and `error`. |
-| `openfingerprint_event_tls_clients_total{client}` | Stored events by the client their JA4 matched, `unknown` for an unlisted fingerprint, `none` when none was read. A rising `unknown` share means the reference table needs new browser versions. |
-| `openfingerprint_collect_certificates`, `openfingerprint_collect_certificate_reload_failures_total` | Certificates loaded for the collection listener, and reloads that failed (the previous certificates stay in use). |
-| `openfingerprint_replay_checks_total{result}` | Token replay checks: `new` (first sighting), `replayed` (seen before) and `error` (Redis could not answer, so `replayed` was left out). |
-| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `events` (the collection listener), `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |
-| `openfingerprint_check_step_duration_seconds{step}` | Histogram of where a `/v1/check` spends time. Sections: `automation`, `signals`, `domain`, `ip_country`, `ip_network`. The `domain` section runs `domain_mx`, `domain_registration` and `domain_mail_auth` concurrently, so it lasts as long as the slowest, not their sum. Beneath them: `dns_lookup` (each MX or TXT query), `redis_get` and `redis_set` (RDAP cache), `replay` (the token replay marker), `event` (reading an event), `rdap_fetch` and `whois_fetch` (registry calls on a cache miss, including the wait for a per-registry slot). A step cut short by its timeout is recorded at the time it was cut. |
+| `openfingerprint_identifications_total{result}` | Browser posts to `/v1/identify`: `stored`, `origin_refused`, `rate_limited`, `invalid` (not valid evidence) and `error` (Redis could not store it). |
+| `openfingerprint_identification_lookups_total{result}` | Identifications looked up by `/v1/check`: `found`, `unknown` (never stored or expired) and `error`. |
+| `openfingerprint_identification_tls_clients_total{client}` | Stored identifications by the client their JA4 matched, `unknown` for an unlisted fingerprint, `none` when none was read. A rising `unknown` share means the reference table needs new browser versions. |
+| `openfingerprint_identify_certificates`, `openfingerprint_identify_certificate_reload_failures_total` | Certificates loaded for the public listener, and reloads that failed (the previous certificates stay in use). |
+| `openfingerprint_replay_checks_total{result}` | Identification lookups: `new` (first), `replayed` (looked up before) and `error` (Redis could not answer, so `replayed` was left out). |
+| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `identify` (the public listener), `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |
+| `openfingerprint_check_step_duration_seconds{step}` | Histogram of where a `/v1/check` spends time. Sections: `identification` (reading it from Redis), `evidence`, `domain`, `ip_country`, `ip_network`. The `domain` section runs `domain_mx`, `domain_registration` and `domain_mail_auth` concurrently, so it lasts as long as the slowest, not their sum. Beneath them: `dns_lookup` (each MX or TXT query), `redis_get` and `redis_set` (RDAP cache), `replay` (the lookup marker), `rdap_fetch` and `whois_fetch` (registry calls on a cache miss, including the wait for a per-registry slot). A step cut short by its timeout is recorded at the time it was cut. |
 | `openfingerprint_country_data_loaded` | 1 when a valid country database is loaded (not necessarily fresh). |
 | `openfingerprint_country_data_expiry_timestamp_seconds` | When the country database stops being used, or 0 when unavailable. |
 | `openfingerprint_country_data_reload_failures_total` | Changed country files rejected, including rollbacks to older builds. |
@@ -941,7 +875,8 @@ bounded by a 2 s timeout (DNS, registries) put slow checks in the 2 s bucket; a 
 ## Kubernetes
 
 The [Helm chart](chart/README.md), published to `oci://ghcr.io/mokto/charts/openfingerprint`
-with each API release, runs the API with optional NetworkPolicies, a bundled
+with each API release, runs the API with its public identify Service (TCP passthrough,
+certificates from TLS Secrets), optional NetworkPolicies, a bundled
 `redis-ha` or your own Redis, a domain-data ConfigMap CronJob, a daily country-data
 sidecar and optional Prometheus alerts. Policies permit DNS, Redis, registry HTTPS
 and public HTTPS for country downloads. Kubernetes cannot isolate sidecar egress
@@ -956,9 +891,10 @@ Requires current stable Rust (tested with 1.99.1) and Node 24+:
 pnpm api:check
 ```
 
-This runs formatting, Clippy, unit tests and a real loopback HTTP self-check. It
-boots with an old `OPENFINGERPRINT_SITES` value to prove it is ignored, checks both schemas,
-token replay and age, all 15 input combinations, automatic/nested automation rules, partial failures, scoped domain matches, public-suffix
+This runs formatting, Clippy, unit tests and a real loopback self-check with both
+listeners and a generated certificate. It posts evidence over TLS and checks
+identifications, replays and age, input combinations, automation, tampering and spoofing
+rules, partial failures, scoped domain matches, public-suffix
 boundaries, fresh/stale/invalid/missing snapshots, strict metadata/body boundaries,
 compatibility and no request logging, then stops the
 server. Updater checks use local fixtures and verify license-change rejection and
