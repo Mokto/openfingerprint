@@ -75,12 +75,31 @@ const node = {
 // until the harness kills their process group. The installed Google Chrome does not start under
 // chromedriver or nodriver on this Mac ("unable to discover open pages").
 const python = {
-	camoufox: {
+	// Camoufox picks a random OS to claim by default; the pinned runs make results comparable.
+	'camoufox': {
 		packages: ['camoufox[geoip]'],
 		setup: 'import subprocess, sys; subprocess.run([sys.executable, "-m", "camoufox", "fetch"], check=True)',
 		code: `import sys, time
 from camoufox.sync_api import Camoufox
 with Camoufox(headless=${headless ? 'True' : 'False'}) as browser:
+    browser.new_page().goto(sys.argv[1])
+    time.sleep(600)`
+	},
+	'camoufox-windows': {
+		packages: ['camoufox[geoip]'],
+		setup: 'import subprocess, sys; subprocess.run([sys.executable, "-m", "camoufox", "fetch"], check=True)',
+		code: `import sys, time
+from camoufox.sync_api import Camoufox
+with Camoufox(headless=${headless ? 'True' : 'False'}, os='windows') as browser:
+    browser.new_page().goto(sys.argv[1])
+    time.sleep(600)`
+	},
+	'camoufox-macos': {
+		packages: ['camoufox[geoip]'],
+		setup: 'import subprocess, sys; subprocess.run([sys.executable, "-m", "camoufox", "fetch"], check=True)',
+		code: `import sys, time
+from camoufox.sync_api import Camoufox
+with Camoufox(headless=${headless ? 'True' : 'False'}, os='macos') as browser:
     browser.new_page().goto(sys.argv[1])
     time.sleep(600)`
 	},
