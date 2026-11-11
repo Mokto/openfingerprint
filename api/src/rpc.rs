@@ -10,7 +10,7 @@ use connectrpc::{
 };
 use serde_json::Value;
 
-use crate::check::{ApiError, AppState, BODY_LIMIT, CheckRequest as Input};
+use crate::check::{ApiError, AppState, BODY_LIMIT, CheckRequest as Input, compact};
 
 pub mod proto {
     connectrpc::include_generated!();
@@ -53,13 +53,23 @@ impl OpenFingerprint for Check {
             domain: text(request.domain),
             email: text(request.email),
             ip: text(request.ip),
-            detail: None,
+            detail: request.detail,
         };
-        let verdicts = crate::check::evaluate(&self.0, input).await?;
-        Response::ok(
-            serde_json::from_value(verdicts).map_err(|_| ConnectError::internal("encode"))?,
-        )
+        Response::ok(respond(&self.0, input).await?)
     }
+}
+
+async fn respond(state: &AppState, input: Input) -> Result<CheckResponse, ConnectError> {
+    let detail = input.detail == Some(true);
+    let mut verdicts = crate::check::evaluate(state, input).await?;
+    if detail {
+        let identification = verdicts.get("identification").cloned();
+        compact(&mut verdicts);
+        if let Some(identification) = identification {
+            verdicts["identification"] = identification;
+        }
+    }
+    serde_json::from_value(verdicts).map_err(|_| ConnectError::internal("encode"))
 }
 
 /// Applies the `/v1/check` browser rule to every RPC, reflection included.
@@ -172,13 +182,265 @@ mod tests {
             "vpn":fact(serde_json::json!({"scope":"listed_vpn_range"})),
             "datacenter":fact(serde_json::json!({"scope":"listed_datacenter_range"})),
             "proxy":fact(serde_json::json!({"protocols":["http"],"scope":"listed_open_proxy"}))}}});
-        crate::check::compact(&mut response);
+        compact(&mut response);
         let message: CheckResponse = serde_json::from_value(response).unwrap();
         assert_eq!(
             [message.tor, message.vpn, message.datacenter, message.proxy],
             [Some(true); 4]
         );
         assert_eq!(message.country.as_deref(), Some("dk"));
+    }
+
+    const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36";
+    const CHROME_JA4: &str = "t13d1517h2_8daaf6152771_cb7bf5808d99";
+    const CURL_JA4: &str = "t13d4907h2_0d8feac7bc37_7395dae3b2f3";
+    const UNLISTED_JA4: &str = "t13d1517h2_000000000000_000000000000";
+
+    fn input(id: Option<Value>, detail: Option<bool>) -> Input {
+        Input {
+            identification_id: id,
+            domain: None,
+            email: None,
+            ip: None,
+            detail,
+        }
+    }
+
+    fn record(ja4: Option<&str>) -> crate::identify::Record {
+        let mut evidence = crate::check::tests::payload();
+        evidence["automation"] = serde_json::json!({"version":7,"webdriver":true});
+        evidence["tampering"] = serde_json::json!({"version":1,"canvasReadbackAltered":true,"audioRenderAltered":false});
+        evidence["spoofing"] = serde_json::json!({"version":1,"userAgent":CHROME_UA,"language":"en-US","clientHints":null});
+        evidence["behavior"] = serde_json::json!({"version":1,"watchedMs":900,"pointerMoves":1,"mouseClicks":1,
+            "clicksWithoutMovement":1,"centeredClicks":0,"keys":0,"instantKeys":0,"insertedTexts":0,
+            "touches":0,"wheels":0,"untrustedEvents":0});
+        crate::identify::Record {
+            evidence,
+            headers: serde_json::json!({"userAgent":CHROME_UA,"acceptLanguage":"en-US,en;q=0.9"}),
+            ja4: ja4.map(str::to_owned),
+            origin: "https://app.example.test".into(),
+            created_at_ms: crate::check::tests::now_ms() - 1_500,
+        }
+    }
+
+    fn comparable(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .filter(|(k, v)| {
+                        *k != "ageMs" && !v.is_null() && v.as_array().is_none_or(|a| !a.is_empty())
+                    })
+                    .map(|(k, v)| {
+                        let key = match k.as_str() {
+                            "schema_version" => "schemaVersion",
+                            "rule_version" => "ruleVersion",
+                            "unavailable_probes" => "unavailableProbes",
+                            _ => k,
+                        };
+                        (key.to_owned(), comparable(v))
+                    })
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    async fn parity(state: &AppState, id: &str) -> CheckResponse {
+        let rest = crate::check::evaluate(state, input(Some(id.into()), Some(true)))
+            .await
+            .unwrap()["identification"]
+            .clone();
+        let rpc = respond(state, input(Some(id.into()), Some(true)))
+            .await
+            .unwrap();
+        let mut json = serde_json::to_value(&rpc).unwrap()["identification"].clone();
+        json["replayed"] = rest["replayed"].clone();
+        assert_eq!(comparable(&json), comparable(&rest));
+        rpc
+    }
+
+    #[tokio::test]
+    async fn detail_matches_rest_for_known_tls_clients() {
+        let (addr, _) = crate::cache::tests::fake_redis(None).await;
+        let state = crate::check::tests::state_with_redis(&addr);
+        for (ja4, client) in [(CHROME_JA4, "chromium"), (CURL_JA4, "curl")] {
+            let id = format!("{client:0<22}");
+            state
+                .identifications
+                .store(&id, &record(Some(ja4)))
+                .await
+                .unwrap();
+            let rpc = Box::pin(parity(&state, &id)).await;
+            let detail = rpc.identification.as_option().unwrap();
+            assert_eq!(detail.status.as_deref(), Some("ok"));
+            assert_eq!(detail.tls_client.as_deref(), Some(client));
+            assert_eq!(detail.ja4.as_deref(), Some(ja4));
+            assert_eq!(detail.origin.as_deref(), Some("https://app.example.test"));
+            assert_eq!(detail.schema_version, Some(1));
+            assert!((1_500..10_000).contains(&detail.age_ms.unwrap()));
+            let automation = detail.automation.as_option().unwrap();
+            assert_eq!(automation.status.as_deref(), Some("detected"));
+            assert_eq!(automation.indicators, ["webdriver"]);
+            assert_eq!(automation.rule_version, Some(7));
+            assert_eq!(automation.unavailable_probes.len(), 19);
+            let tampering = detail.tampering.as_option().unwrap();
+            assert_eq!(tampering.indicators, ["canvas_readback_altered"]);
+            assert_eq!(tampering.rule_version, Some(1));
+            let spoofing = detail.spoofing.as_option().unwrap();
+            assert_eq!(
+                spoofing.status.as_deref(),
+                Some(if client == "curl" {
+                    "detected"
+                } else {
+                    "not_detected"
+                })
+            );
+            assert_eq!(
+                detail.behavior.as_option().unwrap().patterns,
+                ["clicks_without_movement"]
+            );
+            let counts = detail.evidence.as_option().unwrap();
+            assert_eq!(
+                (
+                    counts.included_components,
+                    counts.included_hints,
+                    counts.unavailable_probes,
+                    counts.excluded_probes
+                ),
+                (Some(1), Some(0), Some(0), Some(0))
+            );
+            assert_eq!((rpc.replayed, detail.replayed), (Some(true), Some(true)));
+        }
+    }
+
+    #[tokio::test]
+    async fn default_and_false_keep_the_compact_fields() {
+        let (addr, _) = crate::cache::tests::fake_redis(None).await;
+        let state = crate::check::tests::state_with_redis(&addr);
+        for (n, detail) in [None, Some(false), Some(true)].into_iter().enumerate() {
+            let id = format!("CompactIdentification{n}");
+            state
+                .identifications
+                .store(&id, &record(Some(CHROME_JA4)))
+                .await
+                .unwrap();
+            let mut rpc = Box::pin(respond(&state, input(Some(id.clone().into()), detail)))
+                .await
+                .unwrap();
+            assert_eq!(rpc.identification.is_set(), detail == Some(true));
+            assert_eq!(rpc.replayed, Some(false));
+            let mut rest = Box::pin(crate::check::evaluate(&state, input(Some(id.into()), None)))
+                .await
+                .unwrap();
+            rest["replayed"] = serde_json::json!(false);
+            rest.as_object_mut().unwrap().remove("ageMs");
+            rpc.age_ms = None;
+            rpc.identification = Default::default();
+            assert_eq!(rpc, serde_json::from_value(rest).unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_evidence_and_tls_stay_unknown() {
+        let (addr, _) = crate::cache::tests::fake_redis(None).await;
+        let state = crate::check::tests::state_with_redis(&addr);
+        for (n, ja4) in [Some(UNLISTED_JA4), None].into_iter().enumerate() {
+            let id = format!("UnknownIdentification{n}");
+            let mut record = record(ja4);
+            record.evidence["fingerprint"] = Value::Null;
+            record.evidence["coreFingerprint"] = Value::Null;
+            for probe in ["audio", "canvas", "gpu"] {
+                record.evidence["components"][probe] = Value::String(crate::check::sha256(probe));
+            }
+            record.evidence["automation"] = serde_json::json!({"version":7});
+            record.evidence["tampering"] = Value::Null;
+            record.evidence["behavior"] = Value::Null;
+            state.identifications.store(&id, &record).await.unwrap();
+            let rpc = Box::pin(parity(&state, &id)).await;
+            let detail = rpc.identification.as_option().unwrap();
+            assert_eq!(detail.status.as_deref(), Some("insufficient_signals"));
+            assert_eq!(detail.ja4.as_deref(), ja4);
+            assert_eq!(
+                (
+                    detail.tls_client.as_deref(),
+                    detail.fingerprint.as_deref(),
+                    detail.schema_version
+                ),
+                (None, None, None)
+            );
+            assert!(detail.tampering.is_unset() && detail.behavior.is_unset());
+            let groups = &detail.evidence.as_option().unwrap().identity_groups;
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups["rendering"].len(), 64);
+            let automation = detail.automation.as_option().unwrap();
+            assert_eq!(automation.status.as_deref(), Some("unknown"));
+            assert!(automation.indicators.is_empty());
+            assert_eq!(automation.unavailable_probes.len(), 20);
+            let spoofing = detail.spoofing.as_option().unwrap();
+            assert_eq!(spoofing.status.as_deref(), Some("unknown"));
+            assert_eq!(spoofing.unavailable_probes, ["tls_mismatch"]);
+            assert_eq!(
+                (rpc.fingerprint, rpc.automation, rpc.tampering, rpc.spoofing),
+                (None, None, None, None)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_invalid_expired_and_unavailable_identifications() {
+        let (addr, store) = crate::cache::tests::fake_redis(None).await;
+        let state = crate::check::tests::state_with_redis(&addr);
+        let expired = "ExpiredIdentification1";
+        state
+            .identifications
+            .store(expired, &record(Some(CHROME_JA4)))
+            .await
+            .unwrap();
+        // The fake Redis does not expire keys; a deletion models its TTL elapsing.
+        store.lock().unwrap().clear();
+        for (id, reason) in [
+            ("x", "invalid_identification_id"),
+            ("AAAAAAAAAAAAAAAAAAAAAA", "unknown_identification"),
+            (expired, "unknown_identification"),
+        ] {
+            let rpc = Box::pin(parity(&state, id)).await;
+            let detail = rpc.identification.as_option().unwrap();
+            assert_eq!(
+                (detail.status.as_deref(), detail.reason.as_deref()),
+                (Some("invalid_input"), Some(reason))
+            );
+            assert!(
+                detail.evidence.is_unset() && detail.origin.is_none() && detail.replayed.is_none()
+            );
+            assert_eq!(
+                (rpc.fingerprint, rpc.invalid),
+                (None, vec!["identificationId".to_owned()])
+            );
+        }
+        let down = crate::check::tests::state_with_redis("127.0.0.1:9");
+        let rpc = Box::pin(parity(&down, expired)).await;
+        let detail = rpc.identification.as_option().unwrap();
+        assert_eq!(
+            (detail.status.as_deref(), detail.reason.as_deref()),
+            (Some("unavailable"), Some("identification_unavailable"))
+        );
+        assert!(rpc.invalid.is_empty());
+        let ip_only = Input {
+            ip: Some("192.0.2.1".into()),
+            ..input(None, Some(true))
+        };
+        assert!(
+            Box::pin(respond(&state, ip_only))
+                .await
+                .unwrap()
+                .identification
+                .is_unset()
+        );
+        assert!(
+            Box::pin(respond(&state, input(None, Some(true))))
+                .await
+                .is_err()
+        );
     }
 
     #[test]

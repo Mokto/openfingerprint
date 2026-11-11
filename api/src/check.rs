@@ -711,7 +711,7 @@ pub(crate) mod tests {
         )
         .unwrap()
     }
-    fn state_with_redis(addr: &str) -> AppState {
+    pub(crate) fn state_with_redis(addr: &str) -> AppState {
         AppState::configure(
             dns(),
             rdap(),
@@ -731,7 +731,7 @@ pub(crate) mod tests {
             detail: detail.then_some(true),
         }
     }
-    fn now_ms() -> u64 {
+    pub(crate) fn now_ms() -> u64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -751,7 +751,7 @@ pub(crate) mod tests {
         s
     }
 
-    fn payload() -> serde_json::Value {
+    pub(crate) fn payload() -> serde_json::Value {
         let s = evidence();
         serde_json::json!({
             "version": s.version, "fingerprint": s.fingerprint,

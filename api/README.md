@@ -780,8 +780,8 @@ such as one identification per signup, not as a block.
 
 ### Connect, gRPC and gRPC-Web (`openfingerprint.v1.OpenFingerprint/Check`)
 
-The compact `/v1/check` verdicts are also an RPC, on the same internal listener, without
-authentication and refusing any `Origin` header. It speaks the [Connect](https://connectrpc.com/) protocol, gRPC and gRPC-Web, so any of
+The `/v1/check` verdicts and identification evidence are also an RPC, on the same internal
+listener, without authentication and refusing any `Origin` header. It speaks the [Connect](https://connectrpc.com/) protocol, gRPC and gRPC-Web, so any of
 these work:
 
 ```sh
@@ -797,10 +797,39 @@ buf curl --reflect -d '{"domain":"gmail.com"}' \
 ```
 
 [`proto/openfingerprint.proto`](proto/openfingerprint.proto) is the contract.
-`CheckRequest` has `identification_id`, `domain`, `email` and `ip`;
-`CheckResponse` has the same fields as the compact JSON, with an unset optional
-field meaning unknown. `detail` is JSON-only.
+`CheckRequest` has `identification_id`, `domain`, `email`, `ip` and optional `detail`
+(default false). `CheckResponse` always keeps the compact verdict fields. With
+`detail: true` it also includes a typed `identification` message, evaluated once by the
+same rules as REST. No identification requested means no identification message.
 Reflection (`grpc.reflection.v1` and `v1alpha`) is open like the rest.
+
+For example, using an ID returned by the public listener:
+
+```json
+{"identificationId":"<ID from /v1/identify>","detail":true}
+```
+
+| Detail field | Meaning |
+| --- | --- |
+| `status`, `reason` | The same identification outcome and rejection/unavailability reason as REST. An unknown or expired ID is `invalid_input` / `unknown_identification`; a malformed ID is `invalid_input` / `invalid_identification_id`. Redis failure is `unavailable` / `identification_unavailable`, not an invalid ID. |
+| `schemaVersion`, `fingerprint`, `replayed`, `ageMs` | The validated schema/ID, lookup marker and age by the API's clock. Compact fields remain unchanged. |
+| `origin`, `ja4`, `tlsClient` | The origin and TLS observations of the public identify listener. An unlisted JA4 has no `tlsClient`; it is unknown, not a mismatch. |
+| `automation`, `tampering`, `spoofing` | Typed `status`, `indicators`, `ruleVersion`, `unavailableProbes`, `source` and optional `reason`. An unknown verdict stays `unknown`; it does not turn into `false`. |
+| `behavior` | Typed `status`, `patterns`, `ruleVersion`, `source` and optional `reason`. Absent without `watch()` evidence; patterns are context, not a verdict. |
+| `evidence` | The existing summary: `includedComponents`, `includedHints`, `unavailableProbes`, `excludedProbes` and `identityGroups`. No raw probes or behavioral input counts are added. |
+
+Unset optional scalars and absent messages mean unknown/missing, never false or zero.
+An explicitly observed zero count remains present. Repeated fields and maps are empty
+when they have no entries; use the enclosing message and status to distinguish absent
+behavior from observed behavior without patterns. Protobuf JSON omits nulls and empty
+lists/maps, uses camelCase (`schemaVersion`, `ruleVersion`, `unavailableProbes`, including
+for tampering), and encodes `int64` ages as strings. These are representation differences,
+not different evidence. REST is unchanged. Domain, email and IP details remain REST-only.
+
+Regenerate clients from the updated protobuf to request detail. Existing clients and
+requests keep their compact behavior and wire numbers; reserved fields stay reserved.
+Evidence is for shadow analysis/review, not authentication or blocking. No new detection,
+logging, IP retention or browser inputs are introduced.
 
 The listener speaks HTTP/2 without TLS (as it does HTTP/1.1), so terminate TLS in
 front of it and, for gRPC, route with your ingress's gRPC backend setting (for

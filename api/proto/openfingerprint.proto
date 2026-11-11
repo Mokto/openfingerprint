@@ -3,7 +3,8 @@ syntax = "proto3";
 package openfingerprint.v1;
 
 // The same compact verdicts as the internal POST /v1/check, on the same listener, over
-// Connect (JSON or protobuf, any HTTP version), gRPC and gRPC-Web. gRPC needs
+// Connect (JSON or protobuf, any HTTP version), gRPC and gRPC-Web. With `detail`, the
+// response also carries the identification evidence behind them. gRPC needs
 // HTTP/2 without TLS here. There is no authentication: keep the API on a
 // private network. Server reflection is available.
 service OpenFingerprint {
@@ -19,6 +20,8 @@ message CheckRequest {
   optional string domain = 2;
   optional string email = 3;
   optional string ip = 4;
+  // Adds `identification` to the response. The compact fields stay the same.
+  optional bool detail = 7;
 }
 
 // An unset field means unknown, not false.
@@ -58,4 +61,69 @@ message CheckResponse {
   // centered_clicks, instant_keys, text_without_keys, no_input. Real users can produce each,
   // so they are context, not a verdict. Empty when none matched; unset without watch().
   repeated string behavior = 19;
+  // Only with `detail` and an `identification_id`: the identification section of
+  // POST /v1/check with `detail: true`.
+  IdentificationDetail identification = 21;
+}
+
+// What the API found for an identification. As everywhere here, an unset field means
+// unknown, never false or zero.
+message IdentificationDetail {
+  // ok, insufficient_signals (valid evidence without a full ID), invalid_input or unavailable.
+  optional string status = 1;
+  // Why the status is not ok: invalid_identification_id, unknown_identification (also
+  // expired), identification_unavailable (Redis could not answer) or invalid_evidence.
+  optional string reason = 2;
+  // The SDK's fingerprint schema. Unset without a full ID.
+  optional uint32 schema_version = 3;
+  optional string fingerprint = 4;
+  // Unset unless the evidence was valid.
+  EvidenceSummary evidence = 5;
+  optional bool replayed = 6;
+  optional int64 age_ms = 7;
+  // The page origin that posted to POST /v1/identify.
+  optional string origin = 8;
+  // The JA4 of the browser's TLS ClientHello. Unset when none could be read.
+  optional string ja4 = 9;
+  // The TLS stack the JA4 belongs to: chromium, firefox, apple, curl, python, go or node.
+  // Unset when the JA4 is not in the reference table: unknown, not a mismatch.
+  optional string tls_client = 10;
+  // Each unset when the evidence did not carry that part.
+  EvidenceCheck automation = 11;
+  EvidenceCheck tampering = 12;
+  EvidenceCheck spoofing = 13;
+  BehaviorCheck behavior = 14;
+}
+
+message EvidenceSummary {
+  // A hash per complete group of identity probes: fonts, hardware, rendering, software.
+  map<string, string> identity_groups = 1;
+  optional uint32 included_components = 2;
+  optional uint32 included_hints = 3;
+  optional uint32 unavailable_probes = 4;
+  optional uint32 excluded_probes = 5;
+}
+
+// The automation, tampering or spoofing rule.
+message EvidenceCheck {
+  // detected, not_detected, unknown or invalid_input.
+  optional string status = 1;
+  optional uint32 rule_version = 2;
+  // client_reported, or client_reported_vs_request_headers for spoofing.
+  optional string source = 3;
+  // The observations that were true.
+  repeated string indicators = 4;
+  // The observations that could not be made. Their outcome is unknown.
+  repeated string unavailable_probes = 5;
+  optional string reason = 6;
+}
+
+message BehaviorCheck {
+  // observed or invalid_input.
+  optional string status = 1;
+  optional uint32 rule_version = 2;
+  optional string source = 3;
+  // Same values as CheckResponse.behavior.
+  repeated string patterns = 4;
+  optional string reason = 5;
 }
