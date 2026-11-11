@@ -518,6 +518,7 @@ try {
             'content-type': 'application/grpc', te: 'trailers', ...headers
         });
         const message = Buffer.concat(Object.entries(fields).map(([tag, text]) => {
+            if (typeof text === 'boolean') return Buffer.from([Number(tag) << 3, Number(text)]);
             const value = Buffer.from(text);
             const size = value.length < 128 ? [value.length] : [(value.length & 127) | 128, value.length >> 7];
             return Buffer.concat([Buffer.from([(Number(tag) << 3) | 2, ...size]), value]);
@@ -553,10 +554,10 @@ try {
                     continue;
                 }
                 const length = Number(varint());
-                assert(length < 128);
-                const text = body.subarray(i, i + length).toString();
+                const value = body.subarray(i, i + length);
                 i += length;
-                decoded[tag] = tag === 14 || tag === 19 ? [...(decoded[tag] ?? []), text] : text;
+                const text = value.toString();
+                decoded[tag] = tag === 21 ? value : tag === 14 || tag === 19 ? [...(decoded[tag] ?? []), text] : text;
             }
             resolve({ status: Number(trailers?.['grpc-status'] ?? NaN), decoded, raw });
         });
@@ -593,6 +594,79 @@ try {
     assert.deepEqual(withoutAge(await viaConnect.json()), { fingerprint: shortId(signals().fingerprint), replayed: false, automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'] });
     assert.equal((await connectCheck({ ip: '8.8.8.8' })).status, 200);
     assert.equal((await connectCheck({})).status, 400);
+
+    phase = 'RPC identification detail matches REST without changing compact fields';
+    const comparableDetail = (value) => plain(value) ? Object.fromEntries(Object.entries(value)
+        .filter(([key, v]) => key !== 'ageMs' && v !== null && !(Array.isArray(v) && v.length === 0))
+        .map(([key, v]) => [camelKey(key), comparableDetail(v)])) : value;
+    const detailId = await identified({ ...signals(), automation: { version: 7 }, tampering: { version: 1 }, behavior: watched });
+    await lookup(detailId);
+    const restDetail = (await (await request('/v1/check', {}, { identificationId: detailId })).json()).identification;
+    const detailed = await (await connectCheck({ identificationId: detailId, detail: true, ip: 'nope' })).json();
+    assert.deepEqual(comparableDetail(detailed.identification), comparableDetail(restDetail));
+    assert.equal(detailed.identification.automation.status, 'unknown');
+    assert.equal(detailed.identification.tampering.status, 'unknown');
+    assert(!('automation' in detailed) && !('tampering' in detailed), 'unknown is not false');
+    assert.equal(detailed.identification.tlsClient, nodeKnown ? 'node' : undefined);
+    assert.equal(detailed.identification.evidence.includedComponents, 2);
+    assert.deepEqual(detailed.identification.behavior.patterns, ['clicks_without_movement']);
+    assert.equal(detailed.replayed, true);
+    assert.equal(detailed.identification.replayed, true);
+    assert(Number(detailed.identification.ageMs) >= Number(restDetail.ageMs));
+    const { identification, ...stillCompact } = detailed;
+    for (const detail of [undefined, false]) {
+        const compact = await (await connectCheck({ identificationId: detailId, detail, ip: 'nope' })).json();
+        assert.deepEqual(withoutAge(compact), withoutAge(stillCompact));
+    }
+    const protobufFields = (body) => {
+        let i = 0;
+        const varint = () => {
+            let value = 0;
+            for (let shift = 0; ; shift += 7) {
+                const byte = body[i++];
+                value += (byte & 127) * 2 ** shift;
+                if (!(byte & 128)) return value;
+            }
+        };
+        const fields = {};
+        while (i < body.length) {
+            const tag = varint();
+            if ((tag & 7) === 0) fields[tag >> 3] = varint();
+            else {
+                assert.equal(tag & 7, 2);
+                const size = varint();
+                fields[tag >> 3] = body.subarray(i, i + size);
+                i += size;
+            }
+        }
+        return fields;
+    };
+    const wire = await grpcCall({ 6: detailId, 7: true });
+    assert.equal(wire.status, 0);
+    assert.equal((await grpcCall({ 6: detailId, 7: false })).decoded[21], undefined);
+    const wireDetail = protobufFields(wire.decoded[21]);
+    assert.equal(wireDetail[1].toString(), 'ok');
+    assert.equal(wireDetail[8].toString(), restDetail.origin);
+    assert.equal(wireDetail[9].toString(), restDetail.ja4);
+    assert.equal(wireDetail[10]?.toString(), restDetail.tlsClient);
+    assert.equal(protobufFields(wireDetail[11])[1].toString(), 'unknown');
+    assert.equal(protobufFields(wireDetail[12])[1].toString(), 'unknown');
+    assert.equal(protobufFields(wireDetail[14])[4].toString(), 'clicks_without_movement');
+    assert.equal(protobufFields(wireDetail[5])[2], 2);
+    for (const id of ['short', 'AAAAAAAAAAAAAAAAAAAAAA']) {
+        const response = await (await connectCheck({ identificationId: id, detail: true })).json();
+        const expected = (await (await request('/v1/check', {}, { identificationId: id })).json()).identification;
+        assert.deepEqual(comparableDetail(response.identification), comparableDetail(expected));
+        assert.deepEqual(response.invalid, ['identificationId']);
+        assert(!('evidence' in response.identification));
+        const failed = await grpcCall({ 6: id, 7: true });
+        assert.equal(failed.status, 0);
+        const detail = protobufFields(failed.decoded[21]);
+        assert.equal(detail[1].toString(), expected.status);
+        assert.equal(detail[2].toString(), expected.reason);
+    }
+    const noIdentification = await (await connectCheck({ ip: 'nope', detail: true })).json();
+    assert.deepEqual(noIdentification, { invalid: ['ip'] });
     assert.equal((await fetch(origin + rpcCheck, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.test' }, body: '{"ip":"8.8.8.8"}' })).status, 403);
 
     phase = 'spoofing compares the evidence with the request the listener received';
