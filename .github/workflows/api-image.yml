@@ -169,7 +169,11 @@ jobs:
           bash api/chart/test.sh
           yq -i '.image.digest = strenv(API_DIGEST) | .domainData.refresh.image.digest = strenv(UPDATER_DIGEST) | .networkData.refresh.image.digest = strenv(NETWORK_UPDATER_DIGEST)' api/chart/values.yaml
           helm package api/chart --version "$VERSION" --app-version "$VERSION"
-          rendered="$(helm template openfingerprint "openfingerprint-$VERSION.tgz" --set networkData.existingClaim=network-test --set networkData.refresh.enabled=true --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]')"
+          rendered="$(helm template openfingerprint "openfingerprint-$VERSION.tgz" \
+            --set networkData.existingClaim=network-test --set networkData.refresh.enabled=true \
+            --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]' \
+            --set-json 'identify.origins=["https://app.example.com"]' \
+            --set-json 'identify.certificates=[{"host":"identify.example.com","secretName":"identify-example-com-tls"}]')"
           grep -q "image: \"$IMAGE:$VERSION@$API_DIGEST\"" <<< "$rendered"
           grep -q "image: \"$UPDATER:$VERSION@$UPDATER_DIGEST\"" <<< "$rendered"
           grep -q "image: \"$NETWORK_UPDATER:$VERSION@$NETWORK_UPDATER_DIGEST\"" <<< "$rendered"
