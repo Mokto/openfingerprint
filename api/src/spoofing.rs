@@ -7,10 +7,11 @@ use std::{
 use serde::Serialize;
 use serde_json::Value;
 
-const PROBES: [&str; 3] = [
+const PROBES: [&str; 4] = [
     "user_agent_mismatch",
     "client_hints_mismatch",
     "language_mismatch",
+    "tls_mismatch",
 ];
 const HEADERS: [&str; 5] = [
     "userAgent",
@@ -87,8 +88,10 @@ struct Evidence {
 }
 
 /// Compares what the browser reported in the token (`evidence`, absent for SDKs that
-/// predate it) with the headers of the request that carried the token.
-pub fn check(evidence: Option<&Value>, headers: &Value) -> Check {
+/// predate it) with the headers of the request that carried the token and, for events,
+/// with the TLS stack its ClientHello came from (`tls`: the JA4, `Some(None)` when none
+/// could be read). Token checks have no `tls` and no `tls_mismatch` probe.
+pub fn check(evidence: Option<&Value>, headers: &Value, tls: Option<Option<&str>>) -> Check {
     let mut result = Check {
         status: "invalid_input",
         rule_version: 1,
@@ -138,7 +141,19 @@ pub fn check(evidence: Option<&Value>, headers: &Value) -> Check {
         ],
         None => [None; 3],
     };
-    for (observed, name) in observations.into_iter().zip(PROBES) {
+    let tls_mismatch = tls.map(|ja4| {
+        let observed = crate::tls::client(ja4?)?;
+        let user_agent = evidence
+            .as_ref()
+            .and_then(|e| e.user_agent.as_deref())
+            .or(header("userAgent"))?;
+        Some(observed != crate::tls::claimed(user_agent)?)
+    });
+    let observations = observations.into_iter().chain([tls_mismatch.flatten()]);
+    for (observed, name) in observations.zip(PROBES) {
+        if name == "tls_mismatch" && tls.is_none() {
+            continue;
+        }
         match observed {
             Some(true) => result.indicators.push(name),
             None => result.unavailable_probes.push(name),
@@ -297,7 +312,7 @@ mod tests {
         evidence: Option<Value>,
         headers: Value,
     ) -> (&'static str, Vec<&'static str>, Vec<&'static str>) {
-        let result = check(evidence.as_ref(), &headers);
+        let result = check(evidence.as_ref(), &headers, None);
         (result.status, result.indicators, result.unavailable_probes)
     }
 
@@ -348,11 +363,11 @@ mod tests {
     fn missing_or_unreadable_sides_are_unknown_not_false() {
         assert_eq!(
             outcome(Some(chrome()), json!({})),
-            ("unknown", vec![], PROBES.to_vec())
+            ("unknown", vec![], PROBES[..3].to_vec())
         );
         assert_eq!(
             outcome(None, chrome_headers()),
-            ("unknown", vec![], PROBES.to_vec()),
+            ("unknown", vec![], PROBES[..3].to_vec()),
             "a token from an SDK without spoofing evidence"
         );
         for (key, value) in [
@@ -418,7 +433,7 @@ mod tests {
             json!({"userAgent":1}),
             json!({"userAgent":"x".repeat(HEADER_LIMIT + 1)}),
         ] {
-            let result = check(Some(&chrome()), &headers);
+            let result = check(Some(&chrome()), &headers, None);
             assert_eq!(
                 (result.status, result.reason),
                 ("invalid_input", Some("invalid_headers"))
@@ -437,7 +452,7 @@ mod tests {
             json!({"version":1,"clientHints":{"brands":[{"brand":"A"}],"mobile":false,"platform":"X"}}),
             too_many,
         ] {
-            let result = check(Some(&evidence), &chrome_headers());
+            let result = check(Some(&evidence), &chrome_headers(), None);
             assert_eq!(
                 (result.status, result.reason),
                 ("invalid_input", Some("invalid_spoofing")),
@@ -457,8 +472,8 @@ mod tests {
         let before = metrics();
         let mut headers = chrome_headers();
         headers["userAgent"] = json!("curl/8");
-        check(Some(&chrome()), &headers);
-        check(Some(&json!({"version":9})), &headers);
+        check(Some(&chrome()), &headers, None);
+        check(Some(&json!({"version":9})), &headers, None);
         let after = metrics();
         for line in [
             "openfingerprint_spoofing_checks_total{status=\"detected\"}",

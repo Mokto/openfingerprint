@@ -1,6 +1,7 @@
 mod automation;
 mod cache;
 mod check;
+mod collect;
 mod country;
 mod domains;
 mod email;
@@ -15,6 +16,7 @@ mod rpc;
 mod spoofing;
 mod tampering;
 mod tld;
+mod tls;
 mod whois;
 
 use std::{sync::Arc, time::Duration};
@@ -30,14 +32,20 @@ use axum::{
 };
 
 fn app(state: Arc<check::AppState>) -> Router {
-    Router::new()
-        .route("/health", get(|| async { "ok" }))
-        .route("/v1/check", post(check::check))
-        .merge(rpc::routes(state.clone()))
-        .layer(DefaultBodyLimit::max(check::BODY_LIMIT))
+    observed(
+        Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .route("/v1/check", post(check::check))
+            .merge(rpc::routes(state.clone()))
+            .layer(DefaultBodyLimit::max(check::BODY_LIMIT))
+            .with_state(state),
+    )
+}
+
+fn observed(router: Router) -> Router {
+    router
         .layer(middleware::from_fn(no_store))
         .layer(middleware::from_fn(observe))
-        .with_state(state)
 }
 
 async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::response::IntoResponse {
@@ -51,6 +59,7 @@ async fn metrics(State(state): State<Arc<check::AppState>>) -> impl axum::respon
             + &state.replay.metrics()
             + &automation::metrics()
             + &spoofing::metrics()
+            + &collect::metrics()
             + &metrics::render(),
     )
 }
@@ -190,6 +199,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .route("/metrics", get(metrics))
             .with_state(state.clone());
         tokio::spawn(async move { axum::serve(listener, router).await });
+    }
+    if let Some(config) = collect::config_from_env()? {
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(error) = collect::serve(config, state, observed).await {
+                eprintln!("Collection listener failed: {error}");
+                std::process::exit(1);
+            }
+        });
     }
     let addr =
         std::env::var("OPENFINGERPRINT_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8180".into());

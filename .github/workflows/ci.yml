@@ -47,6 +47,7 @@ jobs:
       - run: cargo +stable test --manifest-path api/Cargo.toml --locked
       - run: cargo +stable build --manifest-path api/Cargo.toml --locked
       - run: node api/test.mjs
+      - run: node api/test-collect.mjs
       - run: node api/test-country.mjs
       - run: node api/test-network.mjs
       - run: bash api/chart/test.sh

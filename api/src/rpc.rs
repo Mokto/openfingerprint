@@ -68,6 +68,7 @@ impl OpenFingerprint for Check {
                     .collect(),
                 )
             }),
+            event: text(request.event),
             detail: None,
         };
         let verdicts = crate::check::evaluate(&self.0, input).await?;

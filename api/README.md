@@ -37,10 +37,13 @@ forged, and matching hashes can collide or change with settings and updates.
 Stateless checks have no visitor database, observation cache or account history.
 Their evidence, email addresses, domains and IPs are dropped after processing; an
 email address is never logged, cached, echoed or used as a metric label.
-Redis holds two kinds of key, both with a TTL: cached RDAP answers keyed by SHA-256
-hashes of registered domains, and token replay markers keyed by a SHA-256 hash of the
-token's content (see [Replayed tokens](#replayed-tokens-and-token-age)). Neither
-stores a fingerprint, account, address or IP. Request evidence is not logged.
+Redis holds three kinds of key, all with a TTL: cached RDAP answers keyed by SHA-256
+hashes of registered domains, token replay markers keyed by a SHA-256 hash of the
+token's content (see [Replayed tokens](#replayed-tokens-and-token-age)), and, with
+[browser collection](#browser-collection-post-v1events), events keyed by a SHA-256 hash
+of their ID for one hour. None stores an account, address or IP; an event holds the
+token, the browser's `User-Agent`, `Accept-Language` and `Sec-CH-UA*` headers, its JA4
+TLS fingerprint and the page origin. Request evidence is not logged.
 Outbound traffic consists of MX DNS queries, at most one RDAP
 request to the domain's registry per uncached check, Redis commands and, only when
 `SENTRY_DSN` is set, error reports to Sentry.
@@ -52,8 +55,8 @@ only an `ip` your backend passes is evaluated. Signals-only calls do not run dom
 
 The process retains read-only domain/country/network datasets; the RDAP cache and
 replay markers are shared in Redis, not an in-memory fallback. There is no visitor
-history. The API does no rate limiting: apply quotas and request limits at your
-edge/gateway.
+history. The API does no rate limiting of its own routes: apply quotas and request limits
+at your edge/gateway. The browser collection listener limits each client network.
 
 A separate operator updater refreshes public snapshots without rebuilding the
 image; the API re-reads an override file every minute and swaps in a changed
@@ -112,8 +115,12 @@ build arguments, command-line arguments or logs.
 | --- | --- |
 | `OPENFINGERPRINT_SITES` | No longer used. The API has no credentials; if the variable is set it is ignored and the API logs one warning at startup, so old deployments keep starting. |
 | `OPENFINGERPRINT_LISTEN_ADDR` | Optional listener, default `127.0.0.1:8180`. |
+| `OPENFINGERPRINT_COLLECT_ADDR` | Optional public TLS listener for [browser collection](#browser-collection-post-v1events), for example `0.0.0.0:8443`. Off when unset; the next two variables are then required. |
+| `OPENFINGERPRINT_COLLECT_CERTS` | Directory of certificates for the collection listener: `tls.crt` and `tls.key` (PEM) at its root serve any hostname, and a subdirectory named after a hostname serves that name, which is how mounted Kubernetes TLS Secrets look. Reread every 5 minutes, so renewed certificates are picked up; a broken reload keeps the previous ones. |
+| `OPENFINGERPRINT_COLLECT_ORIGINS` | Page origins allowed to post events, comma-separated (`https://app.example.com,https://www.example.com`), or `*` for any. Other origins get HTTP 403. |
+| `OPENFINGERPRINT_COLLECT_PROXY_PROTOCOL` | `true` when a load balancer in front sends the PROXY protocol (v1 or v2), so the rate limit sees client addresses; connections without the header are then dropped. Default `false`. |
 | `OPENFINGERPRINT_NETWORK_DATA` | Optional network manifest path. Keep its content-addressed ASN files in the same directory. No bundled/live fallback; absent/invalid data is unknown. Checked every 60 seconds; invalid replacements retain last-good data without extending expiry. |
-| `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL for the RDAP cache and token replay markers; the API does not start without it. Supports `rediss://` with certificate validation. An unreachable Redis means uncached RDAP lookups and no `replayed` answer; checks keep working and there is no memory fallback. Each pod keeps one multiplexed connection for the RDAP cache and one for replay markers, replaced after any error, timeout or 60 s of idleness; commands are never retried. RDAP cache writes happen after the response (at most 64 in flight; extra writes are dropped and counted as cache errors). |
+| `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL for the RDAP cache, token replay markers and events; the API does not start without it. Supports `rediss://` with certificate validation. An unreachable Redis means uncached RDAP lookups and no `replayed` answer; checks keep working and there is no memory fallback. Each pod keeps one multiplexed connection for the RDAP cache and one for replay markers, replaced after any error, timeout or 60 s of idleness; commands are never retried. RDAP cache writes happen after the response (at most 64 in flight; extra writes are dropped and counted as cache errors). |
 | `OPENFINGERPRINT_REDIS_PASSWORD` | Optional Redis password, overriding one in the URL, so the URL can live outside a Secret. |
 | `OPENFINGERPRINT_REPLAY_WINDOW_SECONDS` | How long a checked token is remembered: 1–604800 seconds, default 3600. Use identical settings on every replica. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
@@ -140,7 +147,11 @@ Deploy it so that only your backend can connect:
   call the API from a visitor's browser. There is no CORS and no preflight.
 - Every route requires `Content-Type: application/json`; bodies are limited to 64 KiB.
 
-The process does not terminate TLS. Terminate it in front if traffic leaves a trusted
+The collection listener is the one exception: it is meant to be public, terminates TLS
+itself, accepts only `POST /v1/events` from the configured origins, and takes nothing but a
+token, so a page cannot make your server run domain or IP lookups through it.
+
+The API port does not terminate TLS. Terminate it in front if traffic leaves a trusted
 network; cluster-local HTTP and NetworkPolicy do not encrypt traffic. No dashboard,
 SDK hosting, billing or tenant-management endpoint is provided.
 
@@ -150,7 +161,9 @@ Both are ignored now, so callers may keep sending the header while they roll ove
 ## Endpoints
 
 Routes require `Content-Type: application/json` and refuse any request with an `Origin`
-header. There is no authentication ([Security](#security)) and no CORS.
+header. There is no authentication ([Security](#security)) and no CORS. The optional
+[collection listener](#browser-collection-post-v1events) on its own port is the only
+browser-facing route.
 
 ### `GET /health`
 
@@ -169,6 +182,7 @@ The JSON object accepts only these fields:
 | `email` | Optional full email address. Its domain gets the `domain` checks, so it cannot be combined with `domain`. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
 | `headers` | Optional object with the raw `userAgent`, `acceptLanguage`, `secChUa`, `secChUaMobile` and `secChUaPlatform` headers of the browser request that carried `signals`. Used only with `signals`, for [spoofing](#spoofing-indicators). |
+| `event` | Optional `eventId` from the SDK when it posted to the [collection listener](#browser-collection-post-v1events), instead of `signals`. Cannot be combined with `signals` or `headers`. |
 | `detail` | Optional boolean, default false. `true` returns the full response described in this guide, with evidence counts, rule metadata and per-source provenance. |
 
 By default the response is one flat object of verdicts:
@@ -193,13 +207,13 @@ A key that is missing means unknown, so there are no `null` facts. Only the
 
 | Key | Meaning |
 | --- | --- |
-| `fingerprint` | From `signals`; `null` when the token is invalid or has no full ID. |
+| `fingerprint` | From `signals` or `event`; `null` when the token is invalid, the event unknown or Redis unavailable, or there is no full ID. |
 | `replayed`, `tokenAgeMs` | From a valid `signals` token: whether the same evidence was checked before, and milliseconds since the browser sealed it. See [Replayed tokens](#replayed-tokens-and-token-age). |
 | `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
-| `spoofing` | The browser's own report contradicts the headers of the request that carried it. Only with `headers`. |
+| `spoofing` | The browser's own report contradicts the headers of the request that carried it, or, for events, the TLS stack it connected with. Only with `headers` or `event`. |
 | `disposable`, `free`, `spam`, `relay`, `cheapTld`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `cheapTld` says the TLD is one registrars sell at teaser prices; `mx` says the domain has mail servers. |
 | `country`, `vpn`, `tor`, `datacenter`, `proxy` | From `ip`. `country` is a lowercase ISO 3166-1 alpha-2 code. |
-| `invalid` | Only present when an input was rejected: a list of `signals`, `automation`, `tampering`, `spoofing`, `headers`, `domain`, `email` and/or `ip`. |
+| `invalid` | Only present when an input was rejected: a list of `signals`, `event`, `automation`, `tampering`, `spoofing`, `headers`, `domain`, `email` and/or `ip`. An unknown or expired event is `event`. |
 
 `email` and `domain` give the same keys. Everything else (evidence counts, indicator
 lists, rule versions, role account, ASN and hosting provider, MX providers,
@@ -542,6 +556,7 @@ the browser request that carried the token, `/v1/check` compares the two and ret
 | `user_agent_mismatch` | The reported user agent differs from `User-Agent`. | Either side is missing. |
 | `client_hints_mismatch` | The reported brands (in any order), mobile flag or platform differ from `Sec-CH-UA`, `Sec-CH-UA-Mobile` and `Sec-CH-UA-Platform`. | Only one side has client hints, or a header does not parse. Neither side having them (Firefox, Safari) counts as agreement. |
 | `language_mismatch` | The primary subtag of the reported language differs from the first `Accept-Language` tag (`en-US` and `en` agree, as WebKit reports `ja` while sending `ja-JP`). | Either side is missing or `*`. |
+| `tls_mismatch` | Events only. The TLS handshake matches a known client other than the browser the user agent names: a Chrome token posted by curl, Python, Go or Node, or a Firefox user agent on Chrome's handshake. | The JA4 is not in the reference table, or the user agent names no known browser. |
 
 Both sides come from the same browser, so they agree for ordinary visitors in
 Chromium, Firefox and WebKit. A mismatch means the token and the request did not come
@@ -717,6 +732,59 @@ visitor metadata are rejected. Non-null IDs must match the
 canonical hash for the reported schema; changing only the version does not
 translate an identity between schemas.
 
+#### Browser collection (`POST /v1/events`)
+
+The token alone is unsigned: a script can build one and send it with any headers. With
+`OPENFINGERPRINT_COLLECT_ADDR` set, the API also runs a public TLS listener where the
+browser posts its token itself, so the API observes the request instead of trusting a
+copy of it:
+
+1. The page calls `collect({ endpoint: 'https://collect.example.com/v1/events' })`. The SDK
+   posts `result.token` as `text/plain` (a simple CORS request, no preflight) and returns
+   `result.eventId`.
+2. The listener checks the `Origin` against `OPENFINGERPRINT_COLLECT_ORIGINS`, the token's
+   validity and a limit of 60 events per minute per client network (an IPv4 address or
+   IPv6 /64, per replica), then stores the token, the browser's headers, the page origin
+   and the JA4 fingerprint of its TLS ClientHello for one hour. It answers
+   `{"eventId":"<22 characters>"}` with `Access-Control-Allow-Origin`.
+3. Your backend sends `{"event":"<eventId>"}` to `POST /v1/check` (or `event` in the RPC)
+   instead of `signals`. The response has the same keys as for a token. The difference is
+   in where the facts come from:
+
+| Fact | Token (`signals`) | Event (`event`) |
+| --- | --- | --- |
+| Headers compared by `spoofing` | Whatever your backend forwards | What the listener received |
+| `tls_mismatch` | Not available | From the browser's own TLS handshake |
+| `tokenAgeMs` | The browser's clock | The API's clock, since the event was stored |
+| `replayed` | The same token content seen before | The same event looked up before |
+| Proof a browser connected | None | The event exists only if a request reached the listener |
+
+With `detail: true`, `signals.event` has the `origin`, the `ja4` string and `tlsClient`
+(`chromium`, `firefox`, `apple`, `curl`, `python`, `go`, `node` or `null` for an unlisted
+fingerprint). An unknown or expired event is `invalid_input` with
+`reason: unknown_event` (compact: `invalid: ["event"]`); when Redis cannot answer, the
+section is `status: unavailable` and the compact `fingerprint` is `null` without an
+`invalid` entry. An event can be looked up more than once within the hour, so a signup
+flow that checks twice keeps working; `replayed` tells the second lookup apart.
+
+The listener terminates TLS itself, because a proxy that terminates TLS would hide the
+handshake. Route its port with TCP passthrough (a Kubernetes `LoadBalancer` Service,
+Traefik `IngressRouteTCP` with `passthrough`, nginx `stream` or HAProxy `mode tcp`) and
+set `OPENFINGERPRINT_COLLECT_PROXY_PROTOCOL=true` if the load balancer sends the PROXY
+protocol. It serves HTTP/1.1 and HTTP/2 with ALPN. Its errors are `{"error":"<reason>"}`:
+403 `origin_not_allowed`, 400 `invalid_signals`, 429 `rate_limited` and 503
+`collection_unavailable` (Redis could not store the event); the SDK then returns
+`eventId: null` and you can still send the `token`.
+
+What this does and does not prove: a script must now connect with its own TLS stack, and
+a library's handshake contradicts a browser user agent. Unlisted handshakes (other browser
+versions, company TLS inspection) stay unknown rather than flagged. A real browser driven
+by automation has a real browser handshake, and libraries built to imitate Chrome's
+handshake exist, so `tls_mismatch: false` does not show a human; the automation probes
+cover the first case. The reference fingerprints in [src/tls.rs](src/tls.rs) were measured
+in November 2026 and need updating as browsers and libraries change. JA4 is the
+[FoxIO](https://github.com/FoxIO-LLC/ja4) TLS client fingerprint (BSD 3-Clause).
+
 #### Replayed tokens and token age
 
 The token is client-supplied and unsigned, so a script can build one. Two fields help
@@ -766,7 +834,8 @@ buf curl --reflect -d '{"domain":"gmail.com"}' \
 ```
 
 [`proto/openfingerprint.proto`](proto/openfingerprint.proto) is the contract.
-`CheckRequest` has `signals` (the SDK `token`), `domain`, `email` and `ip`;
+`CheckRequest` has `signals` (the SDK `token`), `domain`, `email`, `ip`, `headers` and
+`event`;
 `CheckResponse` has the same fields as the compact JSON, with an unset optional
 field meaning unknown. `detail` and standalone `automation` evidence are JSON-only.
 Reflection (`grpc.reflection.v1` and `v1alpha`) is open like the rest.
@@ -820,9 +889,13 @@ contents, domains, addresses or credentials:
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
 | `openfingerprint_spoofing_checks_total{status}`, `openfingerprint_spoofing_indicators_total{indicator}` | Tokens compared with their request `headers`, by verdict, and how often each comparison found a mismatch. They count evaluated tokens, not visitors. |
 | `openfingerprint_automation_checks_total{status}`, `openfingerprint_automation_indicators_total{indicator}` | Valid automation reports evaluated, by verdict (`detected`, `unknown`, `not_detected`), and how often each probe was positive. One positive probe is enough for `detected`, so the indicator counts show which probes fire in practice. They count evaluated reports, not visitors. |
+| `openfingerprint_events_total{result}` | Browser posts to the collection listener: `stored`, `origin_refused`, `rate_limited`, `invalid` (not a valid token) and `error` (Redis could not store it). |
+| `openfingerprint_event_lookups_total{result}` | Events looked up by `/v1/check`: `found`, `unknown` (never stored or expired) and `error`. |
+| `openfingerprint_event_tls_clients_total{client}` | Stored events by the client their JA4 matched, `unknown` for an unlisted fingerprint, `none` when none was read. A rising `unknown` share means the reference table needs new browser versions. |
+| `openfingerprint_collect_certificates`, `openfingerprint_collect_certificate_reload_failures_total` | Certificates loaded for the collection listener, and reloads that failed (the previous certificates stay in use). |
 | `openfingerprint_replay_checks_total{result}` | Token replay checks: `new` (first sighting), `replayed` (seen before) and `error` (Redis could not answer, so `replayed` was left out). |
-| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |
-| `openfingerprint_check_step_duration_seconds{step}` | Histogram of where a `/v1/check` spends time. Sections: `automation`, `signals`, `domain`, `ip_country`, `ip_network`. The `domain` section runs `domain_mx`, `domain_registration` and `domain_mail_auth` concurrently, so it lasts as long as the slowest, not their sum. Beneath them: `dns_lookup` (each MX or TXT query), `redis_get` and `redis_set` (RDAP cache), `replay` (the token replay marker), `rdap_fetch` and `whois_fetch` (registry calls on a cache miss, including the wait for a per-registry slot). A step cut short by its timeout is recorded at the time it was cut. |
+| `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `events` (the collection listener), `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |
+| `openfingerprint_check_step_duration_seconds{step}` | Histogram of where a `/v1/check` spends time. Sections: `automation`, `signals`, `domain`, `ip_country`, `ip_network`. The `domain` section runs `domain_mx`, `domain_registration` and `domain_mail_auth` concurrently, so it lasts as long as the slowest, not their sum. Beneath them: `dns_lookup` (each MX or TXT query), `redis_get` and `redis_set` (RDAP cache), `replay` (the token replay marker), `event` (reading an event), `rdap_fetch` and `whois_fetch` (registry calls on a cache miss, including the wait for a per-registry slot). A step cut short by its timeout is recorded at the time it was cut. |
 | `openfingerprint_country_data_loaded` | 1 when a valid country database is loaded (not necessarily fresh). |
 | `openfingerprint_country_data_expiry_timestamp_seconds` | When the country database stops being used, or 0 when unavailable. |
 | `openfingerprint_country_data_reload_failures_total` | Changed country files rejected, including rollbacks to older builds. |
