@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.10.2...sdk-v0.11.0) (2026-11-11)
+
+
+### Features
+
+* add a spoofing check comparing the SDK token with its request headers ([#108](https://github.com/Mokto/openfingerprint/issues/108)) ([bb80ac4](https://github.com/Mokto/openfingerprint/commit/bb80ac4f19643eac38978a492c6fb4862812d99d))
+* add automation evidence version 5 with driver, engine and user-agent-data probes ([#111](https://github.com/Mokto/openfingerprint/issues/111)) ([7021e26](https://github.com/Mokto/openfingerprint/commit/7021e26a07d0eae8e3711e15191f07efa6d6d607))
+* add browser collection so the API observes the browser's own request and TLS handshake ([#115](https://github.com/Mokto/openfingerprint/issues/115)) ([a1e76a1](https://github.com/Mokto/openfingerprint/commit/a1e76a1f61fe8ba89539c7d678b99e0014a15ec5))
+* add watch() with driver-code traps and behavior counts ([#117](https://github.com/Mokto/openfingerprint/issues/117)) ([747eeb1](https://github.com/Mokto/openfingerprint/commit/747eeb1ce343a631f1965fa3510a1a78a09eb4d6))
+* detect Camoufox and Obscura with two new automation probes ([#114](https://github.com/Mokto/openfingerprint/issues/114)) ([1df5b03](https://github.com/Mokto/openfingerprint/commit/1df5b030996c48bee2d2b6b4920cf02e12b80ea9))
+
+
+### Bug Fixes
+
+* **sdk:** detect CDP Runtime.enable via Error.prepareStackTrace ([#110](https://github.com/Mokto/openfingerprint/issues/110)) ([e8dbba1](https://github.com/Mokto/openfingerprint/commit/e8dbba130ed87f27bf37e0740a3c31876a3bdf31))
+
 ## [0.10.2](https://github.com/Mokto/openfingerprint/compare/sdk-v0.10.1...sdk-v0.10.2) (2026-11-10)
 
 
