@@ -36,11 +36,14 @@ const V6: [(&str, &str); 2] = [
     ("proportionalMonospace", "proportional_monospace"),
     ("engineApiMismatch", "engine_api_mismatch"),
 ];
+/// Observed only on pages that call the SDK's `watch()`, and only in Chromium and Firefox, so
+/// null here does not make the verdict unknown.
+const V7: [(&str, &str); 1] = [("protocolScript", "protocol_script")];
 
 const STATUSES: [&str; 3] = ["detected", "unknown", "not_detected"];
 static STATUS_COUNTS: [AtomicU64; STATUSES.len()] = [const { AtomicU64::new(0) }; STATUSES.len()];
-static INDICATOR_COUNTS: [AtomicU64; V1.len() + V2.len() + V5.len() + V6.len()] =
-    [const { AtomicU64::new(0) }; V1.len() + V2.len() + V5.len() + V6.len()];
+static INDICATOR_COUNTS: [AtomicU64; V1.len() + V2.len() + V5.len() + V6.len() + V7.len()] =
+    [const { AtomicU64::new(0) }; V1.len() + V2.len() + V5.len() + V6.len() + V7.len()];
 
 /// Counts of evaluated tokens, by verdict and by indicator. Nothing identifies a visitor:
 /// they show which probes fire in practice, since one indicator is enough for `detected`.
@@ -63,6 +66,7 @@ pub fn metrics() -> String {
         .chain(&V2)
         .chain(&V5)
         .chain(&V6)
+        .chain(&V7)
         .zip(&INDICATOR_COUNTS)
     {
         let _ = writeln!(
@@ -84,6 +88,7 @@ fn record(result: &Check) {
             .chain(&V2)
             .chain(&V5)
             .chain(&V6)
+            .chain(&V7)
             .position(|(_, name)| name == indicator)
         {
             INDICATOR_COUNTS[i].fetch_add(1, Ordering::Relaxed);
@@ -119,6 +124,7 @@ pub fn check(value: Value) -> Check {
         Some(4) => 4,
         Some(5) => 5,
         Some(6) => 6,
+        Some(7) => 7,
         _ => return result,
     };
     let probes: Vec<_> = V1
@@ -126,6 +132,7 @@ pub fn check(value: Value) -> Check {
         .chain(if version >= 2 { V2.iter() } else { [].iter() })
         .chain(if version >= 5 { V5.iter() } else { [].iter() })
         .chain(if version >= 6 { V6.iter() } else { [].iter() })
+        .chain(if version >= 7 { V7.iter() } else { [].iter() })
         .collect();
     let Some(fields) = value.as_object() else {
         return result;
@@ -137,17 +144,21 @@ pub fn check(value: Value) -> Check {
     }) {
         return result;
     }
+    let mut unknown = false;
     for (name, indicator) in probes {
         match fields.get(*name).and_then(Value::as_bool) {
             Some(true) => result.indicators.push(indicator),
-            None => result.unavailable_probes.push(indicator),
+            None => {
+                result.unavailable_probes.push(indicator);
+                unknown |= !V7.iter().any(|(optional, _)| optional == name);
+            }
             Some(false) => {}
         }
     }
     result.rule_version = version;
     result.status = if !result.indicators.is_empty() {
         "detected"
-    } else if !result.unavailable_probes.is_empty() {
+    } else if unknown {
         "unknown"
     } else {
         "not_detected"
@@ -192,7 +203,7 @@ mod tests {
         ));
         check(all_false(json!({"cdpDetected": true})));
         check(all_false(json!({})));
-        check(json!({"version": 7}));
+        check(json!({"version": 8}));
         let after = metrics();
         // Other tests share these statics, so assert increases only.
         assert!(value(&after, detected) >= value(&before, detected) + 2);
@@ -313,6 +324,30 @@ mod tests {
     }
 
     #[test]
+    fn version_seven_protocol_script_is_optional() {
+        let mut report = json!({"version": 7});
+        for (name, _) in V1.iter().chain(&V2).chain(&V5).chain(&V6) {
+            report[*name] = json!(false);
+        }
+        let unwatched = check(report.clone());
+        assert_eq!(
+            (unwatched.status, unwatched.rule_version),
+            ("not_detected", 7)
+        );
+        assert_eq!(unwatched.unavailable_probes, ["protocol_script"]);
+        report["protocolScript"] = json!(false);
+        assert!(check(report.clone()).unavailable_probes.is_empty());
+        report["protocolScript"] = json!(true);
+        let result = check(report);
+        assert_eq!(result.status, "detected");
+        assert_eq!(result.indicators, ["protocol_script"]);
+        assert_eq!(
+            check(json!({"version": 6, "protocolScript": false})).status,
+            "invalid_input"
+        );
+    }
+
+    #[test]
     fn invalid_evidence_does_not_produce_a_verdict() {
         for value in [
             json!(null),
@@ -320,8 +355,9 @@ mod tests {
             json!([]),
             json!("automation"),
             json!({}),
-            json!({"version": 7}),
+            json!({"version": 8}),
             json!({"version": 5, "proportionalMonospace": false}),
+            json!({"version": 6, "protocolScript": false}),
             json!({"version": 6, "proportionalMonospace": "true"}),
             json!({"version": -1}),
             json!({"version": 1.5}),

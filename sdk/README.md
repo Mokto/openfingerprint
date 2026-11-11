@@ -97,12 +97,12 @@ Every `collect()` result and `onIdentity` snapshot includes `automation`.
 Forward `{ signals: result.token }` to a compatible `/v1/check` to receive the evaluation
 in `response.automation` (`response.signals.automation` with `detail: true`). No opt-in or separate call is needed.
 Automation remains outside fingerprint hashes, so the identity schema is unchanged.
-Deploy the compatible API first: older versions reject automation evidence versions they do not define, including version 6.
+Deploy the compatible API first: older versions reject automation evidence versions they do not define, including version 7.
 `collectAutomation()` remains available as a synchronous browser-only helper.
 
 | Field | Observation |
 | --- | --- |
-| `version` | Always `6`, independent of the fingerprint schema. |
+| `version` | Always `7`, independent of the fingerprint schema. |
 | `webdriver` | The boolean `navigator.webdriver` value. |
 | `headlessUserAgent` | A `HeadlessChrome/` token in the user-agent string, or a `HeadlessChrome` brand in `navigator.userAgentData`, which survives a replaced user-agent string. |
 | `seleniumArtifacts` | Presence of `__webdriver_evaluate`, `__selenium_evaluate`, `__webdriver_script_fn` or `__selenium_unwrapped` on `document`. |
@@ -122,6 +122,7 @@ Deploy the compatible API first: older versions reject automation evidence versi
 | `userAgentDataMismatch` | The `Chromium` brand major version in `navigator.userAgentData` differs from the `Chrome/` major version in the user-agent string, as when a script or flag replaces only the string. |
 | `proportionalMonospace` | The generic `monospace` font measures `m` more than 1.5 times wider than `i` in a 2D canvas, so it is not fixed-width. Every platform maps `monospace` to a fixed-width font; Camoufox doesn't when it claims another operating system than its host. Unknown without a 2D canvas. |
 | `engineApiMismatch` | `navigator.userAgentData` exists but is not a `NavigatorUAData`, as when script builds it; or the user agent claims Chrome 120 or later and `CompressionStream`, `Navigation` or `Highlight` is missing, though Chrome shipped all three by version 105. Engines that imitate Chrome, such as Obscura, do this. |
+| `protocolScript` | Only after [`watch()`](#watching-the-page). Code compiled by a debugging protocol called one of the trapped DOM methods: CDP `Runtime.evaluate` in Chromium (nodriver, zendriver, pydoll, Playwright and Selenium in the page's own world), Puppeteer's named scripts, ChromeDriver's helper, or Firefox's Debugger API (Playwright, Camoufox and WebDriver BiDi in the page's world). Typing in the DevTools console counts too. Code in an isolated world, Patchright's and Camoufox's default, is not seen. Null without `watch()` and in WebKit. |
 
 The standalone `collectAutomation()` returns `null` for the three `collect()`-only
 observations, which need async or GPU-probe results. The worker probe needs
@@ -165,6 +166,57 @@ identity hashes. Unreadable or oversized values are null. Have your backend forw
 those five headers of the request that carried the token as `headers` in
 `/v1/check`; the [API](../api/README.md#spoofing-indicators) reports whether the two
 disagree. `collectSpoofing()` returns the same object synchronously.
+
+### Watching the page
+
+`collect()` sees one moment. `watch()` keeps observing until the page unloads, and
+every later `collect()` reports what it saw. Call it as early as possible, ideally from
+a script in `<head>`, and collect at the protected action (signup or login submit):
+
+```js
+import { collect, watch } from '@openfingerprint/sdk';
+
+watch();
+form.addEventListener('submit', async () => {
+	const { token } = await collect();
+	// send token with the form
+});
+```
+
+It does two things, both network-free:
+
+- **Traps** (`automation.protocolScript`). In Chromium and Firefox it wraps a few DOM
+  methods scrapers use (`querySelector`, `querySelectorAll`, `getElementById`,
+  `getElementsByClassName`, `getElementsByTagName`, `document.evaluate`, the
+  `document.title`, `outerHTML` and `innerText` getters, and `HTMLElement.click`) and
+  inspects the call stack of each call for code a debugging protocol compiled. The
+  first hit removes every trap. Until then each trapped call costs a stack capture of
+  about 2.5 µs. Page scripts without a URL (inserted inline scripts, `setTimeout`
+  strings, `javascript:` links, `eval`), cross-origin scripts and extension scripts
+  in the page's world are not flagged. Other scripts on the page can see that these
+  methods are wrapped, and a fingerprinting or anti-tampering library running there
+  may report it.
+- **Input counts** (`result.behavior`, `null` without `watch()`), all since `watch()`:
+
+| Field | Counts |
+| --- | --- |
+| `version` | Always `1`. |
+| `watchedMs` | Milliseconds since `watch()`. |
+| `pointerMoves` | Trusted mouse `pointermove` events. |
+| `mouseClicks` | Trusted mouse clicks (keyboard activation and touch excluded). |
+| `clicksWithoutMovement` | Mouse clicks with at most one pointer move since the previous press, as a driver's click produces. |
+| `centeredClicks` | Mouse clicks within 1 px of the target's centre, where drivers click. |
+| `keys` | Trusted key presses (repeats, IME composition and `keyCode` 229 excluded). |
+| `instantKeys` | Keys released less than 5 ms after being pressed. |
+| `insertedTexts` | `insertText` input with no key press before it, as CDP `Input.insertText` (Playwright's `fill`) produces. Dictation and some autofill do too. |
+| `touches` | Trusted `touchstart` events. |
+| `wheels` | Trusted `wheel` events. |
+| `untrustedEvents` | Clicks, key, mouse and input events dispatched by script. Pages do this themselves, so this is context only. |
+
+Every count is something real users can produce: keyboard-only use, autofill,
+dictation, on-screen keyboards, or a token collected at page load before any input.
+The [API](../api/README.md#behavior-patterns) turns them into patterns, never into a
+detection. No positions, timings, keys or text are kept.
 
 ### Sending the token
 
@@ -263,6 +315,7 @@ Version **0.6.0**, result **schema 1**:
   token was sealed. The API turns it into `tokenAgeMs`.
 - `eventId`: with `endpoint`, the event the collection listener stored, or `null`.
   It is not part of the token.
+- `behavior`: input counts since [`watch()`](#watching-the-page), or `null`.
 
 - `fingerprint`: full SHA-256 over selected component and environment-hint hashes.
 - `coreFingerprint`: separately domain-separated hash of selected rendering probes;

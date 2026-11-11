@@ -449,7 +449,8 @@ try {
         [{ version: 2, softwareRenderer: true, cdpDetected: false }, 'detected', ['software_renderer'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'zero_dimensions', 'native_function_tampering', 'worker_user_agent_mismatch']],
         [{ version: 3, nativeFunctionTampering: true }, 'detected', ['native_function_tampering'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'worker_user_agent_mismatch']],
         [{ version: 4, emptyLanguages: true, cdpDetected: false }, 'detected', ['empty_languages'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'software_renderer', 'zero_dimensions', 'native_function_tampering', 'worker_user_agent_mismatch']],
-        [{ version: 6, proportionalMonospace: true }, 'detected', ['proportional_monospace'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'native_function_tampering', 'worker_user_agent_mismatch', 'driver_artifacts', 'engine_mismatch', 'user_agent_data_mismatch', 'engine_api_mismatch']]
+        [{ version: 6, proportionalMonospace: true }, 'detected', ['proportional_monospace'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'native_function_tampering', 'worker_user_agent_mismatch', 'driver_artifacts', 'engine_mismatch', 'user_agent_data_mismatch', 'engine_api_mismatch']],
+        [{ version: 7, protocolScript: true }, 'detected', ['protocol_script'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'native_function_tampering', 'worker_user_agent_mismatch', 'driver_artifacts', 'engine_mismatch', 'user_agent_data_mismatch', 'proportional_monospace', 'engine_api_mismatch']]
     ]) {
         const response = await request('/v1/check', {}, { automation: observations, signals: signals() });
         assert.equal(response.status, 200);
@@ -458,7 +459,7 @@ try {
             signals: checkedProfile(signals())
         });
     }
-    for (const invalid of [false, [], 'browser', {}, { version: 7 }, { version: 4, extra: true }, { version: 4, engineMismatch: false }, { version: 5, proportionalMonospace: false }, { version: 5, engineApiMismatch: false }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
+    for (const invalid of [false, [], 'browser', {}, { version: 8 }, { version: 6, protocolScript: false }, { version: 4, extra: true }, { version: 4, engineMismatch: false }, { version: 5, proportionalMonospace: false }, { version: 5, engineApiMismatch: false }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
         const response = await request('/v1/check', {}, { ...fields, signals: signals(), automation: invalid });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {
@@ -492,6 +493,20 @@ try {
         const response = await request('/v1/check', {}, { signals: { ...signals(), tampering: invalid } });
         assert.deepEqual(await response.json(), { signals: { ...profile, tampering: { status: 'invalid_input', rule_version: 1, source: 'client_reported', indicators: [], unavailable_probes: [], reason: 'invalid_tampering' } } });
     }
+    phase = 'behavior evidence reports input patterns without a verdict';
+    const behavior = (counts) => ({ version: 1, watchedMs: 1200, pointerMoves: 0, mouseClicks: 0, clicksWithoutMovement: 0, centeredClicks: 0, keys: 0, instantKeys: 0, insertedTexts: 0, touches: 0, wheels: 0, untrustedEvents: 0, ...counts });
+    for (const [counts, patterns] of [
+        [{ pointerMoves: 2, mouseClicks: 2, clicksWithoutMovement: 2, centeredClicks: 2 }, ['clicks_without_movement', 'centered_clicks']],
+        [{ pointerMoves: 30, mouseClicks: 1, keys: 6, insertedTexts: 1 }, ['text_without_keys']],
+        [{}, ['no_input']]
+    ]) {
+        const response = await request('/v1/check', {}, { signals: { ...signals(), behavior: behavior(counts) } });
+        assert.deepEqual(await response.json(), { signals: { ...profile, behavior: { status: 'observed', ruleVersion: 1, source: 'client_reported', patterns } } });
+    }
+    for (const invalid of [false, { version: 2 }, behavior({ keys: -1 }), behavior({ extra: 1 })]) {
+        const response = await request('/v1/check', {}, { signals: { ...signals(), behavior: invalid } });
+        assert.deepEqual(await response.json(), { signals: { ...profile, behavior: { status: 'invalid_input', ruleVersion: 1, source: 'client_reported', patterns: [], reason: 'invalid_behavior' } } });
+    }
     const withTampering = await request('/v1/check', {}, { signals: { ...signals(), tampering: { version: 1, canvasReadbackAltered: true, audioRenderAltered: true } } });
     assert.equal((await withTampering.json()).signals.fingerprint, profile.fingerprint);
     console.log('Automation rules, all 15 input combinations, unknowns, stable identities and independent failures passed.');
@@ -522,6 +537,10 @@ try {
     const compactEmail = await compactCall({ email: 'Admin@mail.example' });
     assert.deepEqual(compactEmail, mode === 'fresh' ? { disposable: true, mx: false } : { mx: false });
     assert.deepEqual(await compactCall({ email: 'nope' }), { invalid: ['email'] });
+    const watched = { version: 1, watchedMs: 900, pointerMoves: 1, mouseClicks: 1, clicksWithoutMovement: 1, centeredClicks: 0, keys: 0, instantKeys: 0, insertedTexts: 0, touches: 0, wheels: 0, untrustedEvents: 0 };
+    assert.deepEqual((await compactCall({ signals: seal({ ...signals(), behavior: watched }) })).behavior, ['clicks_without_movement']);
+    assert.deepEqual((await compactCall({ signals: seal({ ...signals(), behavior: { ...watched, mouseClicks: 2 } }) })).behavior, []);
+    assert.deepEqual((await compactCall({ signals: seal({ ...signals(), behavior: { version: 1 } }) })).invalid, ['behavior']);
     assert.deepEqual(await compactCall({ signals: 'not-a-token', ip: 'nope' }), {
         fingerprint: null, invalid: ['signals', 'ip']
     });
@@ -600,9 +619,9 @@ try {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body)
     });
-    const viaConnect = await connectCheck({ signals: seal({ ...signals(), automation: { version: 1, webdriver: true } }), domain: 'mail.example', ip: 'nope' });
+    const viaConnect = await connectCheck({ signals: seal({ ...signals(), automation: { version: 1, webdriver: true }, behavior: { version: 1, watchedMs: 900, pointerMoves: 0, mouseClicks: 0, clicksWithoutMovement: 0, centeredClicks: 0, keys: 3, instantKeys: 3, insertedTexts: 0, touches: 0, wheels: 0, untrustedEvents: 0 } }), domain: 'mail.example', ip: 'nope' });
     assert.equal(viaConnect.status, 200);
-    assert.deepEqual(await viaConnect.json(), { fingerprint: shortId(signals().fingerprint), replayed: false, automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'] });
+    assert.deepEqual(await viaConnect.json(), { fingerprint: shortId(signals().fingerprint), replayed: false, automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'], behavior: ['instant_keys'] });
     assert.equal((await connectCheck({ ip: '8.8.8.8' })).status, 200);
     assert.equal((await connectCheck({})).status, 400);
     phase = 'spoofing compares the token with the headers of its request';

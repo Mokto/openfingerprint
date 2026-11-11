@@ -5,7 +5,8 @@ import { identityExclusions } from './policy';
 import { collectAutomation, isSoftwareRenderer, observeAsyncAutomation, type AutomationEvidence } from './automation';
 import { observeTampering, unobservedTampering, type TamperingEvidence } from './tampering';
 import { collectSpoofing, type SpoofingEvidence } from './spoofing';
-export { collectAutomation, collectSpoofing, type AutomationEvidence, type SpoofingEvidence, type TamperingEvidence };
+import { collectBehavior, watch, type BehaviorEvidence } from './watch';
+export { collectAutomation, collectSpoofing, watch, type AutomationEvidence, type BehaviorEvidence, type SpoofingEvidence, type TamperingEvidence };
 
 const unsupported = Symbol();
 const unstable = Symbol();
@@ -473,6 +474,8 @@ export interface Result {
 	automation: AutomationEvidence;
 	tampering: TamperingEvidence;
 	spoofing: SpoofingEvidence;
+	/** Input counts since `watch()`; null when the page never called it. */
+	behavior: BehaviorEvidence | null;
 	version: 1;
 	excluded: Name[];
 	fingerprint: string | null;
@@ -557,6 +560,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		automation: collectAutomation(),
 		tampering: unobservedTampering(),
 		spoofing: collectSpoofing(),
+		behavior: null,
 		version: 1,
 		excluded: identityExclusions(navigator.userAgent, navigator.vendor),
 		fingerprint: null,
@@ -649,6 +653,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 				automation: { ...result.automation },
 				tampering: { ...result.tampering },
 				spoofing: collectSpoofing(),
+				behavior: collectBehavior(),
 				excluded: [...result.excluded],
 				components: { ...result.components },
 				hints: { ...result.hints },
@@ -667,6 +672,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		// Diagnostic timeouts must not erase an already-computed identity.
 		for (const name of result.excluded) if (name !== 'audio') await run(name);
 		if (excluded.has('audio')) await run('audio');
+		result.behavior = collectBehavior();
 		result.collectedAt = Date.now();
 		result.durationMs = Math.round((performance.now() - start) * 10) / 10;
 		result.token = tokenOf(result);

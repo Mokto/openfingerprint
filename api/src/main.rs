@@ -1,4 +1,5 @@
 mod automation;
+mod behavior;
 mod cache;
 mod check;
 mod collect;

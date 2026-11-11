@@ -211,9 +211,10 @@ A key that is missing means unknown, so there are no `null` facts. Only the
 | `replayed`, `tokenAgeMs` | From a valid `signals` token: whether the same evidence was checked before, and milliseconds since the browser sealed it. See [Replayed tokens](#replayed-tokens-and-token-age). |
 | `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
 | `spoofing` | The browser's own report contradicts the headers of the request that carried it, or, for events, the TLS stack it connected with. Only with `headers` or `event`. |
+| `behavior` | [Input patterns](#behavior-patterns) since the page called the SDK's `watch()`, as a list. Context, not a verdict. Only for pages that call `watch()`. |
 | `disposable`, `free`, `spam`, `relay`, `cheapTld`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `cheapTld` says the TLD is one registrars sell at teaser prices; `mx` says the domain has mail servers. |
 | `country`, `vpn`, `tor`, `datacenter`, `proxy` | From `ip`. `country` is a lowercase ISO 3166-1 alpha-2 code. |
-| `invalid` | Only present when an input was rejected: a list of `signals`, `event`, `automation`, `tampering`, `spoofing`, `headers`, `domain`, `email` and/or `ip`. An unknown or expired event is `event`. |
+| `invalid` | Only present when an input was rejected: a list of `signals`, `event`, `automation`, `tampering`, `spoofing`, `behavior`, `headers`, `domain`, `email` and/or `ip`. An unknown or expired event is `event`. |
 
 `email` and `domain` give the same keys. Everything else (evidence counts, indicator
 lists, rule versions, role account, ASN and hosting provider, MX providers,
@@ -472,7 +473,7 @@ The response contains:
 
 Evidence accepts `version: 1` with four optional booleans, `version: 2`, `3` or `4`
 with those four plus ten more, `version: 5` with three more after those, or `version: 6`
-with two more after the version 5 fields. Versions 3
+with two more after the version 5 fields, or `version: 7` with one more after those. Versions 3
 and 4 have the same fields as version 2; they only change how the SDK observes
 `nativeFunctionTampering` (3) and `cdpDetected` (4), as the table describes. Version 5
 also widens how the SDK observes `headlessUserAgent`, `zeroDimensions` and
@@ -503,10 +504,13 @@ evidence version. Null or omitted observations remain unknown. `indicators` and
 | `userAgentDataMismatch` | `user_agent_data_mismatch` | 5 | The `Chromium` brand major version differs from the UA's `Chrome/` major version. |
 | `proportionalMonospace` | `proportional_monospace` | 6 | The generic `monospace` font is not fixed-width (Camoufox claiming another OS than its host). |
 | `engineApiMismatch` | `engine_api_mismatch` | 6 | `userAgentData` is not a `NavigatorUAData`, or a Chrome 120+ UA lacks APIs Chrome shipped by version 105 (engines imitating Chrome, such as Obscura). |
+| `protocolScript` | `protocol_script` | 7 | After the SDK's `watch()`, code compiled by a debugging protocol (CDP `Runtime.evaluate`, Puppeteer, ChromeDriver, Firefox's Debugger API) called a trapped DOM method in the page's own world. Also set by typing in the DevTools console. |
 
 Rules for every version report `detected` if any observation is true, `unknown`
 if none is true and any is unavailable, or `not_detected` only if every
-observation the version defines is false.
+observation the version defines is false. The exception is `protocol_script`: it
+is null whenever the page did not call `watch()`, and in WebKit, so it is listed
+in `unavailableProbes` then but does not make the verdict `unknown`.
 Malformed evidence, unknown keys, unsupported versions and non-boolean/non-null
 observations produce `invalid_input` with `reason: invalid_automation` and empty
 indicator/unavailable arrays. Other sections still run. Top-level
@@ -540,6 +544,30 @@ shows that something altered readback in this browser, not who or why; a clean r
 does not rule out tampering that spares these two reads, such as a spoofed value.
 Deploy the API before upgrading the SDK: older servers reject the new `tampering`
 field in `signals`.
+
+#### Behavior patterns
+
+After the SDK's `watch()`, the token carries `behavior`: counts of trusted pointer,
+click, key, touch and wheel input since the page called it (see the
+[SDK guide](../sdk/README.md#watching-the-page)). `/v1/check` returns
+`signals.behavior` with `status: "observed"`, `ruleVersion: 1`,
+`source: "client_reported"` and the `patterns` that matched:
+
+| Pattern | Matches when |
+| --- | --- |
+| `clicks_without_movement` | Every mouse click (at least one) came with at most one pointer move since the previous press. |
+| `centered_clicks` | Every mouse click (at least one) landed within 1 px of its target's centre. |
+| `instant_keys` | At least half of the key presses were released within 5 ms. |
+| `text_without_keys` | Text was inserted without a key press before it (CDP `Input.insertText`, Playwright's `fill`). |
+| `no_input` | No pointer move, click, key press, inserted text, touch or wheel event at all. |
+
+The compact response lists them as `behavior` (an empty list when none matched). These
+are context for your own rules, not a verdict, and they never change `automation`:
+keyboard-only users, autofill, dictation, on-screen keyboards and tokens collected
+at page load match some of them. Evidence must be `version: 1` with every count as a
+non-negative integer; anything else is `invalid_input` with
+`reason: invalid_behavior`. A token without `watch()` has no section. Deploy the API
+before upgrading the SDK: older servers reject the `behavior` field in `signals`.
 
 #### Spoofing indicators
 
