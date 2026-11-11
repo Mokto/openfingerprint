@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.21.0](https://github.com/Mokto/openfingerprint/compare/api-v0.20.0...api-v0.21.0) (2026-11-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* removed `signals`, `headers`, standalone `automation` and `event` from /v1/check (proto fields 1 and 5 reserved), `tokenAgeMs` (field 17 reserved), OPENFINGERPRINT_COLLECT_*, /v1/events, OPENFINGERPRINT_REPLAY_WINDOW_SECONDS, the OPENFINGERPRINT_SITES warning, automation evidence versions 1 to 6, the chart's collect.* values and networkPolicy.collectFrom, and in the SDK result.token, collectedAt, storageId, eventId, and the storageKey, onIdentity and endpoint options of collect().
+
+### Features
+
+* make the identify listener mandatory and remove tokens ([#120](https://github.com/Mokto/openfingerprint/issues/120)) ([8c38cf7](https://github.com/Mokto/openfingerprint/commit/8c38cf7b0bb9dbfe08e45ebd58a64c7c860de921))
+
 ## [0.20.0](https://github.com/Mokto/openfingerprint/compare/api-v0.19.0...api-v0.20.0) (2026-11-11)
 
 
