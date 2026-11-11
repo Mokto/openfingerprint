@@ -10,7 +10,8 @@ service OpenFingerprint {
   rpc Check(CheckRequest) returns (CheckResponse);
 }
 
-// At least one field is required. `domain` and `email` are mutually exclusive.
+// At least one field is required. `domain` and `email` are mutually exclusive,
+// and so are `event` and `signals` (or `headers`).
 message CheckRequest {
   // The `token` string from the SDK result.
   optional string signals = 1;
@@ -20,6 +21,10 @@ message CheckRequest {
   // Headers of the browser request that carried `signals`, copied verbatim by
   // the caller. Used only with `signals`, for the `spoofing` check.
   optional RequestHeaders headers = 5;
+  // The `eventId` from the SDK when it posted to the collection listener
+  // (`collect({ endpoint })`), instead of `signals`. The API then uses the
+  // headers and TLS handshake it observed itself.
+  optional string event = 6;
 }
 
 // Each field is the raw value of one HTTP header; unset means the request did

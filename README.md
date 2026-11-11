@@ -11,18 +11,22 @@ own licenses. Documentation: [openfingerprint.com/docs](https://openfingerprint.
 
 The SDK has zero runtime dependencies, no telemetry, remote code, WASM or
 import-time collection. `collect()` hashes identity locally and automatically
-includes bounded automation observations, with no networking: your backend sends
-the resulting token to the API. The token is unsigned, so the API reports whether the
+includes bounded automation observations, with no networking unless you give it an
+`endpoint`: by default your backend sends the resulting token to the API. The token is unsigned, so the API reports whether the
 same evidence was checked before (`replayed`) and how old it is (`tokenAgeMs`). Given
 the headers of the request that carried it, it also reports whether the token
 contradicts that request (`spoofing`). That limits reuse of a captured token and
 catches careless forgery; it does not stop forged browser observations or malicious
-traffic by itself.
+traffic by itself. For more, the API can run a public collection listener: the browser
+posts its token there, and the API judges the request it received itself, including
+the TLS handshake, so a script posting a browser's token from Python, Go, curl or Node
+shows up ([browser collection](api/README.md#browser-collection-post-v1events)).
 
 The API has no authentication: run it on a private network behind your backend (see
 the [security notes](api/README.md#security)). Its checks verify submitted evidence
 without visitor storage or history; the Redis it requires holds cached registry
-answers and short-lived replay markers, nothing that identifies a person. Open
+answers, short-lived replay markers and, with browser collection, hour-long events,
+nothing that identifies a person. Open
 domain snapshots provide independent disposable, free-subdomain, public-mailbox,
 email-relay and scoped referrer-spam evidence, including recently monitored provider
 domains, provenance, expiry and exact reviewed disputes, plus typo suggestions for

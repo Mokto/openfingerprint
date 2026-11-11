@@ -90,13 +90,38 @@ for (const [name, code] of Object.entries(sources))
 		sha256: createHash('sha256').update(code).digest('hex')
 	};
 let pageHeaders = {};
+const collected = [];
+// The SDK's token obfuscation reversed (sdk/src/token.ts), to inspect what a token carries.
+const unseal = (token) => {
+	const bytes = Buffer.from(token, 'base64url');
+	let state = (bytes.readUInt32BE(0) ^ 0x6f667031) >>> 0;
+	const body = bytes.subarray(4).map((b) => {
+		state = (state + 0x6d2b79f5) >>> 0;
+		let t = Math.imul(state ^ (state >>> 15), state | 1);
+		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+		return b ^ ((t ^ (t >>> 14)) & 255);
+	});
+	return JSON.parse(Buffer.from(body).toString());
+};
 const server = createServer((req, res) => {
+	const url = new URL(req.url || '/', 'http://localhost');
 	res.setHeader('Cache-Control', 'no-store');
 	res.setHeader(
 		'Content-Security-Policy',
-		"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; frame-src 'self'; worker-src blob:"
+		`default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src ${url.searchParams.has('collect') ? "'self'" : "'none'"}; img-src 'self' data:; frame-src 'self'; worker-src blob:`
 	);
-	const name = (req.url || '').slice(1).replace('.js', '');
+	if (req.method === 'POST' && url.pathname === '/v1/events') {
+		let body = '';
+		req.on('data', (chunk) => (body += chunk));
+		req.on('end', () => {
+			collected.push({ body, type: req.headers['content-type'], cookie: req.headers.cookie });
+			if (url.searchParams.has('hang')) return;
+			res.writeHead(url.searchParams.has('fail') ? 503 : 200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ eventId: url.searchParams.has('bad') ? 'x' : 'AbCdEfGhIjKlMnOpQrStU_' }));
+		});
+		return;
+	}
+	const name = url.pathname.slice(1).replace('.js', '');
 	if ((req.url || '').endsWith('.js') && Object.hasOwn(sources, name)) {
 		res.setHeader('Content-Type', 'text/javascript');
 		res.end(sources[name]);
@@ -304,6 +329,43 @@ try {
 			report.checks.push({
 				browser: name,
 				check: 'Spoofing evidence matches the headers the browser sends and is null when unreadable',
+				passed: true
+			});
+			const posting = await context.newPage();
+			try {
+				await posting.goto(`${origin}/custom?collect`);
+				collected.length = 0;
+				const outcomes = await posting.evaluate(async () => {
+					const run = (endpoint) => OpenFingerprint.collect({ timeoutMs: 5000, endpoint });
+					const ok = await run(`${location.origin}/v1/events`);
+					const started = performance.now();
+					const hung = await run(`${location.origin}/v1/events?hang`);
+					return {
+						ok: { eventId: ok.eventId, token: ok.token },
+						hung: { eventId: hung.eventId, waitedMs: performance.now() - started - hung.durationMs },
+						failed: (await run(`${location.origin}/v1/events?fail`)).eventId,
+						malformed: (await run(`${location.origin}/v1/events?bad`)).eventId,
+						none: (await OpenFingerprint.collect({ timeoutMs: 5000 })).eventId,
+						refused: await Promise.all(['ftp://x.test/v1/events', '/v1/events', 42].map((endpoint) =>
+							OpenFingerprint.collect({ endpoint }).then(() => 'accepted', (e) => e.constructor.name)))
+					};
+				});
+				assert.equal(outcomes.ok.eventId, 'AbCdEfGhIjKlMnOpQrStU_');
+				assert.equal(collected[0].body, outcomes.ok.token, 'the token is what gets posted');
+				assert.match(collected[0].type, /^text\/plain/, 'a simple request, without a CORS preflight');
+				assert.equal(collected[0].cookie, undefined);
+				assert.equal('eventId' in unseal(outcomes.ok.token), false, 'the event ID is not sealed into the token');
+				assert.equal(outcomes.hung.eventId, null);
+				assert(outcomes.hung.waitedMs > 2500 && outcomes.hung.waitedMs < 4500, `posting gives up after 3 s: ${outcomes.hung.waitedMs}`);
+				assert.deepEqual([outcomes.failed, outcomes.malformed, outcomes.none], [null, null, null]);
+				assert.deepEqual(outcomes.refused, ['TypeError', 'TypeError', 'TypeError']);
+				assert.equal(collected.length, 4, 'only the three valid endpoints and the hung one were contacted');
+			} finally {
+				await posting.close();
+			}
+			report.checks.push({
+				browser: name,
+				check: 'With an endpoint the token is posted as text/plain and the event ID returned; failures give null',
 				passed: true
 			});
 			const probe = async (init, late, key = 'nativeFunctionTampering') => {

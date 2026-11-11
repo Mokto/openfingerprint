@@ -18,6 +18,7 @@ pub struct AppState {
     pub countries: crate::country::CountryStore,
     pub network: crate::network::Store,
     pub replay: crate::replay::Replay,
+    pub events: crate::collect::Events,
 }
 impl AppState {
     pub fn from_env() -> Result<Self, &'static str> {
@@ -30,7 +31,8 @@ impl AppState {
         let mut state = Self::configure(
             crate::mx::Resolver::from_env()?,
             crate::rdap::Rdap::from_env(redis.clone())?,
-            crate::replay::Replay::from_env(redis)?,
+            crate::replay::Replay::from_env(redis.clone())?,
+            crate::collect::Events::new(redis),
         );
         state.domains = crate::domains::DomainStore::from_env();
         state.countries = crate::country::CountryStore::from_env();
@@ -41,6 +43,7 @@ impl AppState {
         dns: crate::mx::Resolver,
         rdap: crate::rdap::Rdap,
         replay: crate::replay::Replay,
+        events: crate::collect::Events,
     ) -> Self {
         Self {
             network: crate::network::Store::empty(),
@@ -50,6 +53,7 @@ impl AppState {
             dns,
             rdap,
             replay,
+            events,
             countries: crate::country::CountryStore::new(None),
         }
     }
@@ -280,6 +284,8 @@ pub(crate) struct CheckRequest {
     pub(crate) ip: Option<serde_json::Value>,
     /// Headers of the browser request that carried `signals`; used only with them.
     pub(crate) headers: Option<serde_json::Value>,
+    /// An event ID from the collection listener, instead of `signals`.
+    pub(crate) event: Option<serde_json::Value>,
     pub(crate) detail: Option<bool>,
 }
 
@@ -324,6 +330,28 @@ pub(crate) struct SignalCheck {
     /// Negative when that clock is ahead; absent without a collection time.
     #[serde(rename = "tokenAgeMs", skip_serializing_if = "Option::is_none")]
     token_age_ms: Option<i64>,
+    /// What the collection listener observed, for events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event: Option<EventInfo>,
+}
+impl SignalCheck {
+    pub(crate) fn is_valid(&self) -> bool {
+        self.profile.status == "ok"
+    }
+    fn failed(status: &'static str, reason: &'static str) -> Self {
+        let mut check = check_signals(serde_json::Value::Null, None, None);
+        check.profile.status = status;
+        check.reason = Some(reason);
+        check
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+struct EventInfo {
+    origin: String,
+    ja4: Option<String>,
+    tls_client: Option<crate::tls::Client>,
 }
 
 #[derive(Serialize)]
@@ -438,7 +466,16 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
             }
         }
         if signals["status"] == "invalid_input" {
-            invalid.push("signals");
+            invalid.push(
+                if matches!(
+                    signals["reason"].as_str(),
+                    Some("unknown_event" | "invalid_event")
+                ) {
+                    "event"
+                } else {
+                    "signals"
+                },
+            );
         }
         for key in ["automation", "tampering", "spoofing"] {
             if let Some(check) = signals.get(key) {
@@ -512,9 +549,12 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
     *response = Value::Object(out);
 }
 
+/// `tls` is the JA4 the collection listener saw, for events (`Some(None)` when it could not
+/// read one); token checks have no TLS observation.
 pub(crate) fn check_signals(
     value: serde_json::Value,
     headers: Option<&serde_json::Value>,
+    tls: Option<Option<&str>>,
 ) -> SignalCheck {
     if let Ok(signals) = serde_json::from_value::<Signals>(value)
         && let Ok(profile) = signals.verified()
@@ -525,7 +565,7 @@ pub(crate) fn check_signals(
             replayed: None,
             automation: signals.automation.map(crate::automation::check),
             tampering: signals.tampering.map(crate::tampering::check),
-            spoofing: headers.map(|h| crate::spoofing::check(signals.spoofing.as_ref(), h)),
+            spoofing: headers.map(|h| crate::spoofing::check(signals.spoofing.as_ref(), h, tls)),
             profile,
             reason: None,
             evidence: Some(Evidence {
@@ -543,6 +583,7 @@ pub(crate) fn check_signals(
                 unavailable_probes: signals.unavailable.len(),
                 excluded_probes: signals.excluded.len(),
             }),
+            event: None,
         };
     }
     SignalCheck {
@@ -558,6 +599,7 @@ pub(crate) fn check_signals(
         evidence: None,
         replayed: None,
         token_age_ms: None,
+        event: None,
     }
 }
 
@@ -624,10 +666,14 @@ pub(crate) async fn evaluate(
 ) -> Result<serde_json::Value, ApiError> {
     let empty = input.automation.is_none()
         && input.signals.is_none()
+        && input.event.is_none()
         && input.domain.is_none()
         && input.email.is_none()
         && input.ip.is_none();
-    if empty || (input.domain.is_some() && input.email.is_some()) {
+    if empty
+        || (input.domain.is_some() && input.email.is_some())
+        || (input.event.is_some() && (input.signals.is_some() || input.headers.is_some()))
+    {
         return Err(ApiError::invalid());
     }
     use crate::metrics::{Step, start, timed};
@@ -648,7 +694,7 @@ pub(crate) async fn evaluate(
             let opened = open(&token);
             let mut check = {
                 let _timer = start(Step::Signals);
-                check_signals(opened.clone(), input.headers.as_ref())
+                check_signals(opened.clone(), input.headers.as_ref(), None)
             };
             if check.profile.status != "invalid_input" {
                 let key = crate::replay::key(&opened);
@@ -658,7 +704,10 @@ pub(crate) async fn evaluate(
             }
             Some(check)
         }
-        None => None,
+        None => match input.event {
+            Some(id) => Some(check_event(state, &id).await),
+            None => None,
+        },
     };
     let mut response = serde_json::to_value(CheckResponse {
         automation: input.automation.map(|a| {
@@ -684,6 +733,39 @@ pub(crate) async fn evaluate(
         compact(&mut response);
     }
     Ok(response)
+}
+
+async fn check_event(state: &AppState, id: &serde_json::Value) -> SignalCheck {
+    use crate::metrics::{Step, timed};
+    let Some(id) = id.as_str().filter(|id| crate::collect::valid_id(id)) else {
+        return SignalCheck::failed("invalid_input", "invalid_event");
+    };
+    let record = match timed(Step::Event, state.events.get(id)).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return SignalCheck::failed("invalid_input", "unknown_event"),
+        Err(()) => return SignalCheck::failed("unavailable", "event_unavailable"),
+    };
+    let mut check = {
+        let _timer = crate::metrics::start(Step::Signals);
+        check_signals(
+            open(&record.token.as_str().into()),
+            Some(&record.headers),
+            Some(record.ja4.as_deref()),
+        )
+    };
+    if check.is_valid() {
+        check.token_age_ms = Some(age_ms(record.created_at_ms as f64));
+        let key = crate::replay::key(&serde_json::json!({ "event": id }));
+        check.replayed = timed(Step::Replay, state.replay.first_seen(&key))
+            .await
+            .map(|first| !first);
+    }
+    check.event = Some(EventInfo {
+        tls_client: record.ja4.as_deref().and_then(crate::tls::client),
+        ja4: record.ja4,
+        origin: record.origin,
+    });
+    check
 }
 
 pub(crate) fn json_error(error: axum::extract::rejection::JsonRejection) -> ApiError {
@@ -735,6 +817,7 @@ pub(crate) mod tests {
             dns(),
             rdap(),
             crate::replay::Replay::new(crate::cache::tests::client_for(addr), 60),
+            crate::collect::Events::new(crate::cache::tests::client_for(addr)),
         )
     }
     pub(crate) fn state() -> AppState {
@@ -776,6 +859,7 @@ pub(crate) mod tests {
             email: None,
             ip: None,
             headers: None,
+            event: None,
             detail: detail.then_some(true),
         }
     }
@@ -846,20 +930,104 @@ pub(crate) mod tests {
         }
         let mut input = payload();
         input["collectedAt"] = serde_json::json!(now_ms() - 90_000.0);
-        let age = check_signals(input.clone(), None).token_age_ms.unwrap();
+        let age = check_signals(input.clone(), None, None)
+            .token_age_ms
+            .unwrap();
         assert!((90_000..120_000).contains(&age), "{age}");
         input["collectedAt"] = serde_json::json!(now_ms() + 5_000.0);
-        let age = check_signals(input, None).token_age_ms.unwrap();
+        let age = check_signals(input, None, None).token_age_ms.unwrap();
         assert!(
             (-5_100..0).contains(&age),
             "a clock ahead gives a negative age: {age}"
         );
-        assert!(check_signals(payload(), None).token_age_ms.is_none());
+        assert!(check_signals(payload(), None, None).token_age_ms.is_none());
         assert!(
-            check_signals(serde_json::json!({}), None)
+            check_signals(serde_json::json!({}), None, None)
                 .token_age_ms
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn events_are_evaluated_from_what_the_listener_observed() {
+        const CHROME: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36";
+        let (addr, _) = crate::cache::tests::fake_redis(None).await;
+        let state = state_with_redis(&addr);
+        let mut evidence = payload();
+        evidence["spoofing"] = serde_json::json!({"version":1,"userAgent":CHROME,"language":"en-US","clientHints":null});
+        let id = "AbCdEfGhIjKlMnOpQrStU_";
+        let record = |ja4: &str| crate::collect::Record {
+            token: seal(&evidence, [1, 2, 3, 4]),
+            headers: serde_json::json!({"userAgent":CHROME,"acceptLanguage":"en-US,en;q=0.9"}),
+            ja4: Some(ja4.into()),
+            origin: "https://app.example.test".into(),
+            created_at_ms: now_ms() as u64 - 1_500,
+        };
+        let curl = "t13d4907h2_0d8feac7bc37_7395dae3b2f3";
+        state.events.store(id, &record(curl)).await.unwrap();
+        let lookup = |event: serde_json::Value, detail: bool| CheckRequest {
+            signals: None,
+            event: Some(event),
+            ..request("", detail)
+        };
+        let detail = evaluate(&state, lookup(id.into(), true)).await.unwrap();
+        let signals = &detail["signals"];
+        assert_eq!(signals["status"], "ok");
+        assert_eq!(
+            signals["event"],
+            serde_json::json!({"origin":"https://app.example.test","ja4":curl,"tlsClient":"curl"})
+        );
+        assert_eq!(
+            signals["spoofing"]["indicators"],
+            serde_json::json!(["tls_mismatch"]),
+            "a Chrome token sent with curl's handshake, even with Chrome's headers"
+        );
+        let age = signals["tokenAgeMs"].as_i64().unwrap();
+        assert!(
+            (1_500..10_000).contains(&age),
+            "age by the server clock: {age}"
+        );
+        assert_eq!(signals["replayed"], false);
+        let compact = evaluate(&state, lookup(id.into(), false)).await.unwrap();
+        assert_eq!(
+            (&compact["spoofing"], &compact["replayed"]),
+            (&serde_json::json!(true), &serde_json::json!(true))
+        );
+
+        let other = "ZbCdEfGhIjKlMnOpQrStU_";
+        state
+            .events
+            .store(other, &record("t13d1517h2_8daaf6152771_cb7bf5808d99"))
+            .await
+            .unwrap();
+        let chrome = evaluate(&state, lookup(other.into(), true)).await.unwrap();
+        assert_eq!(chrome["signals"]["spoofing"]["status"], "not_detected");
+        assert_eq!(chrome["signals"]["event"]["tlsClient"], "chromium");
+
+        for unknown in [
+            serde_json::json!("AAAAAAAAAAAAAAAAAAAAAA"),
+            serde_json::json!("x"),
+            serde_json::json!(7),
+        ] {
+            assert_eq!(
+                evaluate(&state, lookup(unknown.clone(), false))
+                    .await
+                    .unwrap(),
+                serde_json::json!({"fingerprint":null,"invalid":["event"]}),
+                "{unknown}"
+            );
+        }
+        let down = state_with_redis("127.0.0.1:9");
+        assert_eq!(
+            evaluate(&down, lookup(id.into(), false)).await.unwrap(),
+            serde_json::json!({"fingerprint":null}),
+            "unknown, not invalid, when Redis cannot answer"
+        );
+        let both = CheckRequest {
+            event: Some(id.into()),
+            ..request("token", false)
+        };
+        assert!(evaluate(&state, both).await.is_err());
     }
 
     #[tokio::test]
@@ -1067,7 +1235,7 @@ pub(crate) mod tests {
 
     #[test]
     fn signal_results_report_counts_not_confidence_or_core_fallbacks() {
-        let result = check_signals(payload(), None);
+        let result = check_signals(payload(), None, None);
         assert_eq!(result.profile.status, "ok");
         let evidence = result.evidence.unwrap();
         assert_eq!(evidence.included_components, 1);
@@ -1078,7 +1246,7 @@ pub(crate) mod tests {
         let mut input = payload();
         input["components"]["canvas"] = serde_json::json!(sha256("diagnostic"));
         input["excluded"] = serde_json::json!(["canvas"]);
-        let result = check_signals(input, None);
+        let result = check_signals(input, None, None);
         assert_eq!(result.profile.status, "ok");
         let evidence = result.evidence.unwrap();
         assert_eq!(evidence.included_components, 1);
@@ -1086,7 +1254,7 @@ pub(crate) mod tests {
 
         let mut input = payload();
         input["fingerprint"] = serde_json::Value::Null;
-        let result = check_signals(input, None);
+        let result = check_signals(input, None, None);
         assert_eq!(result.profile.status, "insufficient_signals");
         assert!(result.profile.fingerprint.is_none());
         assert!(result.profile.schema_version.is_none());
@@ -1097,7 +1265,7 @@ pub(crate) mod tests {
             p["fingerprint"] = serde_json::json!("b".repeat(64));
             p
         }] {
-            let result = check_signals(input, None);
+            let result = check_signals(input, None, None);
             assert_eq!(result.profile.status, "invalid_input");
             assert_eq!(result.reason, Some("invalid_signals"));
             assert!(result.evidence.is_none());

@@ -466,6 +466,8 @@ export interface Options {
 	timeoutMs?: number;
 	storageKey?: string;
 	onIdentity?: (snapshot: Result) => unknown;
+	/** The API's collection URL (`https://…/v1/events`): the token is posted there and `eventId` returned. */
+	endpoint?: string;
 }
 export interface Result {
 	automation: AutomationEvidence;
@@ -485,9 +487,34 @@ export interface Result {
 	timings: Partial<Record<Name, { durationMs: number; blockingMs: number }>>;
 	/** Opaque string to send to the backend instead of the fields above. */
 	token: string;
+	/** With `endpoint`: the event to send to the backend instead of `token`; null if posting failed. */
+	eventId: string | null;
 }
 
-const tokenOf = ({ token: _, ...rest }: Result) => seal(rest);
+const tokenOf = ({ token: _, eventId: _event, ...rest }: Result) => seal(rest);
+
+const POST_TIMEOUT_MS = 3000;
+
+async function post(endpoint: string, token: string): Promise<string | null> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), POST_TIMEOUT_MS);
+	try {
+		const response = await fetch(endpoint, {
+			method: 'POST',
+			// text/plain keeps this a simple CORS request, without a preflight round trip.
+			headers: { 'content-type': 'text/plain' },
+			body: token,
+			credentials: 'omit',
+			signal: controller.signal
+		});
+		const { eventId } = response.ok ? await response.json() : {};
+		return typeof eventId === 'string' && /^[A-Za-z0-9_-]{22}$/.test(eventId) ? eventId : null;
+	} catch {
+		return null;
+	} finally {
+		clearTimeout(timer);
+	}
+}
 
 function storageId(key: string | undefined): string | null {
 	if (!key) return null;
@@ -504,7 +531,7 @@ function storageId(key: string | undefined): string | null {
 }
 
 export async function collect(options: Options = {}): Promise<Result> {
-	const { timeoutMs = 2000, storageKey, onIdentity } = options;
+	const { timeoutMs = 2000, storageKey, onIdentity, endpoint } = options;
 	if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000)
 		throw new RangeError('timeoutMs must be between 1 and 5000');
 	if (
@@ -514,6 +541,8 @@ export async function collect(options: Options = {}): Promise<Result> {
 		throw new TypeError('storageKey must contain 1–128 characters');
 	if (onIdentity !== undefined && typeof onIdentity !== 'function')
 		throw new TypeError('onIdentity must be a function');
+	if (endpoint !== undefined && !/^https?:\/\/[^/]/.test(String(endpoint)))
+		throw new TypeError('endpoint must be an http(s) URL');
 	if (typeof window === 'undefined' || !globalThis.crypto?.subtle)
 		throw new Error('A secure browser context is required');
 	const start = performance.now();
@@ -539,7 +568,8 @@ export async function collect(options: Options = {}): Promise<Result> {
 		collectedAt: 0,
 		durationMs: 0,
 		timings: {},
-		token: ''
+		token: '',
+		eventId: null
 	};
 	const excluded = new Set(result.excluded);
 	const asyncAutomation = observeAsyncAutomation(controller.signal);
@@ -640,6 +670,7 @@ export async function collect(options: Options = {}): Promise<Result> {
 		result.collectedAt = Date.now();
 		result.durationMs = Math.round((performance.now() - start) * 10) / 10;
 		result.token = tokenOf(result);
+		if (endpoint) result.eventId = await post(endpoint, result.token);
 		return result;
 	} finally {
 		controller.abort();

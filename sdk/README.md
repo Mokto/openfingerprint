@@ -7,8 +7,9 @@ A standalone, MIT-licensed TypeScript browser-signal collector with **zero runti
 The SDK has no telemetry, remote code, WASM or import-time collection. `collect()`
 hashes identity signals locally and always includes automation observations as
 unhashed booleans/nulls, and the browser's user agent, language and client hints for
-the API's spoofing check, with no network requests. You send the resulting `token`
-with your form and your backend checks it. The optional self-hosted API provides
+the API's spoofing check, with no network requests unless you pass an `endpoint`. You
+send the resulting `token` (or, with an endpoint, its `eventId`) with your form and your
+backend checks it. The optional self-hosted API provides
 stateless checks; it does not provide managed identification or visitor history.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Different
@@ -85,6 +86,7 @@ Options:
 | `timeoutMs`  | `2000`  | Cooperative budget, from 1 to 5000 ms. Native browser calls can overrun it.                  |
 | `storageKey` | omitted | Optional namespaced random UUID in localStorage, separate from all fingerprint hashes.       |
 | `onIdentity` | omitted | Receives a detached result snapshot after identity calculation, before excluded diagnostics. |
+| `endpoint`   | omitted | The API's collection URL (`https://…/v1/events`). The token is posted there and `eventId` returned; see [Posting to the API](#posting-to-the-api). |
 
 No persistence is used by default. Explicitly enabling `storageKey` reads/writes
 only that marker, not arbitrary localStorage data. Blocked storage returns `null`.
@@ -166,8 +168,8 @@ disagree. `collectSpoofing()` returns the same object synchronously.
 
 ### Sending the token
 
-`collect()` makes no network request. Send `result.token` to your backend with the
-form, and have your backend call the API's `POST /v1/check` with it as `signals`.
+Without `endpoint`, `collect()` makes no network request. Send `result.token` to your
+backend with the form, and have your backend call the API's `POST /v1/check` with it as `signals`.
 The token is client-supplied evidence: it is obfuscated, not signed, so a script can
 build one. The API therefore reports two things next to the verdict, and your
 backend should act on them:
@@ -186,6 +188,26 @@ contradicts the request that carried it.
 Your backend can still compare the connection's IP address with what it expects,
 rate-limit by IP and fingerprint, and treat the same fingerprint across many new
 accounts as a signal. See the [API guide](../api/README.md) for the full response.
+
+### Posting to the API
+
+When the API runs its [collection listener](../api/README.md#browser-collection-post-v1events),
+pass its URL as `endpoint`. After sealing the token, `collect()` posts it there and
+resolves with `result.eventId`; send that to your backend instead of the token, and
+have it call `/v1/check` with `event`. The API then judges the request it received
+itself, including the browser's TLS handshake, rather than headers your backend copied.
+
+```js
+const result = await collect({ endpoint: 'https://collect.example.com/v1/events' });
+await fetch('/signup', { method: 'POST', body: JSON.stringify({ ...form, event: result.eventId, token: result.token }) });
+```
+
+The post is a `text/plain` request without cookies, so it needs no CORS preflight, and
+it gives up after 3 seconds; `collect()` resolves only after that, so it can take up to
+3 seconds longer than `timeoutMs`. `eventId` is `null` when posting failed (network, ad
+blocker, rate limit or an unavailable API): keep sending the token too, so your backend
+can fall back to `signals`. `onIdentity` snapshots never post and have `eventId: null`.
+Add the endpoint's origin to your page's `connect-src` Content Security Policy.
 
 ### Identity readiness and cooperative batching
 
@@ -239,6 +261,8 @@ Version **0.6.0**, result **schema 1**:
   package can decode it, and a determined attacker can forge one.
 - `collectedAt`: milliseconds since the Unix epoch, by the browser's clock, when the
   token was sealed. The API turns it into `tokenAgeMs`.
+- `eventId`: with `endpoint`, the event the collection listener stored, or `null`.
+  It is not part of the token.
 
 - `fingerprint`: full SHA-256 over selected component and environment-hint hashes.
 - `coreFingerprint`: separately domain-separated hash of selected rendering probes;

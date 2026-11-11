@@ -5,7 +5,7 @@
 OpenFingerprint is an experimental browser-signal SDK and a self-hosted check API. It collects pseudonymous browser evidence for application security; it does not prove physical-device identity, attest browser execution or establish Fingerprint Pro accuracy.
 
 - `sdk/` is the TypeScript browser package, published as `@openfingerprint/sdk`. It collects rendering probes and environment hints, hashes identity locally with Web Crypto, and reports automation observations separately.
-- `api/` is a Rust service using Axum and Tokio. It verifies SDK profiles, evaluates automation evidence and provides domain intelligence. It has no authentication: deploy it on a private network. Redis holds cached RDAP registry answers and token replay markers, not a visitor-history database.
+- `api/` is a Rust service using Axum and Tokio. It verifies SDK profiles, evaluates automation evidence and provides domain intelligence. It has no authentication: deploy it on a private network. Redis holds cached RDAP registry answers, token replay markers and hour-long collection events, not a visitor-history database. The optional collection listener (`OPENFINGERPRINT_COLLECT_ADDR`) is the only browser-facing, TLS-terminating port.
 - The repository root is a private pnpm workspace for development, CI and release orchestration, not another published package. The SDK can be used without the API.
 
 ## Code map
@@ -18,6 +18,7 @@ OpenFingerprint is an experimental browser-signal SDK and a self-hosted check AP
 | [api/src/main.rs](api/src/main.rs) | HTTP routes, process startup, snapshot reload scheduling, metrics listener and graceful shutdown. |
 | [api/src/check.rs](api/src/check.rs) | Browser-origin refusal, request validation, canonical profile/hash verification, and `/v1/check`. |
 | [api/src/replay.rs](api/src/replay.rs) | Redis token replay markers behind the `replayed` signal. |
+| [api/src/collect.rs](api/src/collect.rs), [api/src/tls.rs](api/src/tls.rs) | The browser collection listener (`POST /v1/events`: TLS, SNI certificates, PROXY protocol, origins, rate limit, events in Redis) and JA4 fingerprints with their reference table. |
 | [api/src/domains.rs](api/src/domains.rs), [api/src/mx.rs](api/src/mx.rs) | Licensed domain-snapshot matching, provenance/expiry and bounded DNS MX lookup/provider inference. |
 | [api/src/rdap.rs](api/src/rdap.rs), [api/src/cache.rs](api/src/cache.rs) | Registered-domain RDAP lookup and Redis cache/connection handling. |
 | [api/data/](api/data/), [api/update-domain-data.mjs](api/update-domain-data.mjs) | Bundled source/review metadata, RDAP bootstrap data and the validated domain-snapshot updater. Dataset licenses are separate from the code's MIT license. |
@@ -29,7 +30,7 @@ OpenFingerprint is an experimental browser-signal SDK and a self-hosted check AP
 ## How the pieces connect
 
 - Local collection: `collect()` runs bounded browser probes and returns identity hashes, availability/timing diagnostics and separate automation evidence. Collection failures and browser-policy exclusions are not evidence of malicious behavior.
-- Token trust: the SDK token is obfuscated, not signed, so a script can build one. `/v1/check` reports `replayed` (the same evidence checked before, from a Redis marker) and `tokenAgeMs` (from the token's `collectedAt`) so the backend can limit reuse; neither stops a forger.
+- Token trust: the SDK token is obfuscated, not signed, so a script can build one. `/v1/check` reports `replayed` (the same evidence checked before, from a Redis marker) and `tokenAgeMs` (from the token's `collectedAt`) so the backend can limit reuse; neither stops a forger. With the collection listener, the browser posts the token itself and `/v1/check` takes the `event` ID: headers and the JA4 TLS fingerprint are then observed by the API, and a library's handshake under a browser user agent is `tls_mismatch`. Update the JA4 reference table in `tls.rs` from real measurements only; an unlisted fingerprint must stay unknown.
 - Direct checks: backends call `/v1/check` for independent requested sections. It does not execute browser probes.
 - Domain intelligence: the API matches versioned local snapshots, uses DNS MX evidence where applicable and obtains registered-domain registration dates through RDAP. The separate updater refreshes public datasets; source provenance, licensing and expiry travel with the data.
 
