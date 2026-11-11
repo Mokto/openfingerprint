@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tor, hosting, vpn, datacenter, proxy, update, validate, loop, prune } from './update-network-data.mjs';
+import { identifyEnvironment } from './test-certs.mjs';
 
 const directory = await mkdtemp(resolve(tmpdir(), 'openfingerprint-network-check-'));
+const identify = identifyEnvironment(directory);
 const path = resolve(directory, 'network.json');
 const binary = fileURLToPath(new URL('./target/debug/openfingerprint-api', import.meta.url));
 const now = Math.floor(Date.now() / 1000);
@@ -26,7 +28,7 @@ const servers = [];
 async function start(extra = {}) {
     const env = { ...process.env };
     for (const key of ['OPENFINGERPRINT_REDIS_URL', 'OPENFINGERPRINT_REDIS_PASSWORD', 'OPENFINGERPRINT_RDAP_BOOTSTRAP', 'OPENFINGERPRINT_COUNTRY_DATA', 'OPENFINGERPRINT_NETWORK_DATA']) delete env[key];
-    const child = spawn(binary, [], { env: { ...env, OPENFINGERPRINT_REDIS_URL: 'redis://127.0.0.1:1/', OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0', OPENFINGERPRINT_NETWORK_DATA: path, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(binary, [], { env: { ...env, ...identify, OPENFINGERPRINT_REDIS_URL: 'redis://127.0.0.1:1/', OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0', OPENFINGERPRINT_NETWORK_DATA: path, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
     const server = { child, output: '' };
     servers.push(server);
     child.stderr.on('data', data => { server.output += data; });

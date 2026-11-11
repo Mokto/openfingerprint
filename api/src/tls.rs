@@ -1,5 +1,5 @@
 //! JA4 TLS client fingerprints (https://github.com/FoxIO-LLC/ja4, BSD 3-Clause) from the
-//! ClientHello a browser sends to the collection listener, and which TLS stack they belong to.
+//! ClientHello a browser sends to the identify listener, and which TLS stack they belong to.
 
 use serde::Serialize;
 
@@ -16,7 +16,7 @@ pub enum Client {
     Node,
 }
 
-/// JA4 `b_c` parts (cipher and extension hashes) measured against the collection listener
+/// JA4 `b_c` parts (cipher and extension hashes) measured against the identify listener
 /// in November 2026. Matching ignores the `a` part, which changes with SNI and ALPN. A
 /// fingerprint not listed here is unknown, never a mismatch: other browser versions,
 /// enterprise TLS inspection and unmeasured libraries all land there.

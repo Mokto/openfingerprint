@@ -8,6 +8,7 @@ import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { refresh } from './update-country-data.mjs';
+import { identifyEnvironment } from './test-certs.mjs';
 
 function encode(value) {
     if (Buffer.isBuffer(value)) return value;
@@ -74,7 +75,7 @@ const fetcher = (payload = gzipSync(bytes), html = page, headers = {}) => async 
 let child;
 async function start() {
     child = spawn(fileURLToPath(new URL('./target/debug/openfingerprint-api', import.meta.url)), [], {
-        env: { ...process.env, OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0',
+        env: { ...process.env, ...identifyEnvironment(directory), OPENFINGERPRINT_LISTEN_ADDR: '127.0.0.1:0', OPENFINGERPRINT_METRICS_ADDR: '127.0.0.1:0',
             OPENFINGERPRINT_COUNTRY_DATA: path, OPENFINGERPRINT_COUNTRY_DATA_RELOAD_SECONDS: '1',
             OPENFINGERPRINT_NETWORK_DATA: networkPath, OPENFINGERPRINT_DOMAIN_DATA: join(directory, 'missing.json'),
             OPENFINGERPRINT_REDIS_URL: 'redis://127.0.0.1:1/0', OPENFINGERPRINT_REDIS_PASSWORD: undefined,
@@ -186,10 +187,10 @@ try {
     for (const ip of ['8.8.8.8:80', '[::1]', 'fe80::1%eth0', '8.8.8.0/24', true, []]) {
         assert.equal((await check(server, ip)).ip.reason, 'invalid_ip');
     }
-    const mixed = await check(server, '8.8.8.8', { domain: 'not a domain', signals: {} });
+    const mixed = await check(server, '8.8.8.8', { domain: 'not a domain', identificationId: 'unknown' });
     assert.deepEqual(mixed.ip, expected);
     assert.equal(mixed.domain.status, 'invalid_input');
-    assert.equal(mixed.signals.status, 'invalid_input');
+    assert.equal(mixed.identification.status, 'invalid_input');
     await replace(Buffer.from('broken'));
     await eventually(async () => (await (await fetch(`${server.metrics}/metrics`)).text()).includes('openfingerprint_country_data_reload_failures_total 1\n'));
     assert.deepEqual((await check(server, '8.8.8.8')).ip, expected);

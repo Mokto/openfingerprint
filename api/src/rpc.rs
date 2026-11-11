@@ -49,26 +49,10 @@ impl OpenFingerprint for Check {
     ) -> ServiceResult<CheckResponse> {
         let text = |s: Option<&str>| s.map(|s| Value::String(s.to_owned()));
         let input = Input {
-            automation: None,
-            signals: text(request.signals),
+            identification_id: text(request.identification_id),
             domain: text(request.domain),
             email: text(request.email),
             ip: text(request.ip),
-            headers: request.headers.as_option().map(|h| {
-                Value::Object(
-                    [
-                        ("userAgent", h.user_agent),
-                        ("acceptLanguage", h.accept_language),
-                        ("secChUa", h.sec_ch_ua),
-                        ("secChUaMobile", h.sec_ch_ua_mobile),
-                        ("secChUaPlatform", h.sec_ch_ua_platform),
-                    ]
-                    .into_iter()
-                    .filter_map(|(key, value)| Some((key.to_owned(), text(value)?)))
-                    .collect(),
-                )
-            }),
-            event: text(request.event),
             detail: None,
         };
         let verdicts = crate::check::evaluate(&self.0, input).await?;
@@ -131,7 +115,7 @@ mod tests {
     fn every_compact_key_has_a_field_in_the_response_message() {
         let response: CheckResponse = serde_json::from_value(serde_json::json!({
             "fingerprint":"abc","automation":true,"tampering":false,"spoofing":true,"disposable":true,
-            "free":false,"spam":true,"relay":false,"cheapTld":true,"replayed":true,"tokenAgeMs":-1500,"mx":true,"country":"dk","vpn":true,
+            "free":false,"spam":true,"relay":false,"cheapTld":true,"replayed":true,"ageMs":1500,"mx":true,"country":"dk","vpn":true,
             "tor":false,"datacenter":true,"proxy":false,"invalid":["ip"]
         }))
         .unwrap();
@@ -171,7 +155,7 @@ mod tests {
                 Some(false)
             ]
         );
-        assert_eq!(response.token_age_ms, Some(-1500));
+        assert_eq!(response.age_ms, Some(1500));
         assert_eq!(response.invalid, ["ip"]);
         assert_eq!(
             serde_json::from_value::<CheckResponse>(serde_json::json!({})).unwrap(),

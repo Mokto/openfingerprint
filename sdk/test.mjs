@@ -91,18 +91,6 @@ for (const [name, code] of Object.entries(sources))
 	};
 let pageHeaders = {};
 const collected = [];
-// The SDK's token obfuscation reversed (sdk/src/token.ts), to inspect what a token carries.
-const unseal = (token) => {
-	const bytes = Buffer.from(token, 'base64url');
-	let state = (bytes.readUInt32BE(0) ^ 0x6f667031) >>> 0;
-	const body = bytes.subarray(4).map((b) => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = Math.imul(state ^ (state >>> 15), state | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return b ^ ((t ^ (t >>> 14)) & 255);
-	});
-	return JSON.parse(Buffer.from(body).toString());
-};
 const server = createServer((req, res) => {
 	const url = new URL(req.url || '/', 'http://localhost');
 	res.setHeader('Cache-Control', 'no-store');
@@ -110,14 +98,14 @@ const server = createServer((req, res) => {
 		'Content-Security-Policy',
 		`default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src ${url.searchParams.has('collect') ? "'self'" : "'none'"}; img-src 'self' data:; frame-src 'self'; worker-src blob:`
 	);
-	if (req.method === 'POST' && url.pathname === '/v1/events') {
+	if (req.method === 'POST' && url.pathname === '/v1/identify') {
 		let body = '';
 		req.on('data', (chunk) => (body += chunk));
 		req.on('end', () => {
 			collected.push({ body, type: req.headers['content-type'], cookie: req.headers.cookie });
 			if (url.searchParams.has('hang')) return;
 			res.writeHead(url.searchParams.has('fail') ? 503 : 200, { 'Content-Type': 'application/json' });
-			res.end(JSON.stringify({ eventId: url.searchParams.has('bad') ? 'x' : 'AbCdEfGhIjKlMnOpQrStU_' }));
+			res.end(JSON.stringify({ identificationId: url.searchParams.has('bad') ? 'x' : 'AbCdEfGhIjKlMnOpQrStU_' }));
 		});
 		return;
 	}
@@ -160,9 +148,7 @@ const checkpoint = () => writeFile(output, `${JSON.stringify(report, null, 2)}\n
 
 function valid(r) {
 	assert.equal(r.version, 1);
-	assert(Number.isInteger(r.collectedAt) && Math.abs(Date.now() - r.collectedAt) < 60000, 'collection time');
-	assert(typeof r.token === 'string' && r.token.length > 100 && /^[\w-]+$/.test(r.token));
-	assert(!r.token.includes('fingerprint') && (!r.fingerprint || !r.token.includes(r.fingerprint)));
+	for (const removed of ['token', 'storageId', 'collectedAt', 'eventId']) assert(!(removed in r), removed);
 	assert(Array.isArray(r.excluded));
 	assert(r.fingerprint === null || /^[0-9a-f]{64}$/.test(r.fingerprint));
 	assert(r.coreFingerprint === null || /^[0-9a-f]{64}$/.test(r.coreFingerprint));
@@ -353,36 +339,36 @@ try {
 				await posting.goto(`${origin}/custom?collect`);
 				collected.length = 0;
 				const outcomes = await posting.evaluate(async () => {
-					const run = (endpoint) => OpenFingerprint.collect({ timeoutMs: 5000, endpoint });
-					const ok = await run(`${location.origin}/v1/events`);
+					const run = (endpoint) => OpenFingerprint.identify({ timeoutMs: 5000, endpoint });
+					const ok = await run(`${location.origin}/v1/identify`);
 					const started = performance.now();
-					const hung = await run(`${location.origin}/v1/events?hang`);
+					const hung = await run(`${location.origin}/v1/identify?hang`);
 					return {
-						ok: { eventId: ok.eventId, token: ok.token },
-						hung: { eventId: hung.eventId, waitedMs: performance.now() - started - hung.durationMs },
-						failed: (await run(`${location.origin}/v1/events?fail`)).eventId,
-						malformed: (await run(`${location.origin}/v1/events?bad`)).eventId,
-						none: (await OpenFingerprint.collect({ timeoutMs: 5000 })).eventId,
-						refused: await Promise.all(['ftp://x.test/v1/events', '/v1/events', 42].map((endpoint) =>
-							OpenFingerprint.collect({ endpoint }).then(() => 'accepted', (e) => e.constructor.name)))
+						ok,
+						hung: { ...hung, waitedMs: performance.now() - started },
+						failed: await run(`${location.origin}/v1/identify?fail`),
+						malformed: await run(`${location.origin}/v1/identify?bad`),
+						refused: await Promise.all([undefined, 'ftp://x.test/v1/identify', '/v1/identify', 42].map((endpoint) =>
+							OpenFingerprint.identify({ endpoint }).then(() => 'accepted', (e) => e.constructor.name)))
 					};
 				});
-				assert.equal(outcomes.ok.eventId, 'AbCdEfGhIjKlMnOpQrStU_');
-				assert.equal(collected[0].body, outcomes.ok.token, 'the token is what gets posted');
+				assert.deepEqual(outcomes.ok, { identificationId: 'AbCdEfGhIjKlMnOpQrStU_' });
+				const posted = JSON.parse(collected[0].body);
+				valid(posted);
+				assert.equal(posted.fingerprint === null || /^[0-9a-f]{64}$/.test(posted.fingerprint), true, 'the evidence is posted as JSON');
 				assert.match(collected[0].type, /^text\/plain/, 'a simple request, without a CORS preflight');
 				assert.equal(collected[0].cookie, undefined);
-				assert.equal('eventId' in unseal(outcomes.ok.token), false, 'the event ID is not sealed into the token');
-				assert.equal(outcomes.hung.eventId, null);
-				assert(outcomes.hung.waitedMs > 2500 && outcomes.hung.waitedMs < 4500, `posting gives up after 3 s: ${outcomes.hung.waitedMs}`);
-				assert.deepEqual([outcomes.failed, outcomes.malformed, outcomes.none], [null, null, null]);
-				assert.deepEqual(outcomes.refused, ['TypeError', 'TypeError', 'TypeError']);
-				assert.equal(collected.length, 4, 'only the three valid endpoints and the hung one were contacted');
+				assert.equal(outcomes.hung.identificationId, null);
+				assert(outcomes.hung.waitedMs > 2500 && outcomes.hung.waitedMs < 10000, `posting gives up after 3 s: ${outcomes.hung.waitedMs}`);
+				assert.deepEqual([outcomes.failed, outcomes.malformed], [{ identificationId: null }, { identificationId: null }]);
+				assert.deepEqual(outcomes.refused, ['TypeError', 'TypeError', 'TypeError', 'TypeError']);
+				assert.equal(collected.length, 4, 'only the valid endpoints were contacted');
 			} finally {
 				await posting.close();
 			}
 			report.checks.push({
 				browser: name,
-				check: 'With an endpoint the token is posted as text/plain and the event ID returned; failures give null',
+				check: 'identify() posts the evidence as text/plain JSON and returns the identification ID; failures give null',
 				passed: true
 			});
 			const watching = await context.newPage();
@@ -553,9 +539,7 @@ try {
 				check: 'Tampering probes read exact on clean canvas/audio, flag injected noise and report null when blocked',
 				passed: true
 			});
-			const a = await page.evaluate(() =>
-				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 5000 })
-			);
+			const a = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
 			valid(a);
 			const { notificationPermissionQuirk, workerUserAgentMismatch, softwareRenderer, ...rest } = a.automation;
 			for (const [key, value] of Object.entries(rest)) assert.equal(value, automation[key], key);
@@ -566,12 +550,8 @@ try {
 				a.fingerprint,
 				`${name}: no initial ID ${JSON.stringify({ durationMs: a.durationMs, unavailable: a.unavailable, components: Object.keys(a.components), timings: a.timings })}`
 			);
-			assert(a.storageId);
-			const b = await page.evaluate(() =>
-				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 1000 })
-			);
+			const b = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
 			valid(b);
-			assert.equal(a.storageId, b.storageId);
 			await page.evaluate(() => {
 				Object.defineProperty(navigator, 'languages', {
 					value: [navigator.language],
@@ -600,22 +580,13 @@ try {
 			assert.equal(a.coreFingerprint, changedHints.coreFingerprint);
 			assert.notEqual(a.fingerprint, changedHints.fingerprint);
 			assert.equal(await page.locator('iframe').count(), 0);
-			const differentTenant = await page.evaluate(() =>
-				OpenFingerprint.collect({ storageKey: 'other', timeoutMs: 1000 })
-			);
-			assert.notEqual(a.storageId, differentTenant.storageId);
 			await page.reload();
-			const afterReload = await page.evaluate(() =>
-				OpenFingerprint.collect({ storageKey: 'test', timeoutMs: 1000 })
-			);
-			assert.equal(a.storageId, afterReload.storageId);
 			await page.evaluate(() => {
 				localStorage.clear();
 				sessionStorage.clear();
 			});
-			const noStorage = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
-			assert.equal(noStorage.storageId, null);
-			assert.equal(await page.evaluate(() => localStorage.length), 0);
+			await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
+			assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0, 'nothing is stored');
 			const order = ([x], [y]) => (x < y ? -1 : x > y ? 1 : 0);
 			const components = Object.entries(a.components)
 				.filter(([name]) => !a.excluded.includes(name))
@@ -848,10 +819,7 @@ try {
 				for (const options of [
 					{ timeoutMs: NaN },
 					{ timeoutMs: 0 },
-					{ timeoutMs: 5001 },
-					{ onIdentity: 42 },
-					{ storageKey: '' },
-					{ storageKey: 42 }
+					{ timeoutMs: 5001 }
 				]) {
 					try {
 						await OpenFingerprint.collect(options);
@@ -872,20 +840,6 @@ try {
 			for (const k of ['audio', 'canvas', 'fonts', 'fontFallbacks', 'fontPreferences', 'gpu'])
 				assert.equal(r.unavailable[k], 'unsupported');
 			assert.equal(r.fingerprint, null);
-			await p.close();
-
-			p = await fresh(() => {
-				Storage.prototype.getItem = () => {
-					throw new Error('Denied');
-				};
-				Storage.prototype.setItem = () => {
-					throw new Error('Denied');
-				};
-			});
-			r = await p.evaluate(() => OpenFingerprint.collect({ storageKey: 'test' }));
-			valid(r);
-			assert.equal(r.storageId, null);
-			assert(r.fingerprint, `${name}: blocked storage must not erase a completed identity`);
 			await p.close();
 
 			p = await fresh(() => {
@@ -1273,80 +1227,16 @@ try {
 			await p.evaluate(() => {
 				window.audioHang = true;
 			});
-			const early = await p.evaluate(async () => {
-				let ready;
-				const identity = new Promise((resolve) => {
-					ready = resolve;
-				});
-				window.identityCalls = 0;
-				window.collectionFinished = false;
-				window.finalCollection = OpenFingerprint.collect({
-					timeoutMs: 1000,
-					onIdentity(snapshot) {
-						window.identityCalls++;
-						window.earlySnapshot = snapshot;
-						ready(snapshot);
-					}
-				}).then((result) => {
-					window.collectionFinished = true;
-					return result;
-				});
-				return { snapshot: await identity, finished: window.collectionFinished };
-			});
-			assert.equal(early.finished, false);
-			assert.equal(early.snapshot.fingerprint, colorChange.fingerprint);
-			assert.equal(early.snapshot.coreFingerprint, colorChange.coreFingerprint);
-			assert.equal(early.snapshot.components.audio, undefined);
-			assert.equal(early.snapshot.components.canvas, undefined);
-			await p.evaluate(() => {
-				const snapshot = window.earlySnapshot;
-				snapshot.fingerprint = 'corrupt';
-				snapshot.components.gpu = 'corrupt';
-				snapshot.hints.display = 'corrupt';
-				snapshot.excluded.push('fonts');
-				snapshot.unavailable.audio = 'error';
-				snapshot.timings.gpu.durationMs = -1;
-				snapshot.automation.version = -1;
-			});
-			const diagnosticTimeout = await p.evaluate(() => window.finalCollection);
-			assert.equal(await p.evaluate(() => window.identityCalls), 1);
-			assert.equal(diagnosticTimeout.components.gpu, colorChange.components.gpu);
-			assert.equal(diagnosticTimeout.hints.display, colorChange.hints.display);
-			assert(!diagnosticTimeout.excluded.includes('fonts'));
-			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
-			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
+			const diagnosticTimeout = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1000 }));
 			assert.equal(diagnosticTimeout.automation.version, 7);
 			assert(diagnosticTimeout.components.canvas);
-			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
-			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);
 			assert.equal(diagnosticTimeout.unavailable.audio, 'timeout');
 			assert.equal(
 				diagnosticTimeout.fingerprint,
 				colorChange.fingerprint,
 				'A diagnostic timeout must not erase a completed identity'
 			);
-			await p.evaluate(() => {
-				window.audioHang = false;
-			});
-			for (const mode of ['throw', 'reject', 'pending']) {
-				const contained = await p.evaluate(async (mode) => {
-					let calls = 0;
-					const result = await OpenFingerprint.collect({
-						timeoutMs: 1000,
-						onIdentity() {
-							calls++;
-							if (mode === 'throw') throw new Error('Caller failed');
-							if (mode === 'reject') return Promise.reject(new Error('Caller rejected'));
-							return new Promise(() => {});
-						}
-					});
-					return { result, calls };
-				}, mode);
-				assert.equal(contained.calls, 1);
-				assert.equal(contained.result.fingerprint, colorChange.fingerprint);
-				assert(contained.result.components.canvas);
-				assert.equal(await p.locator('iframe').count(), 0);
-			}
+			assert.equal(await p.locator('iframe').count(), 0);
 			await p.evaluate(() => {
 				window.audioHang = false;
 				window.privacyMode = false;
@@ -1356,19 +1246,7 @@ try {
 					get: () => null
 				});
 			});
-			const diagnosticsOnly = await p.evaluate(async () => {
-				window.emptyIdentityCalls = 0;
-				window.emptyIdentity = undefined;
-				return await OpenFingerprint.collect({
-					timeoutMs: 2000,
-					onIdentity(snapshot) {
-						window.emptyIdentityCalls++;
-						window.emptyIdentity = snapshot;
-					}
-				});
-			});
-			assert.equal(await p.evaluate(() => window.emptyIdentityCalls), 1);
-			assert.equal(await p.evaluate(() => window.emptyIdentity.fingerprint), null);
+			const diagnosticsOnly = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 2000 }));
 			assert(diagnosticsOnly.components.audio);
 			assert.equal(
 				diagnosticsOnly.fingerprint,

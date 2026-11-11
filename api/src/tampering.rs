@@ -16,6 +16,11 @@ pub struct Check {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
 }
+impl Check {
+    pub(crate) fn rejected(&self) -> bool {
+        self.status == "invalid_input"
+    }
+}
 
 pub fn check(value: Value) -> Check {
     let mut result = Check {

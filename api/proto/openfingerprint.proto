@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package openfingerprint.v1;
 
-// The same compact verdicts as POST /v1/check, on the same listener, over
+// The same compact verdicts as the internal POST /v1/check, on the same listener, over
 // Connect (JSON or protobuf, any HTTP version), gRPC and gRPC-Web. gRPC needs
 // HTTP/2 without TLS here. There is no authentication: keep the API on a
 // private network. Server reflection is available.
@@ -10,42 +10,26 @@ service OpenFingerprint {
   rpc Check(CheckRequest) returns (CheckResponse);
 }
 
-// At least one field is required. `domain` and `email` are mutually exclusive,
-// and so are `event` and `signals` (or `headers`).
+// At least one field is required. `domain` and `email` are mutually exclusive.
 message CheckRequest {
-  // The `token` string from the SDK result.
-  optional string signals = 1;
+  reserved 1, 5;
+  reserved "signals", "headers";
+  // The `identificationId` the browser got from the public `POST /v1/identify`.
+  optional string identification_id = 6;
   optional string domain = 2;
   optional string email = 3;
   optional string ip = 4;
-  // Headers of the browser request that carried `signals`, copied verbatim by
-  // the caller. Used only with `signals`, for the `spoofing` check.
-  optional RequestHeaders headers = 5;
-  // The `eventId` from the SDK when it posted to the collection listener
-  // (`collect({ endpoint })`), instead of `signals`. The API then uses the
-  // headers and TLS handshake it observed itself.
-  optional string event = 6;
-}
-
-// Each field is the raw value of one HTTP header; unset means the request did
-// not carry it.
-message RequestHeaders {
-  optional string user_agent = 1;
-  optional string accept_language = 2;
-  optional string sec_ch_ua = 3;
-  optional string sec_ch_ua_mobile = 4;
-  optional string sec_ch_ua_platform = 5;
 }
 
 // An unset field means unknown, not false.
 message CheckResponse {
-  // Unset when the token is missing, invalid or has no full ID.
+  // Unset when the identification is unknown, expired or invalid, or has no full ID.
   optional string fingerprint = 1;
   optional bool automation = 2;
   optional bool tampering = 3;
   // The browser's own report (user agent, client hints, language) contradicts
-  // the headers of the request that carried it. Unset without `headers` or when
-  // nothing could be compared.
+  // the request the identify listener received: its headers or its TLS
+  // handshake. Unset when nothing could be compared.
   optional bool spoofing = 18;
   optional bool disposable = 4;
   optional bool free = 5;
@@ -55,20 +39,20 @@ message CheckResponse {
   // The domain is on a generic TLD that registrars sell at teaser prices (a first-year price of 3 USD
   // or less). Context for review, not a verdict on the site. Unset for a TLD without a known price.
   optional bool cheap_tld = 15;
-  // The same SDK token was checked before, within the replay window. Unset without a token or
-  // when Redis cannot say. Catches a captured token submitted again, not a forged one.
+  reserved 17;
+  reserved "token_age_ms";
+  // This identification was looked up before. Unset when Redis cannot say.
   optional bool replayed = 16;
-  // Milliseconds from the browser's collection time to now, by the browser's clock: negative
-  // when that clock is ahead. Unset when the token has no collection time.
-  optional int64 token_age_ms = 17;
+  // Milliseconds since the identification was stored, by the API's clock.
+  optional int64 age_ms = 20;
   // Lowercase ISO 3166-1 alpha-2 code.
   optional string country = 9;
   optional bool vpn = 10;
   optional bool tor = 11;
   optional bool datacenter = 12;
   optional bool proxy = 13;
-  // Inputs that were rejected: signals, automation, tampering, spoofing, behavior,
-  // headers, domain, email, ip.
+  // Inputs that were rejected: identificationId (malformed, unknown or expired),
+  // domain, email, ip.
   repeated string invalid = 14;
   // Input patterns since the page called the SDK's watch(): clicks_without_movement,
   // centered_clicks, instant_keys, text_without_keys, no_input. Real users can produce each,

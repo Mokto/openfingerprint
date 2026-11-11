@@ -16,8 +16,9 @@ if [ ! -d charts ]; then
   unset HELM_REPOSITORY_CONFIG HELM_REPOSITORY_CACHE
 fi
 digest=sha256:$(printf 'a%.0s' {1..64})
+identify=(--set-json 'identify.origins=["https://app.example.com"]' --set-json 'identify.certificates=[{"host":"identify.example.com","secretName":"identify-tls"}]' --set-json 'networkPolicy.identifyFrom=[{"podSelector":{}}]')
 render() {
-  helm template openfingerprint . --namespace openfingerprint \
+  helm template openfingerprint . --namespace openfingerprint "${identify[@]}" \
     --set "image.digest=$digest" --set "domainData.refresh.image.digest=$digest" \
     --set-json 'networkPolicy.apiFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"web"}},"podSelector":{"matchLabels":{"app.kubernetes.io/name":"users"}}}]' \
     --set-json 'networkPolicy.metricsFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"kube-system"}}}]' \
@@ -45,9 +46,9 @@ check.call(api["securityContext"] == {"readOnlyRootFilesystem" => true, "allowPr
 check.call(api["image"].end_with?("@sha256:" + "a" * 64) && api["image"].start_with?("ghcr.io/mokto/openfingerprint-api:"), "Pinned API image")
 check.call(api["envFrom"].nil?, "The API needs no Secret with the bundled Redis")
 env = api["env"].to_h { |e| [e["name"], e["value"]] }
-check.call(env == {"OPENFINGERPRINT_LISTEN_ADDR" => "0.0.0.0:8180", "OPENFINGERPRINT_METRICS_ADDR" => "0.0.0.0:9180", "OPENFINGERPRINT_DOMAIN_DATA" => "/domain-data/domains.json", "OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS" => "60", "OPENFINGERPRINT_REDIS_URL" => "redis://openfingerprint-redis-ha-haproxy:6379/0", "OPENFINGERPRINT_COUNTRY_DATA" => "/country-data/country.mmdb"}, "API environment")
-check.call(pod["volumes"] == [{"name" => "country-data", "emptyDir" => {"sizeLimit" => "96Mi"}}, {"name" => "domain-data", "configMap" => {"name" => "openfingerprint-domain-data", "optional" => true}}], "Country emptyDir and optional domain ConfigMap")
-check.call(api["volumeMounts"] == [{"name" => "domain-data", "mountPath" => "/domain-data", "readOnly" => true}, {"name" => "country-data", "mountPath" => "/country-data", "readOnly" => true}], "Read-only data mounts")
+check.call(env == {"OPENFINGERPRINT_LISTEN_ADDR" => "0.0.0.0:8180", "OPENFINGERPRINT_IDENTIFY_ADDR" => "0.0.0.0:8443", "OPENFINGERPRINT_IDENTIFY_CERTS" => "/identify-certs", "OPENFINGERPRINT_IDENTIFY_ORIGINS" => "https://app.example.com", "OPENFINGERPRINT_IDENTIFY_PROXY_PROTOCOL" => "false", "OPENFINGERPRINT_IDENTIFY_LIMIT_PER_MINUTE" => "60", "OPENFINGERPRINT_METRICS_ADDR" => "0.0.0.0:9180", "OPENFINGERPRINT_DOMAIN_DATA" => "/domain-data/domains.json", "OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS" => "60", "OPENFINGERPRINT_REDIS_URL" => "redis://openfingerprint-redis-ha-haproxy:6379/0", "OPENFINGERPRINT_COUNTRY_DATA" => "/country-data/country.mmdb"}, "API environment")
+check.call(pod["volumes"] == [{"name" => "country-data", "emptyDir" => {"sizeLimit" => "96Mi"}}, {"name" => "domain-data", "configMap" => {"name" => "openfingerprint-domain-data", "optional" => true}}, {"name" => "identify-certs", "projected" => {"sources" => [{"secret" => {"name" => "identify-tls", "items" => [{"key" => "tls.crt", "path" => "identify.example.com/tls.crt"}, {"key" => "tls.key", "path" => "identify.example.com/tls.key"}]}}]}}], "Country emptyDir and optional domain ConfigMap")
+check.call(api["volumeMounts"] == [{"name" => "domain-data", "mountPath" => "/domain-data", "readOnly" => true}, {"name" => "country-data", "mountPath" => "/country-data", "readOnly" => true}, {"name" => "identify-certs", "mountPath" => "/identify-certs", "readOnly" => true}], "Read-only data mounts")
 country = pod["containers"].find { |c| c["name"] == "country-updater" }
 check.call(country["command"] == ["/nodejs/bin/node", "/app/update-country-data.mjs"] && country["args"] == ["--output", "/country-data/country.mmdb", "--loop"], "Country refresh loop")
 check.call(country["image"].end_with?("@sha256:" + "a" * 64), "Pinned country updater")
@@ -55,7 +56,7 @@ check.call(country["envFrom"].nil? && country["env"].nil?, "Country updater gets
 check.call(country["volumeMounts"] == [{"name" => "country-data", "mountPath" => "/country-data"}] && pod["securityContext"]["fsGroup"] == 65532, "Country updater can write its own volume only")
 check.call(country["securityContext"] == api["securityContext"], "Country updater hardening")
 %w[startupProbe readinessProbe livenessProbe].each { |p| check.call(api[p]["httpGet"] == {"path" => "/health", "port" => "http"}, "#{p} uses /health") }
-service = get.call("Service")
+service = get.call("Service", "openfingerprint")
 check.call(service["metadata"]["name"] == "openfingerprint" && service["spec"]["type"] == "ClusterIP", "Stable internal Service name")
 check.call(service["spec"]["selector"] == api_labels, "Service selects only API pods")
 check.call(service["spec"]["ports"] == [{"name" => "http", "port" => 80, "targetPort" => "http"}, {"name" => "metrics", "port" => 9180, "targetPort" => "metrics"}], "Service ports")
@@ -73,7 +74,7 @@ check.call(https["to"] == [{"ipBlock" => {"cidr" => "0.0.0.0/0", "except" => %w[
 check.call(plain.(policy["egress"][2]) == {"to" => public, "ports" => [{"protocol" => "TCP", "port" => 443}, {"protocol" => "TCP", "port" => 43}]}, "Registries: RDAP over HTTPS and WHOIS on 43, to the configured peers only")
 check.call(policy["egress"][3] == {"to" => [{"podSelector" => {"matchLabels" => {"app" => "redis-ha-haproxy", "release" => "openfingerprint"}}}], "ports" => [{"protocol" => "TCP", "port" => 6379}]}, "Redis egress stays scoped to HAProxy")
 check.call(pod["dnsConfig"] == {"options" => [{"name" => "ndots", "value" => "1"}]}, "Registry hosts skip cluster search domains")
-check.call(policy["ingress"].map { |r| r["ports"] } == [[{"protocol" => "TCP", "port" => 8180}], [{"protocol" => "TCP", "port" => 9180}]], "API and metrics ports only")
+check.call(policy["ingress"].map { |r| r["ports"] } == [[{"protocol" => "TCP", "port" => 8180}], [{"protocol" => "TCP", "port" => 8443}], [{"protocol" => "TCP", "port" => 9180}]], "API, identify and metrics ports only")
 check.call(policy["ingress"][0]["from"][0]["podSelector"] == {"matchLabels" => {"app.kubernetes.io/name" => "users"}}, "Configured API callers")
 cron = get.call("CronJob")
 hook = get.call("Job", "openfingerprint-domain-data-initial")
@@ -109,7 +110,7 @@ puts "Chart selectors, isolation, RBAC, refresh and monitoring checks passed."
 for empty in dnsTo rdapTo; do
   if render --set-json "networkPolicy.$empty=[]" >/dev/null 2>&1; then echo "An empty $empty must fail" >&2; exit 1; fi
 done
-minimal=$(helm template openfingerprint . --namespace openfingerprint)
+minimal=$(helm template openfingerprint . --namespace openfingerprint "${identify[@]}")
 grep -q 'kind: NetworkPolicy' <<< "$minimal" && { echo "NetworkPolicies must be opt-in" >&2; exit 1; }
 grep -q 'value: "redis://openfingerprint-redis-ha-haproxy:6379/0"' <<< "$minimal" || { echo "The bundled Redis must be on by default" >&2; exit 1; }
 sentry=$(render --set sentry.dsn=https://k@sentry.example/1 --set sentry.environment=prod)
@@ -126,7 +127,7 @@ haproxy = docs.find { |d| d["kind"] == "Deployment" && d["metadata"]["name"] == 
 egress = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]["egress"].last
 abort("API egress to Redis must select the HAProxy pods on 6379") unless egress["ports"] == [{"protocol" => "TCP", "port" => 6379}] && egress["to"].first["podSelector"]["matchLabels"].all? { |k, v| haproxy[k] == v }
 config = docs.find { |d| d["kind"] == "ConfigMap" && d["metadata"]["name"] == "openfingerprint-redis-ha-configmap" }["data"]["redis.conf"]
-abort("Bundled Redis: bounded memory, no eviction of collection state, no snapshots") unless config.include?("maxmemory 64mb") && config.include?("maxmemory-policy noeviction") && config.include?(%q{save ""})
+abort("Bundled Redis: bounded memory, no eviction of identifications, no snapshots") unless config.include?("maxmemory 64mb") && config.include?("maxmemory-policy noeviction") && config.include?(%q{save ""})
 abort("No persistent volumes") if docs.any? { |d| d["kind"] == "StatefulSet" && d["spec"]["volumeClaimTemplates"] }
 ' <<< "$bundled"
 own=$(render --set redis-ha.enabled=false --set existingSecret=redis-url --set-json 'networkPolicy.redisTo=[{"podSelector":{"matchLabels":{"app":"redis"}}}]' --set networkPolicy.redisPort=6380)
@@ -157,7 +158,7 @@ render --set domainData.refresh.enabled=false --set redis-ha.enabled=false --set
 ruby -ryaml -e '
 docs = YAML.load_stream(File.read(ARGV[0])).compact
 pod = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]
-abort("Country refresh must work without domain refresh") unless pod["containers"].size == 2 && pod["volumes"].map { |v| v["name"] } == ["country-data"]
+abort("Country refresh must work without domain refresh") unless pod["containers"].size == 2 && pod["volumes"].map { |v| v["name"] } == ["country-data", "identify-certs"]
 abort("Country updater requires no Kubernetes RBAC") if docs.any? { |d| %w[CronJob Role RoleBinding ServiceAccount].include?(d["kind"]) }
 ' "$rendered"
 if render --set networkData.refresh.enabled=true >/dev/null 2>&1; then echo "Network refresh requires a shared claim" >&2; exit 1; fi
@@ -214,42 +215,41 @@ abort("Network alerts missing") unless groups.any? { |g| g["name"] == "openfinge
 done
 if grep -q 'network-updater' <<< "$(render)"; then echo "Network sidecar must be opt-in" >&2; exit 1; fi
 echo "Per-pod network sidecar, egress, isolation and alerts passed."
-grep -q 'collect' <<< "$(render)" && { echo "The collection listener must be opt-in" >&2; exit 1; }
-render --set collect.enabled=true --set collect.proxyProtocol=true \
-  --set-json 'collect.origins=["https://app.example.com","https://www.example.com"]' \
-  --set-json 'collect.certificates=[{"host":"c.example.com","secretName":"c-tls"},{"host":"c.example.org","secretName":"org-tls"}]' \
-  --set-json 'networkPolicy.collectFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"traefik"}}}]' > "$rendered"
+render --set identify.proxyProtocol=true --set identify.limitPerMinute=500 \
+  --set-json 'identify.origins=["https://app.example.com","https://www.example.com"]' \
+  --set-json 'identify.certificates=[{"host":"c.example.com","secretName":"c-tls"},{"host":"c.example.org","secretName":"org-tls"}]' \
+  --set-json 'networkPolicy.identifyFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"traefik"}}}]' > "$rendered"
 ruby -ryaml -e '
 docs = YAML.load_stream(File.read(ARGV[0])).compact.reject { |d| d["metadata"]["name"].start_with?("openfingerprint-redis-ha") }
 pod = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]
 api = pod["containers"][0]
 env = api["env"].to_h { |e| [e["name"], e["value"]] }
-abort("Collection environment") unless env.values_at("OPENFINGERPRINT_COLLECT_ADDR", "OPENFINGERPRINT_COLLECT_CERTS", "OPENFINGERPRINT_COLLECT_ORIGINS", "OPENFINGERPRINT_COLLECT_PROXY_PROTOCOL") == ["0.0.0.0:8443", "/collect-certs", "https://app.example.com,https://www.example.com", "true"]
-abort("Collection port") unless api["ports"].include?({"name" => "collect", "containerPort" => 8443})
-abort("Certificates mount read-only") unless api["volumeMounts"].include?({"name" => "collect-certs", "mountPath" => "/collect-certs", "readOnly" => true})
-sources = pod["volumes"].find { |v| v["name"] == "collect-certs" }["projected"]["sources"]
+abort("Identify environment") unless env.values_at("OPENFINGERPRINT_IDENTIFY_ADDR", "OPENFINGERPRINT_IDENTIFY_CERTS", "OPENFINGERPRINT_IDENTIFY_ORIGINS", "OPENFINGERPRINT_IDENTIFY_PROXY_PROTOCOL", "OPENFINGERPRINT_IDENTIFY_LIMIT_PER_MINUTE") == ["0.0.0.0:8443", "/identify-certs", "https://app.example.com,https://www.example.com", "true", "500"]
+abort("Identify port") unless api["ports"].include?({"name" => "identify", "containerPort" => 8443})
+abort("Certificates mount read-only") unless api["volumeMounts"].include?({"name" => "identify-certs", "mountPath" => "/identify-certs", "readOnly" => true})
+sources = pod["volumes"].find { |v| v["name"] == "identify-certs" }["projected"]["sources"]
 abort("One directory per hostname") unless sources == [["c-tls", "c.example.com"], ["org-tls", "c.example.org"]].map { |name, host| {"secret" => {"name" => name, "items" => [{"key" => "tls.crt", "path" => "#{host}/tls.crt"}, {"key" => "tls.key", "path" => "#{host}/tls.key"}]}} }
 main = docs.find { |d| d["kind"] == "Service" && d["metadata"]["name"] == "openfingerprint" }
-abort("The private Service must not expose the collection port") if main["spec"]["ports"].any? { |p| p["name"] == "collect" }
-collect = docs.find { |d| d["kind"] == "Service" && d["metadata"]["name"] == "openfingerprint-collect" } || abort("Missing collection Service")
-abort("Collection Service") unless collect["spec"]["type"] == "ClusterIP" && collect["spec"]["ports"] == [{"name" => "collect", "port" => 443, "targetPort" => "collect"}] && collect["spec"]["selector"] == main["spec"]["selector"]
-abort("The ServiceMonitor must not select the collection Service") if collect["metadata"]["labels"]["app.kubernetes.io/name"] == "openfingerprint"
+abort("The private Service must not expose the identify port") if main["spec"]["ports"].any? { |p| p["name"] == "identify" }
+identify = docs.find { |d| d["kind"] == "Service" && d["metadata"]["name"] == "openfingerprint-identify" } || abort("Missing identify Service")
+abort("Identify Service") unless identify["spec"]["type"] == "ClusterIP" && identify["spec"]["ports"] == [{"name" => "identify", "port" => 443, "targetPort" => "identify"}] && identify["spec"]["selector"] == main["spec"]["selector"]
+abort("The ServiceMonitor must not select the identify Service") if identify["metadata"]["labels"]["app.kubernetes.io/name"] == "openfingerprint"
 ingress = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]["ingress"]
-abort("Collection port open to collectFrom only") unless ingress.map { |r| r["ports"] } == [[{"protocol" => "TCP", "port" => 8180}], [{"protocol" => "TCP", "port" => 8443}], [{"protocol" => "TCP", "port" => 9180}]] && ingress[1]["from"] == [{"namespaceSelector" => {"matchLabels" => {"kubernetes.io/metadata.name" => "traefik"}}}]
+abort("Identify port open to identifyFrom only") unless ingress.map { |r| r["ports"] } == [[{"protocol" => "TCP", "port" => 8180}], [{"protocol" => "TCP", "port" => 8443}], [{"protocol" => "TCP", "port" => 9180}]] && ingress[1]["from"] == [{"namespaceSelector" => {"matchLabels" => {"kubernetes.io/metadata.name" => "traefik"}}}]
 groups = docs.find { |d| d["kind"] == "PrometheusRule" }["spec"]["groups"]
-abort("Certificate reload alert") unless groups.any? { |g| g["name"] == "openfingerprint-collect" && g["rules"].map { |r| r["alert"] } == ["OpenFingerprintCollectCertificateReloadFailing"] }
+abort("Certificate reload alert") unless groups.any? { |g| g["name"] == "openfingerprint-identify" && g["rules"].map { |r| r["alert"] } == ["OpenFingerprintIdentifyCertificateReloadFailing"] }
 ' "$rendered"
-collect=(--set collect.enabled=true --set-json 'collect.origins=["*"]' --set-json 'collect.certificates=[{"host":"c.example.com","secretName":"c-tls"}]' --set-json 'networkPolicy.collectFrom=[{"podSelector":{}}]')
-for bad in 'collect.origins=[]' 'collect.certificates=[]' 'collect.certificates=[{"host":"../etc","secretName":"c-tls"}]' 'collect.certificates=[{"host":"c.example.com"}]' 'networkPolicy.collectFrom=[]'; do
-  if render "${collect[@]}" --set-json "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi
+for bad in 'identify.origins=[]' 'identify.certificates=[]' 'identify.certificates=[{"host":"../etc","secretName":"c-tls"}]' 'identify.certificates=[{"host":"c.example.com"}]' 'networkPolicy.identifyFrom=[]'; do
+  if render --set-json "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi
 done
-lb=$(render "${collect[@]}" --set collect.service.type=LoadBalancer --set-json 'collect.service.annotations={"load-balancer.hetzner.cloud/uses-proxyprotocol":"true"}')
-grep -q 'load-balancer.hetzner.cloud/uses-proxyprotocol: "true"' <<< "$lb" && grep -q 'type: LoadBalancer' <<< "$lb" || { echo "Collection Service type and annotations" >&2; exit 1; }
-echo "Opt-in collection listener, certificates, separate Service, ingress policy and alert passed."
+if helm template openfingerprint . >/dev/null 2>&1; then echo "The identify listener is required: rendering without its values must fail" >&2; exit 1; fi
+lb=$(render --set identify.service.type=LoadBalancer --set-json 'identify.service.annotations={"load-balancer.hetzner.cloud/uses-proxyprotocol":"true"}')
+grep -q 'load-balancer.hetzner.cloud/uses-proxyprotocol: "true"' <<< "$lb" && grep -q 'type: LoadBalancer' <<< "$lb" || { echo "Identify Service type and annotations" >&2; exit 1; }
+echo "Required identify listener, certificates, separate Service, ingress policy and alert passed."
 for bad in "redis-ha.enabled=false" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short" "networkPolicy.redisTo=bad" "networkPolicy.redisPort=0" "networkPolicy.redisPort=65536" "networkPolicy.redisPort=6379.5"; do
   if render --set "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi
 done
 if render --set-json 'networkPolicy.apiFrom=[]' >/dev/null 2>&1; then echo "Empty API caller list must fail" >&2; exit 1; fi
-helm template openfingerprint . --set networkPolicy.enabled=false | grep -q 'kind: NetworkPolicy' && { echo "Disabled policies must not render" >&2; exit 1; }
-helm lint . --strict --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]' >/dev/null
+helm template openfingerprint . "${identify[@]}" --set networkPolicy.enabled=false | grep -q 'kind: NetworkPolicy' && { echo "Disabled policies must not render" >&2; exit 1; }
+helm lint . --strict "${identify[@]}" --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]' >/dev/null
 echo "Disabled refresh, required values and lint checks passed."

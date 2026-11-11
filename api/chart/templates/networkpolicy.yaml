@@ -25,16 +25,14 @@ spec:
       ports:
         - protocol: TCP
           port: 8180
-    {{- if .Values.collect.enabled }}
-    {{- if or (not (kindIs "slice" .Values.networkPolicy.collectFrom)) (empty .Values.networkPolicy.collectFrom) }}
-    {{- fail "networkPolicy.collectFrom must list the peers allowed to reach the collection port" }}
+    {{- if or (not (kindIs "slice" .Values.networkPolicy.identifyFrom)) (empty .Values.networkPolicy.identifyFrom) }}
+    {{- fail "networkPolicy.identifyFrom must list the peers allowed to reach the identify port" }}
     {{- end }}
     - from:
-        {{- toYaml .Values.networkPolicy.collectFrom | nindent 8 }}
+        {{- toYaml .Values.networkPolicy.identifyFrom | nindent 8 }}
       ports:
         - protocol: TCP
-          port: {{ .Values.collect.port }}
-    {{- end }}
+          port: {{ .Values.identify.port }}
     {{- if and .Values.metrics.enabled .Values.networkPolicy.metricsFrom }}
     - from:
         {{- toYaml .Values.networkPolicy.metricsFrom | nindent 8 }}

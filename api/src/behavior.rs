@@ -25,6 +25,11 @@ pub struct Check {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
 }
+impl Check {
+    pub(crate) fn rejected(&self) -> bool {
+        self.status == "invalid_input"
+    }
+}
 
 fn counts(value: &Value) -> Option<&Map<String, Value>> {
     let fields = value.as_object()?;

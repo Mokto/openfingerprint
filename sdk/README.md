@@ -4,13 +4,12 @@ Documentation: [openfingerprint.com/docs/sdk](https://openfingerprint.com/docs/s
 
 A standalone, MIT-licensed TypeScript browser-signal collector with **zero runtime dependencies**.
 
-The SDK has no telemetry, remote code, WASM or import-time collection. `collect()`
-hashes identity signals locally and always includes automation observations as
-unhashed booleans/nulls, and the browser's user agent, language and client hints for
-the API's spoofing check, with no network requests unless you pass an `endpoint`. You
-send the resulting `token` (or, with an endpoint, its `eventId`) with your form and your
-backend checks it. The optional self-hosted API provides
-stateless checks; it does not provide managed identification or visitor history.
+The SDK has no telemetry, remote code, WASM or import-time collection. It hashes identity
+signals locally and adds automation, tampering and spoofing observations outside those
+hashes. `identify({ endpoint })` posts that evidence to the API's public listener, which
+observes the request itself (headers and TLS handshake), and returns an
+`identificationId` for your backend to check. The API is self-hosted or hosted; it keeps
+identifications for an hour and no visitor history.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Different
 devices can collide; settings, updates and missing signals can split repeat visits.
@@ -43,7 +42,7 @@ pnpm build
 Node 24+ and pnpm 12.17.0 are used for development. Build outputs:
 
 - `dist/index.js`: standalone ES module.
-- `dist/index.iife.js`: script exposing `OpenFingerprint.collect`, `OpenFingerprint.collectAutomation` and `OpenFingerprint.collectSpoofing`.
+- `dist/index.iife.js`: script exposing `OpenFingerprint.identify`, `OpenFingerprint.watch`, `OpenFingerprint.collect`, `OpenFingerprint.collectAutomation` and `OpenFingerprint.collectSpoofing`.
 - `dist/types/`: TypeScript declarations.
 
 The package exports resolve to the built ES module and declarations. Only
@@ -58,46 +57,53 @@ dispatches `.github/workflows/sdk-publish.yml`, which checks that the tag matche
 `sdk/package.json` and is on `main`, runs the type check, build and browser tests, verifies
 the package contents and publishes to npm. A version already on npm is skipped.
 
-## Optional Rust API
+## Rust API
 
-The independent [Rust API](../api/README.md) verifies SDK evidence and accepts
-optional domain, email and IP inputs. It is self-hosted and experimental.
-`collect()` never calls it: your backend sends the token. See the [project overview](../README.md) for backend checks and releases.
+The [Rust API](../api/README.md) receives the evidence on its public `/v1/identify`
+listener and verifies it when your backend calls its internal `/v1/check`, optionally
+with domain, email and IP inputs. See the [project overview](../README.md) for releases.
 
 ## Use
 
 Call after your application's fraud-prevention disclosure/consent requirements
-are satisfied. Collect ahead of signup rather than making authentication wait.
+are satisfied. Identify ahead of signup rather than making authentication wait.
 
 ```js
-import { collect } from '@openfingerprint/sdk';
+import { identify } from '@openfingerprint/sdk';
 
-const result = await collect();
+const { identificationId } = await identify({ endpoint: 'https://identify.example.com/v1/identify' });
+await fetch('/signup', { method: 'POST', body: JSON.stringify({ ...form, identificationId }) });
 ```
 
-For a regular script tag, serve `dist/index.iife.js` from your own origin, then
-call `OpenFingerprint.collect()` under the same consent/security conditions.
-Neither import nor loading the script starts collection automatically.
+Your backend sends `identificationId` to the API's internal `POST /v1/check` (or the gRPC
+`Check`) and acts on the verdicts. For a regular script tag, serve `dist/index.iife.js`
+from your own origin, then call `OpenFingerprint.identify(…)` under the same consent and
+security conditions. Neither import nor loading the script starts collection.
 
 Options:
 
-| Option       | Default | Meaning                                                                                      |
-| ------------ | ------- | -------------------------------------------------------------------------------------------- |
-| `timeoutMs`  | `2000`  | Cooperative budget, from 1 to 5000 ms. Native browser calls can overrun it.                  |
-| `storageKey` | omitted | Optional namespaced random UUID in localStorage, separate from all fingerprint hashes.       |
-| `onIdentity` | omitted | Receives a detached result snapshot after identity calculation, before excluded diagnostics. |
-| `endpoint`   | omitted | The API's collection URL (`https://…/v1/events`). The token is posted there and `eventId` returned; see [Posting to the API](#posting-to-the-api). |
+| Option      | Default  | Meaning                                                                     |
+| ----------- | -------- | --------------------------------------------------------------------------- |
+| `endpoint`  | required | The API's public `/v1/identify` URL, on your own domain or the hosted one.   |
+| `timeoutMs` | `2000`   | Cooperative collection budget, from 1 to 5000 ms. Native calls can overrun it. |
 
-No persistence is used by default. Explicitly enabling `storageKey` reads/writes
-only that marker, not arbitrary localStorage data. Blocked storage returns `null`.
+`identify()` collects, then posts the evidence as JSON in a `text/plain` request without
+cookies, so there is no CORS preflight. Posting gives up after 3 seconds, so `identify()`
+can take up to 3 seconds longer than `timeoutMs`. It resolves with
+`identificationId: null` when posting fails (network, ad blocker, rate limit or an
+unavailable API) and rejects only for invalid options. Add the endpoint's origin to your
+page's `connect-src` Content Security Policy. Nothing is written to storage.
+
+`collect({ timeoutMs })` is the local building block: it returns the evidence described
+below without any network request, for tests and diagnostics. The API only accepts
+evidence posted to its listener.
 
 ### Automatic automation observations
 
-Every `collect()` result and `onIdentity` snapshot includes `automation`.
-Forward `{ signals: result.token }` to a compatible `/v1/check` to receive the evaluation
-in `response.automation` (`response.signals.automation` with `detail: true`). No opt-in or separate call is needed.
-Automation remains outside fingerprint hashes, so the identity schema is unchanged.
-Deploy the compatible API first: older versions reject automation evidence versions they do not define, including version 7.
+The evidence always includes `automation`. `/v1/check` returns its evaluation as
+`automation` (`identification.automation` with `detail: true`). Automation remains
+outside fingerprint hashes, so the identity schema is unchanged. Deploy the API first:
+it accepts only the automation evidence version it defines, currently 7.
 `collectAutomation()` remains available as a synchronous browser-only helper.
 
 | Field | Observation |
@@ -162,24 +168,24 @@ read from `navigator.userAgent`, `navigator.language` and the low-entropy
 `navigator.userAgentData` (`{ brands, mobile, platform }`, null outside Chromium).
 These are the values the browser already sends as `User-Agent`, `Accept-Language` and
 `Sec-CH-UA*` headers, so they are kept as read, not hashed, and never affect the
-identity hashes. Unreadable or oversized values are null. Have your backend forward
-those five headers of the request that carried the token as `headers` in
-`/v1/check`; the [API](../api/README.md#spoofing-indicators) reports whether the two
-disagree. `collectSpoofing()` returns the same object synchronously.
+identity hashes. Unreadable or oversized values are null. The API compares them with
+the headers and TLS handshake of the request that posted them and reports
+[`spoofing`](../api/README.md#spoofing-indicators). `collectSpoofing()` returns the same
+object synchronously.
 
 ### Watching the page
 
 `collect()` sees one moment. `watch()` keeps observing until the page unloads, and
-every later `collect()` reports what it saw. Call it as early as possible, ideally from
+every later `identify()` (or `collect()`) reports what it saw. Call it as early as possible, ideally from
 a script in `<head>`, and collect at the protected action (signup or login submit):
 
 ```js
-import { collect, watch } from '@openfingerprint/sdk';
+import { identify, watch } from '@openfingerprint/sdk';
 
 watch();
 form.addEventListener('submit', async () => {
-	const { token } = await collect();
-	// send token with the form
+	const { identificationId } = await identify({ endpoint });
+	// send identificationId with the form
 });
 ```
 
@@ -214,80 +220,20 @@ It does two things, both network-free:
 | `untrustedEvents` | Clicks, key, mouse and input events dispatched by script. Pages do this themselves, so this is context only. |
 
 Every count is something real users can produce: keyboard-only use, autofill,
-dictation, on-screen keyboards, or a token collected at page load before any input.
+dictation, on-screen keyboards, or an identification at page load before any input.
 The [API](../api/README.md#behavior-patterns) turns them into patterns, never into a
 detection. No positions, timings, keys or text are kept.
 
-### Sending the token
+### What the API reports about an identification
 
-Without `endpoint`, `collect()` makes no network request. Send `result.token` to your
-backend with the form, and have your backend call the API's `POST /v1/check` with it as `signals`.
-The token is client-supplied evidence: it is obfuscated, not signed, so a script can
-build one. The API therefore reports two things next to the verdict, and your
-backend should act on them:
+Besides the verdicts, `/v1/check` returns `replayed` (this identification was looked up
+before) and `ageMs` (time since the listener stored it, by the API's clock). An
+identification lives for an hour. Your backend can also compare the connection's IP
+address with what it expects, rate-limit by IP and fingerprint, and treat the same
+fingerprint across many new accounts as a signal. See the
+[API guide](../api/README.md) for the full response.
 
-- `replayed`: this exact evidence was already checked within the API's replay window
-  (default one hour). It catches a captured token submitted again, even when it is
-  re-sealed. A forger who builds a fresh token each time is not caught.
-- `tokenAgeMs`: how long ago the browser sealed the token, by the browser's clock
-  (`collectedAt`). Browser clocks are often wrong, so use a generous limit and
-  expect negative values.
-
-Forward the `User-Agent`, `Accept-Language` and `Sec-CH-UA*` headers of the same
-request as `headers`, and the API also reports `spoofing`: whether the token
-contradicts the request that carried it.
-
-Your backend can still compare the connection's IP address with what it expects,
-rate-limit by IP and fingerprint, and treat the same fingerprint across many new
-accounts as a signal. See the [API guide](../api/README.md) for the full response.
-
-### Posting to the API
-
-When the API runs its [collection listener](../api/README.md#browser-collection-post-v1events),
-pass its URL as `endpoint`. After sealing the token, `collect()` posts it there and
-resolves with `result.eventId`; send that to your backend instead of the token, and
-have it call `/v1/check` with `event`. The API then judges the request it received
-itself, including the browser's TLS handshake, rather than headers your backend copied.
-
-```js
-const result = await collect({ endpoint: 'https://collect.example.com/v1/events' });
-await fetch('/signup', { method: 'POST', body: JSON.stringify({ ...form, event: result.eventId, token: result.token }) });
-```
-
-The post is a `text/plain` request without cookies, so it needs no CORS preflight, and
-it gives up after 3 seconds; `collect()` resolves only after that, so it can take up to
-3 seconds longer than `timeoutMs`. `eventId` is `null` when posting failed (network, ad
-blocker, rate limit or an unavailable API): keep sending the token too, so your backend
-can fall back to `signals`. `onIdentity` snapshots never post and have `eventId: null`.
-Add the endpoint's origin to your page's `connect-src` Content Security Policy.
-
-### Identity readiness and cooperative batching
-
-`collect()` still resolves only after diagnostic collection finishes or times out.
-An optional `onIdentity(snapshot)` callback exposes the earlier identity phase:
-
-```js
-const finalResult = await collect({
-	onIdentity(snapshot) {
-		handleIdentity(snapshot);
-	}
-});
-```
-
-`handleIdentity` is your application handler; the SDK sends nothing. The callback
-runs once before excluded diagnostic work, including when no identity could be
-computed (`fingerprint`/`coreFingerprint` can be null). Invalid options or a missing
-secure browser context still reject without calling it. Check the IDs before use.
-
-The snapshot has the normal result shape, with elapsed duration, independent
-copies of maps/arrays/timing entries, and the optional storage marker. It contains
-only results available at that point; excluded diagnostics may be absent until
-the final result. When no diagnostics are excluded, the callback may run only
-shortly before the final promise; it is not an earlier, weaker identity. Callback
-mutations cannot alter the final result. Callback
-throws/rejections are contained, and returned promises are not awaited. Keep the
-handler's synchronous work short: a blocking caller can still delay diagnostics.
-No callback is installed or invoked unless explicitly supplied.
+### Cooperative batching
 
 Font catalogue and fallback measurements now use approximately four-millisecond
 work slices, checked between native reads, rather than yielding every eight fonts.
@@ -306,16 +252,10 @@ wall-time guarantee or a recovery mechanism for missing identities.
 
 ## Result and schema
 
-Version **0.6.0**, result **schema 1**:
+Result **schema 1**:
 
-- `token`: one opaque string encoding the whole result. Send this to the backend
-  instead of the fields below. It is obfuscated, not encrypted: anyone with this
-  package can decode it, and a determined attacker can forge one.
-- `collectedAt`: milliseconds since the Unix epoch, by the browser's clock, when the
-  token was sealed. The API turns it into `tokenAgeMs`.
-- `eventId`: with `endpoint`, the event the collection listener stored, or `null`.
-  It is not part of the token.
-- `behavior`: input counts since [`watch()`](#watching-the-page), or `null`.
+`identify()` resolves with `{ identificationId }`. `collect()` resolves with the
+evidence it posts:
 
 - `fingerprint`: full SHA-256 over selected component and environment-hint hashes.
 - `coreFingerprint`: separately domain-separated hash of selected rendering probes;
@@ -327,7 +267,7 @@ Version **0.6.0**, result **schema 1**:
   media, math and architecture observations.
 - `excluded`: diagnostic-only groups omitted from both aggregate IDs by policy.
 - `unavailable`: explicit `unsupported`, `unstable`, `timeout` or `error` per probe.
-- `storageId`: optional random UUID, otherwise `null`.
+- `behavior`: input counts since [`watch()`](#watching-the-page), or `null`.
 - `durationMs` and `timings`: collection diagnostics, not a hard CPU-time limit.
   `blockingMs` covers only the initial synchronous portion of a probe call, not
   cumulative CPU work or the longest later task.
@@ -430,7 +370,7 @@ in application logs. Approved identification studies require separate restricted
 storage, consent, retention and withdrawal handling as described in the study guide.
 
 The client provides no cross-browser identity guarantee, server-side account
-linking, disposable-email checks, network intelligence, signed tokens or automatic
+linking, disposable-email checks, network intelligence, signed evidence or automatic
 blocking. It should not be used for cross-site advertising or covert tracking.
 More probes and repeated matching samples do not establish population accuracy;
 measure false merges, missed returns and missingness on independently labelled

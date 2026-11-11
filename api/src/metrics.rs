@@ -52,8 +52,7 @@ impl Histogram {
 /// registration performs no `rdap_fetch`/`whois_fetch`.
 #[derive(Clone, Copy)]
 pub enum Step {
-    Automation,
-    Signals,
+    Evidence,
     Domain,
     DomainMx,
     DomainRegistration,
@@ -64,13 +63,12 @@ pub enum Step {
     RedisGet,
     RedisSet,
     Replay,
-    Event,
+    Identification,
     RdapFetch,
     WhoisFetch,
 }
-const STEPS: [&str; 15] = [
-    "automation",
-    "signals",
+const STEPS: [&str; 14] = [
+    "evidence",
     "domain",
     "domain_mx",
     "domain_registration",
@@ -81,13 +79,13 @@ const STEPS: [&str; 15] = [
     "redis_get",
     "redis_set",
     "replay",
-    "event",
+    "identification",
     "rdap_fetch",
     "whois_fetch",
 ];
 static STEP_TIMES: [Histogram; STEPS.len()] = [const { Histogram::new() }; STEPS.len()];
 
-pub const ROUTES: [&str; 4] = ["check", "events", "rpc", "other"];
+pub const ROUTES: [&str; 4] = ["check", "identify", "rpc", "other"];
 const CLASSES: [&str; 4] = ["2xx", "4xx", "5xx", "other"];
 static REQUEST_TIMES: [[Histogram; CLASSES.len()]; ROUTES.len()] =
     [const { [const { Histogram::new() }; CLASSES.len()] }; ROUTES.len()];
@@ -95,7 +93,7 @@ static REQUEST_TIMES: [[Histogram; CLASSES.len()]; ROUTES.len()] =
 pub fn route(path: &str) -> usize {
     match path {
         "/v1/check" => 0,
-        "/v1/events" => 1,
+        "/v1/identify" => 1,
         _ if crate::rpc::is_rpc(path) => 2,
         _ => 3,
     }
