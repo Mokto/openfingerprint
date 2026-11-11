@@ -32,7 +32,10 @@ const V5: [(&str, &str); 3] = [
     ("engineMismatch", "engine_mismatch"),
     ("userAgentDataMismatch", "user_agent_data_mismatch"),
 ];
-const V6: [(&str, &str); 1] = [("proportionalMonospace", "proportional_monospace")];
+const V6: [(&str, &str); 2] = [
+    ("proportionalMonospace", "proportional_monospace"),
+    ("engineApiMismatch", "engine_api_mismatch"),
+];
 
 const STATUSES: [&str; 3] = ["detected", "unknown", "not_detected"];
 static STATUS_COUNTS: [AtomicU64; STATUSES.len()] = [const { AtomicU64::new(0) }; STATUSES.len()];
@@ -293,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn version_six_adds_proportional_monospace_last() {
+    fn version_six_adds_its_probes_last() {
         let mut report = json!({"version": 6});
         for (name, _) in V1.iter().chain(&V2).chain(&V5).chain(&V6) {
             report[*name] = json!(false);
@@ -301,10 +304,12 @@ mod tests {
         let clean = check(report.clone());
         assert_eq!((clean.status, clean.rule_version), ("not_detected", 6));
         report["proportionalMonospace"] = json!(true);
+        report["engineApiMismatch"] = json!(null);
         let result = check(report);
         assert_eq!(result.status, "detected");
         assert_eq!(result.indicators, ["proportional_monospace"]);
-        assert_eq!(check(json!({"version": 6})).unavailable_probes.len(), 18);
+        assert_eq!(result.unavailable_probes, ["engine_api_mismatch"]);
+        assert_eq!(check(json!({"version": 6})).unavailable_probes.len(), 19);
     }
 
     #[test]

@@ -18,6 +18,7 @@ export interface AutomationEvidence {
 	engineMismatch: boolean | null;
 	userAgentDataMismatch: boolean | null;
 	proportionalMonospace: boolean | null;
+	engineApiMismatch: boolean | null;
 }
 
 type AsyncKeys = 'notificationPermissionQuirk' | 'workerUserAgentMismatch';
@@ -62,6 +63,21 @@ function proportionalMonospace(): boolean | null {
 	const wide = context.measureText('mmmmmmmmmm').width;
 	const narrow = context.measureText('iiiiiiiiii').width;
 	return wide > 0 && narrow > 0 ? wide > narrow * 1.5 : null;
+}
+
+// A user agent claiming Chrome 120 or later must have APIs Chrome shipped by version 105, and
+// navigator.userAgentData must be the browser's own NavigatorUAData. Engines that only imitate
+// Chrome, such as Obscura, lack them or build userAgentData in script.
+function engineApiMismatch(): boolean | null {
+	const ua = text(navigator.userAgent);
+	if (!ua) return null;
+	const data = (navigator as { userAgentData?: unknown }).userAgentData;
+	const scope = window as unknown as Record<string, unknown>;
+	if (data !== undefined && !(typeof scope.NavigatorUAData === 'function' && data instanceof scope.NavigatorUAData))
+		return true;
+	const major = Number(/\bChrome\/(\d+)/.exec(ua)?.[1]);
+	if (!(major >= 120)) return false;
+	return ['CompressionStream', 'Navigation', 'Highlight'].some((name) => typeof scope[name] !== 'function');
 }
 
 function brands(): { brand: string; version: string }[] | null {
@@ -370,6 +386,7 @@ export function collectAutomation(): AutomationEvidence {
 		driverArtifacts: observe(driverArtifacts),
 		engineMismatch: observe(engineMismatch),
 		userAgentDataMismatch: observe(userAgentDataMismatch),
-		proportionalMonospace: observe(proportionalMonospace)
+		proportionalMonospace: observe(proportionalMonospace),
+		engineApiMismatch: observe(engineApiMismatch)
 	};
 }

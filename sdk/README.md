@@ -119,6 +119,7 @@ Deploy the compatible API first: older versions reject automation evidence versi
 | `engineMismatch` | The JavaScript engine, told apart by its `RangeError` wording, is not the one the user agent claims: V8 for `Chrome/`, SpiderMonkey for `Firefox/`, JavaScriptCore for `Version/… Safari/`. iOS user agents and unrecognized engines are unknown. |
 | `userAgentDataMismatch` | The `Chromium` brand major version in `navigator.userAgentData` differs from the `Chrome/` major version in the user-agent string, as when a script or flag replaces only the string. |
 | `proportionalMonospace` | The generic `monospace` font measures `m` more than 1.5 times wider than `i` in a 2D canvas, so it is not fixed-width. Every platform maps `monospace` to a fixed-width font; Camoufox doesn't when it claims another operating system than its host. Unknown without a 2D canvas. |
+| `engineApiMismatch` | `navigator.userAgentData` exists but is not a `NavigatorUAData`, as when script builds it; or the user agent claims Chrome 120 or later and `CompressionStream`, `Navigation` or `Highlight` is missing, though Chrome shipped all three by version 105. Engines that imitate Chrome, such as Obscura, do this. |
 
 The standalone `collectAutomation()` returns `null` for the three `collect()`-only
 observations, which need async or GPU-probe results. The worker probe needs

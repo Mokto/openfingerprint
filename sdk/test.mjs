@@ -182,7 +182,7 @@ try {
 			assert.equal(automation.cdpDetected, name === 'chromium' || name === 'chrome', 'Playwright enables CDP Runtime in Chromium only');
 			const headlessBrand = await page.evaluate(() =>
 				!!navigator.userAgentData?.brands.some((entry) => entry.brand === 'HeadlessChrome'));
-			for (const key of ['nativeFunctionTampering', 'driverArtifacts', 'engineMismatch', 'userAgentDataMismatch', 'proportionalMonospace'])
+			for (const key of ['nativeFunctionTampering', 'driverArtifacts', 'engineMismatch', 'userAgentDataMismatch', 'proportionalMonospace', 'engineApiMismatch'])
 				assert.equal(automation[key], false, `a clean page has no ${key}`);
 			for (const [key, value] of Object.entries(automation)) assert(key === 'version' || value === null || typeof value === 'boolean', key);
 			assert.equal(automation.softwareRenderer, null);
@@ -355,6 +355,13 @@ try {
 			assert.equal(await probe(undefined, true), null, 'no frame means unknown, not a verdict');
 			assert.equal(await probe(undefined, true, 'cdpDetected'), null, 'no frame leaves CDP unknown');
 			assert.equal(await probe(() => { HTMLCanvasElement.prototype.getContext = () => null; }, false, 'proportionalMonospace'), null, 'no 2D canvas leaves monospace unknown');
+			assert.equal(await probe(() => {
+				Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150.0.0.0 Safari/537.36' });
+				delete window.CompressionStream;
+			}, false, 'engineApiMismatch'), true, 'a Chrome 150 user agent without CompressionStream imitates Chrome');
+			assert.equal(await probe(() => {
+				Object.defineProperty(navigator, 'userAgentData', { configurable: true, get: () => ({ brands: [], mobile: false, platform: 'Windows' }) });
+			}, false, 'engineApiMismatch'), true, 'a userAgentData built in script is not NavigatorUAData');
 			const wrapped = await fresh(() => {
 				const debug = console.debug;
 				window.stackReads = 0;

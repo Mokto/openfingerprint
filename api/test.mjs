@@ -449,7 +449,7 @@ try {
         [{ version: 2, softwareRenderer: true, cdpDetected: false }, 'detected', ['software_renderer'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'zero_dimensions', 'native_function_tampering', 'worker_user_agent_mismatch']],
         [{ version: 3, nativeFunctionTampering: true }, 'detected', ['native_function_tampering'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'worker_user_agent_mismatch']],
         [{ version: 4, emptyLanguages: true, cdpDetected: false }, 'detected', ['empty_languages'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'software_renderer', 'zero_dimensions', 'native_function_tampering', 'worker_user_agent_mismatch']],
-        [{ version: 6, proportionalMonospace: true }, 'detected', ['proportional_monospace'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'native_function_tampering', 'worker_user_agent_mismatch', 'driver_artifacts', 'engine_mismatch', 'user_agent_data_mismatch']]
+        [{ version: 6, proportionalMonospace: true }, 'detected', ['proportional_monospace'], ['webdriver', 'headless_user_agent', 'selenium_artifacts', 'phantom_artifacts', 'platform_mismatch', 'missing_chrome_object', 'notification_permission_quirk', 'empty_plugins', 'empty_languages', 'software_renderer', 'zero_dimensions', 'cdp_detected', 'native_function_tampering', 'worker_user_agent_mismatch', 'driver_artifacts', 'engine_mismatch', 'user_agent_data_mismatch', 'engine_api_mismatch']]
     ]) {
         const response = await request('/v1/check', {}, { automation: observations, signals: signals() });
         assert.equal(response.status, 200);
@@ -458,7 +458,7 @@ try {
             signals: checkedProfile(signals())
         });
     }
-    for (const invalid of [false, [], 'browser', {}, { version: 7 }, { version: 4, extra: true }, { version: 4, engineMismatch: false }, { version: 5, proportionalMonospace: false }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
+    for (const invalid of [false, [], 'browser', {}, { version: 7 }, { version: 4, extra: true }, { version: 4, engineMismatch: false }, { version: 5, proportionalMonospace: false }, { version: 5, engineApiMismatch: false }, { ...automation, webdriver: 'false' }, { ...automation, extra: true }]) {
         const response = await request('/v1/check', {}, { ...fields, signals: signals(), automation: invalid });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {
