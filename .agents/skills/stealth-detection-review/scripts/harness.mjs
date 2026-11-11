@@ -107,7 +107,9 @@ const node = {
 
 // Python drivers get the URL as argv[1] and Playwright's Chrome for Testing as argv[2], and sleep
 // until the harness kills their process group. The installed Google Chrome does not start under
-// chromedriver or nodriver on this Mac ("unable to discover open pages").
+// chromedriver or nodriver on this Mac ("unable to discover open pages"). Headed Chrome started
+// without --use-mock-keychain waits on a macOS Keychain prompt and never navigates; Playwright and
+// ChromeDriver pass that flag themselves.
 const python = {
 	// Camoufox picks a random OS to claim by default; the pinned runs make results comparable.
 	'camoufox': {
@@ -155,6 +157,7 @@ async def main():
     options = ChromiumOptions()
     options.binary_location = sys.argv[2]
     options.headless = ${headless ? 'True' : 'False'}
+    options.add_argument('--use-mock-keychain')
     async with Chrome(options=options) as browser:
         tab = await browser.start()
         await tab.go_to(sys.argv[1])
@@ -165,7 +168,7 @@ asyncio.run(main())`
 		packages: ['zendriver'],
 		code: `import sys, asyncio, zendriver as zd
 async def main():
-    browser = await zd.start(headless=${headless ? 'True' : 'False'}, browser_executable_path=sys.argv[2])
+    browser = await zd.start(headless=${headless ? 'True' : 'False'}, browser_executable_path=sys.argv[2], browser_args=['--use-mock-keychain'])
     tab = await browser.get(sys.argv[1], new_tab=True)
     await tab.activate()
     await asyncio.sleep(600)
@@ -175,7 +178,7 @@ asyncio.run(main())`
 		packages: ['nodriver'],
 		code: `import sys, asyncio, nodriver as uc
 async def main():
-    browser = await uc.start(headless=${headless ? 'True' : 'False'}, browser_executable_path=sys.argv[2])
+    browser = await uc.start(headless=${headless ? 'True' : 'False'}, browser_executable_path=sys.argv[2], browser_args=['--use-mock-keychain'])
     # The first tab never navigates in current Chrome: nodriver picks a browser_ui target.
     tab = await browser.get(sys.argv[1], new_tab=True)
     await tab.activate()
