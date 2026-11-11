@@ -15,6 +15,7 @@ OpenFingerprint is an experimental browser-signal SDK and a self-hosted check AP
 | [sdk/src/index.ts](sdk/src/index.ts) | Public `collect()` entry point, rendering probes, scheduling, result assembly and identity hashing. |
 | [sdk/src/environment.ts](sdk/src/environment.ts), [sdk/src/policy.ts](sdk/src/policy.ts) | Environment hints and browser-specific exclusions from identity. Excluded probes can remain available as diagnostics. |
 | [sdk/src/automation.ts](sdk/src/automation.ts), [api/src/automation.rs](api/src/automation.rs) | Browser automation observations and their independent server-side evaluation rules. |
+| [sdk/src/watch.ts](sdk/src/watch.ts), [api/src/behavior.rs](api/src/behavior.rs) | `watch()`: traps for driver code calling DOM methods, input counts, and the API's behavior patterns. |
 | [api/src/main.rs](api/src/main.rs) | HTTP routes, process startup, snapshot reload scheduling, metrics listener and graceful shutdown. |
 | [api/src/check.rs](api/src/check.rs) | Browser-origin refusal, request validation, canonical profile/hash verification, and `/v1/check`. |
 | [api/src/replay.rs](api/src/replay.rs) | Redis token replay markers behind the `replayed` signal. |

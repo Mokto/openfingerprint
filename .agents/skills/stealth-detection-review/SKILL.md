@@ -19,9 +19,10 @@ below, skip the PR and only report.
 3. Run the harness from the repo root, once as is and once with `--headed`, and keep
    both outputs for the PR:
    `node .agents/skills/stealth-detection-review/scripts/harness.mjs`.
-   It updates each tool to its latest release, opens a local page that runs
-   `collect()` in it and prints which automation and tampering fields came back
-   `true` or `null`. Headed runs matter most: headless leaks hide every other gap.
+   It updates each tool to its latest release and opens a local page that calls
+   `watch()`. Each tool then reads `document.title` through its default evaluate
+   API, as a scraper would. The harness prints which automation and tampering
+   fields the page's `collect()` returned as `true` or `null`. Headed runs matter most: headless leaks hide every other gap.
    A full run takes about 15 minutes; `--only camoufox,clearcote` limits it. Compare
    with the newest earlier files in `~/.cache/openfingerprint-stealth/results/`: a
    tool that was detected last time and is not now is the most important finding.

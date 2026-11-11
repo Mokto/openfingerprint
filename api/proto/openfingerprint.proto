@@ -67,7 +67,11 @@ message CheckResponse {
   optional bool tor = 11;
   optional bool datacenter = 12;
   optional bool proxy = 13;
-  // Inputs that were rejected: signals, automation, tampering, spoofing, headers,
-  // domain, email, ip.
+  // Inputs that were rejected: signals, automation, tampering, spoofing, behavior,
+  // headers, domain, email, ip.
   repeated string invalid = 14;
+  // Input patterns since the page called the SDK's watch(): clicks_without_movement,
+  // centered_clicks, instant_keys, text_without_keys, no_input. Real users can produce each,
+  // so they are context, not a verdict. Empty when none matched; unset without watch().
+  repeated string behavior = 19;
 }

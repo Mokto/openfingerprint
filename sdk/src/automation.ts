@@ -1,5 +1,7 @@
+import { observedProtocolScript } from './watch';
+
 export interface AutomationEvidence {
-	version: 6;
+	version: 7;
 	webdriver: boolean | null;
 	headlessUserAgent: boolean | null;
 	seleniumArtifacts: boolean | null;
@@ -19,6 +21,7 @@ export interface AutomationEvidence {
 	userAgentDataMismatch: boolean | null;
 	proportionalMonospace: boolean | null;
 	engineApiMismatch: boolean | null;
+	protocolScript: boolean | null;
 }
 
 type AsyncKeys = 'notificationPermissionQuirk' | 'workerUserAgentMismatch';
@@ -132,7 +135,7 @@ function driverArtifacts(): boolean {
 	);
 }
 
-function engine(): string | null {
+export function engine(): string | null {
 	try {
 		(-1).toFixed(-1);
 	} catch (error) {
@@ -345,7 +348,7 @@ export function collectAutomation(): AutomationEvidence {
 		throw new Error('A browser context is required');
 	const [cdp, patched] = observeInFrame();
 	return {
-		version: 6,
+		version: 7,
 		webdriver: observe(() => navigator.webdriver),
 		headlessUserAgent: observe(() => {
 			const userAgent = navigator.userAgent;
@@ -387,6 +390,7 @@ export function collectAutomation(): AutomationEvidence {
 		engineMismatch: observe(engineMismatch),
 		userAgentDataMismatch: observe(userAgentDataMismatch),
 		proportionalMonospace: observe(proportionalMonospace),
-		engineApiMismatch: observe(engineApiMismatch)
+		engineApiMismatch: observe(engineApiMismatch),
+		protocolScript: observedProtocolScript()
 	};
 }

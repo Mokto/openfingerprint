@@ -122,7 +122,23 @@ const server = createServer((req, res) => {
 		return;
 	}
 	const name = url.pathname.slice(1).replace('.js', '');
-	if ((req.url || '').endsWith('.js') && Object.hasOwn(sources, name)) {
+	if (url.pathname === '/watch') {
+		// Script the page itself compiles without a URL must not count as driver code.
+		res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; frame-src 'self'; worker-src blob:");
+		res.setHeader('Content-Type', 'text/html');
+		res.end(`<!doctype html><html><meta charset="utf-8"><title>watch</title><body>
+<button id="target" style="width:120px;height:40px" onclick="document.querySelector('#target')">target</button><a id="link" href="javascript:void document.querySelector('#link')">link</a>
+<script src="/custom.js"></script><script>OpenFingerprint.watch();</script>
+<script>
+document.querySelector('body'); eval("document.querySelector('body')"); new Function("document.title")();
+setTimeout("document.getElementById('target')", 0);
+const inline = document.createElement('script');
+inline.textContent = "document.querySelector('body'); setTimeout(function () { document.body.outerHTML; }, 5)";
+document.head.appendChild(inline);
+document.getElementById('target').click(); document.getElementById('link').click();
+setTimeout(() => OpenFingerprint.collect({ timeoutMs: 3000 }).then((r) => { window.pageOnly = r.automation.protocolScript; window.pageBehavior = r.behavior; }), 300);
+</script></body></html>`);
+	} else if ((req.url || '').endsWith('.js') && Object.hasOwn(sources, name)) {
 		res.setHeader('Content-Type', 'text/javascript');
 		res.end(sources[name]);
 	} else if (Object.hasOwn(runners, name)) {
@@ -203,7 +219,8 @@ try {
 		try {
 			await page.goto(`${origin}/custom`);
 			const automation = await page.evaluate(() => OpenFingerprint.collectAutomation());
-			assert.equal(automation.version, 6);
+			assert.equal(automation.version, 7);
+			assert.equal(automation.protocolScript, null, 'without watch() the trap is unobserved');
 			assert.equal(automation.cdpDetected, name === 'chromium' || name === 'chrome', 'Playwright enables CDP Runtime in Chromium only');
 			const headlessBrand = await page.evaluate(() =>
 				!!navigator.userAgentData?.brands.some((entry) => entry.brand === 'HeadlessChrome'));
@@ -243,7 +260,7 @@ try {
 					assert.deepEqual(
 						Object.fromEntries(Object.entries(observed).slice(0, 5)),
 						{
-							version: 6,
+							version: 7,
 							webdriver: unreadable ? null : false,
 							headlessUserAgent: unreadable ? null : scenario === 'markers' || headlessBrand,
 							seleniumArtifacts: scenario === 'markers',
@@ -366,6 +383,32 @@ try {
 			report.checks.push({
 				browser: name,
 				check: 'With an endpoint the token is posted as text/plain and the event ID returned; failures give null',
+				passed: true
+			});
+			const watching = await context.newPage();
+			try {
+				await watching.goto(`${origin}/watch`);
+				await watching.waitForFunction(() => window.pageOnly !== undefined, null, { timeout: 15000 });
+				const traps = name !== 'webkit';
+				assert.equal(await watching.evaluate(() => window.pageOnly), traps ? false : null, 'page scripts without a URL are not driver code');
+				const idle = await watching.evaluate(() => window.pageBehavior);
+				assert.equal(idle.version, 1);
+				assert.equal(idle.untrustedEvents, 2, 'the page clicked twice from script');
+				assert.equal(idle.mouseClicks + idle.keys + idle.pointerMoves, 0);
+				await watching.click('#target');
+				const after = await watching.evaluate(() => {
+					document.querySelector('body');
+					return OpenFingerprint.collect({ timeoutMs: 3000 }).then((r) => ({ protocolScript: r.automation.protocolScript, behavior: r.behavior }));
+				});
+				assert.equal(after.protocolScript, traps || null, 'driver code calling a trapped method');
+				assert.deepEqual([after.behavior.mouseClicks, after.behavior.clicksWithoutMovement, after.behavior.centeredClicks], [1, 1, 1], 'a driver click lands centred without movement');
+				assert.equal(await watching.evaluate(() => document.querySelector('#target').id), 'target', 'trapped methods still work');
+			} finally {
+				await watching.close();
+			}
+			report.checks.push({
+				browser: name,
+				check: 'watch(): page scripts stay unflagged, driver evaluation is trapped (Chromium and Firefox), clicks are counted',
 				passed: true
 			});
 			const probe = async (init, late, key = 'nativeFunctionTampering') => {
@@ -1272,7 +1315,7 @@ try {
 			assert(!diagnosticTimeout.excluded.includes('fonts'));
 			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
 			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
-			assert.equal(diagnosticTimeout.automation.version, 6);
+			assert.equal(diagnosticTimeout.automation.version, 7);
 			assert(diagnosticTimeout.components.canvas);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);

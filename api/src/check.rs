@@ -119,6 +119,8 @@ struct Signals {
     tampering: Option<serde_json::Value>,
     #[serde(default)]
     spoofing: Option<serde_json::Value>,
+    #[serde(default)]
+    behavior: Option<serde_json::Value>,
     version: u16,
     fingerprint: Option<String>,
     core_fingerprint: Option<String>,
@@ -318,6 +320,8 @@ pub(crate) struct SignalCheck {
     tampering: Option<crate::tampering::Check>,
     #[serde(skip_serializing_if = "Option::is_none")]
     spoofing: Option<crate::spoofing::Check>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    behavior: Option<crate::behavior::Check>,
     #[serde(flatten)]
     profile: Verified,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -482,6 +486,13 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
                 map.entry(key).or_insert_with(|| check.clone());
             }
         }
+        match signals["behavior"]["status"].as_str() {
+            Some("observed") => {
+                out.insert("behavior".into(), signals["behavior"]["patterns"].clone());
+            }
+            Some("invalid_input") => invalid.push("behavior"),
+            _ => {}
+        }
     }
     for key in ["automation", "tampering", "spoofing"] {
         if let Some(check) = map.remove(key) {
@@ -566,6 +577,7 @@ pub(crate) fn check_signals(
             automation: signals.automation.map(crate::automation::check),
             tampering: signals.tampering.map(crate::tampering::check),
             spoofing: headers.map(|h| crate::spoofing::check(signals.spoofing.as_ref(), h, tls)),
+            behavior: signals.behavior.map(crate::behavior::check),
             profile,
             reason: None,
             evidence: Some(Evidence {
@@ -590,6 +602,7 @@ pub(crate) fn check_signals(
         automation: None,
         tampering: None,
         spoofing: None,
+        behavior: None,
         profile: Verified {
             status: "invalid_input",
             schema_version: None,

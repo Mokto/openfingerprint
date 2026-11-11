@@ -26,12 +26,15 @@ const cache = join(homedir(), '.cache', 'openfingerprint-stealth');
 mkdirSync(join(cache, 'results'), { recursive: true });
 const headless = !values.headed;
 
-const PAGE = `<!doctype html><html lang="en"><body><p>probe</p><script>${sdk.replace(/<\/script/gi, '<\\/script')}</script><script>
+// The page watches from the start; each driver reads document.title through its default
+// evaluate API right after navigating, as a scraper would, before the page collects.
+const PAGE = `<!doctype html><html lang="en"><head><title>probe</title></head><body><p>probe</p><script>${sdk.replace(/<\/script/gi, '<\\/script')}</script><script>
+OpenFingerprint.watch();
 setTimeout(async () => {
 	let body;
 	try {
 		const r = await OpenFingerprint.collect({ timeoutMs: 5000 });
-		body = { automation: r.automation, tampering: r.tampering, userAgent: navigator.userAgent,
+		body = { automation: r.automation, tampering: r.tampering, behavior: r.behavior, userAgent: navigator.userAgent,
 			brands: navigator.userAgentData?.brands ?? null, unavailable: r.unavailable };
 	} catch (error) {
 		body = { error: String(error && error.stack || error) };
@@ -40,45 +43,50 @@ setTimeout(async () => {
 }, 3000);
 </script></body></html>`;
 
+const visit = async (page, url) => {
+	await page.goto(url);
+	await page.evaluate(() => document.title);
+};
+
 // Each Node driver opens the URL and stays open; the harness closes it once the page reports.
 const node = {
 	'playwright-chromium': async (url, m) => {
 		const browser = await m('playwright').chromium.launch({ headless });
-		await (await browser.newPage()).goto(url);
+		await visit(await browser.newPage(), url);
 		return () => browser.close();
 	},
 	'playwright-firefox': async (url, m) => {
 		const browser = await m('playwright').firefox.launch({ headless });
-		await (await browser.newPage()).goto(url);
+		await visit(await browser.newPage(), url);
 		return () => browser.close();
 	},
 	'playwright-extra-stealth': async (url, m) => {
 		const chromium = m('playwright-extra').addExtra(m('playwright').chromium);
 		chromium.use(m('puppeteer-extra-plugin-stealth')());
 		const browser = await chromium.launch({ headless });
-		await (await browser.newPage()).goto(url);
+		await visit(await browser.newPage(), url);
 		return () => browser.close();
 	},
 	patchright: async (url, m) => {
 		const { chromium } = m('patchright');
 		const context = await chromium.launchPersistentContext(join(cache, 'patchright-profile'), { headless, viewport: null });
-		await (await context.newPage()).goto(url);
+		await visit(await context.newPage(), url);
 		return () => context.close();
 	},
 	'rebrowser-playwright': async (url, m) => {
 		const browser = await m('rebrowser-playwright').chromium.launch({ headless });
-		await (await browser.newPage()).goto(url);
+		await visit(await browser.newPage(), url);
 		return () => browser.close();
 	},
 	// Needs a free licence key: run `npx cloakbrowser login` in ~/.cache/openfingerprint-stealth once.
 	cloakbrowser: async (url) => {
 		const browser = await (await esm('cloakbrowser')).launch({ headless });
-		await (await browser.newPage()).goto(url);
+		await visit(await browser.newPage(), url);
 		return () => browser.close();
 	},
 	clearcote: async (url) => {
 		const browser = await (await esm('clearcote')).launch({ headless, fingerprint: 'openfingerprint-harness' });
-		await (await browser.newPage()).goto(url);
+		await visit(await browser.newPage(), url);
 		return () => browser.close();
 	},
 	// Obscura is its own engine behind a CDP server, not a Chromium build; there is no headed mode.
@@ -93,7 +101,7 @@ const node = {
 					if (attempt > 20) throw error;
 					return new Promise((ok) => setTimeout(ok, 500));
 				});
-			await (await (await browser.newContext()).newPage()).goto(url);
+			await visit(await (await browser.newContext()).newPage(), url);
 			return async () => {
 				await browser.close().catch(() => {});
 				stop();
@@ -118,7 +126,9 @@ const python = {
 		code: `import sys, time
 from camoufox.sync_api import Camoufox
 with Camoufox(headless=${headless ? 'True' : 'False'}) as browser:
-    browser.new_page().goto(sys.argv[1])
+    page = browser.new_page()
+    page.goto(sys.argv[1])
+    page.evaluate('document.title')
     time.sleep(600)`
 	},
 	'camoufox-windows': {
@@ -127,7 +137,9 @@ with Camoufox(headless=${headless ? 'True' : 'False'}) as browser:
 		code: `import sys, time
 from camoufox.sync_api import Camoufox
 with Camoufox(headless=${headless ? 'True' : 'False'}, os='windows') as browser:
-    browser.new_page().goto(sys.argv[1])
+    page = browser.new_page()
+    page.goto(sys.argv[1])
+    page.evaluate('document.title')
     time.sleep(600)`
 	},
 	'camoufox-macos': {
@@ -136,7 +148,9 @@ with Camoufox(headless=${headless ? 'True' : 'False'}, os='windows') as browser:
 		code: `import sys, time
 from camoufox.sync_api import Camoufox
 with Camoufox(headless=${headless ? 'True' : 'False'}, os='macos') as browser:
-    browser.new_page().goto(sys.argv[1])
+    page = browser.new_page()
+    page.goto(sys.argv[1])
+    page.evaluate('document.title')
     time.sleep(600)`
 	},
 	'invisible-playwright': {
@@ -145,7 +159,9 @@ with Camoufox(headless=${headless ? 'True' : 'False'}, os='macos') as browser:
 		code: `import sys, time
 from invisible_playwright import InvisiblePlaywright
 with InvisiblePlaywright(headless=${headless ? 'True' : 'False'}) as browser:
-    browser.new_page().goto(sys.argv[1])
+    page = browser.new_page()
+    page.goto(sys.argv[1])
+    page.evaluate('document.title')
     time.sleep(600)`
 	},
 	pydoll: {
@@ -161,6 +177,7 @@ async def main():
     async with Chrome(options=options) as browser:
         tab = await browser.start()
         await tab.go_to(sys.argv[1])
+        await tab.execute_script('document.title')
         await asyncio.sleep(600)
 asyncio.run(main())`
 	},
@@ -171,6 +188,7 @@ async def main():
     browser = await zd.start(headless=${headless ? 'True' : 'False'}, browser_executable_path=sys.argv[2], browser_args=['--use-mock-keychain'])
     tab = await browser.get(sys.argv[1], new_tab=True)
     await tab.activate()
+    await tab.evaluate('document.title')
     await asyncio.sleep(600)
 asyncio.run(main())`
 	},
@@ -182,6 +200,7 @@ async def main():
     # The first tab never navigates in current Chrome: nodriver picks a browser_ui target.
     tab = await browser.get(sys.argv[1], new_tab=True)
     await tab.activate()
+    await tab.evaluate('document.title')
     await asyncio.sleep(600)
 asyncio.run(main())`
 	},
@@ -191,6 +210,7 @@ asyncio.run(main())`
 from seleniumbase import Driver
 driver = Driver(uc=True, headless=${headless ? 'True' : 'False'}, binary_location=sys.argv[2])
 driver.uc_open_with_reconnect(sys.argv[1], 1)
+driver.execute_script('return document.title')
 time.sleep(600)`
 	},
 	'selenium-chromedriver': {
@@ -202,7 +222,7 @@ ${headless ? "options.add_argument('--headless=new')" : ''}
 options.binary_location = sys.argv[2]
 driver = webdriver.Chrome(options=options)
 driver.get(sys.argv[1])
-driver.find_element('tag name', 'body')
+driver.execute_script('return document.title')
 time.sleep(600)`
 	}
 };
