@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const { values } = parseArgs({
@@ -68,6 +69,39 @@ const node = {
 		const browser = await m('rebrowser-playwright').chromium.launch({ headless });
 		await (await browser.newPage()).goto(url);
 		return () => browser.close();
+	},
+	// Needs a free licence key: run `npx cloakbrowser login` in ~/.cache/openfingerprint-stealth once.
+	cloakbrowser: async (url) => {
+		const browser = await (await esm('cloakbrowser')).launch({ headless });
+		await (await browser.newPage()).goto(url);
+		return () => browser.close();
+	},
+	clearcote: async (url) => {
+		const browser = await (await esm('clearcote')).launch({ headless, fingerprint: 'openfingerprint-harness' });
+		await (await browser.newPage()).goto(url);
+		return () => browser.close();
+	},
+	// Obscura is its own engine behind a CDP server, not a Chromium build; there is no headed mode.
+	obscura: async (url, m) => {
+		const port = 9300 + Math.floor(Math.random() * 500);
+		const child = spawn(join(cache, 'obscura', 'obscura'), ['serve', '--port', String(port), '--stealth', '--allow-private-network'], { stdio: 'ignore' });
+		const stop = () => child.kill('SIGKILL');
+		try {
+			let browser;
+			for (let attempt = 0; !browser; attempt++)
+				browser = await m('playwright').chromium.connectOverCDP(`ws://127.0.0.1:${port}`).catch((error) => {
+					if (attempt > 20) throw error;
+					return new Promise((ok) => setTimeout(ok, 500));
+				});
+			await (await (await browser.newContext()).newPage()).goto(url);
+			return async () => {
+				await browser.close().catch(() => {});
+				stop();
+			};
+		} catch (error) {
+			stop();
+			throw error;
+		}
 	}
 };
 
@@ -103,6 +137,40 @@ with Camoufox(headless=${headless ? 'True' : 'False'}, os='macos') as browser:
     browser.new_page().goto(sys.argv[1])
     time.sleep(600)`
 	},
+	'invisible-playwright': {
+		packages: ['invisible-playwright'],
+		setup: 'from invisible_playwright import ensure_binary; ensure_binary()',
+		code: `import sys, time
+from invisible_playwright import InvisiblePlaywright
+with InvisiblePlaywright(headless=${headless ? 'True' : 'False'}) as browser:
+    browser.new_page().goto(sys.argv[1])
+    time.sleep(600)`
+	},
+	pydoll: {
+		packages: ['pydoll-python'],
+		code: `import sys, asyncio
+from pydoll.browser import Chrome
+from pydoll.browser.options import ChromiumOptions
+async def main():
+    options = ChromiumOptions()
+    options.binary_location = sys.argv[2]
+    options.headless = ${headless ? 'True' : 'False'}
+    async with Chrome(options=options) as browser:
+        tab = await browser.start()
+        await tab.go_to(sys.argv[1])
+        await asyncio.sleep(600)
+asyncio.run(main())`
+	},
+	zendriver: {
+		packages: ['zendriver'],
+		code: `import sys, asyncio, zendriver as zd
+async def main():
+    browser = await zd.start(headless=${headless ? 'True' : 'False'}, browser_executable_path=sys.argv[2])
+    tab = await browser.get(sys.argv[1], new_tab=True)
+    await tab.activate()
+    await asyncio.sleep(600)
+asyncio.run(main())`
+	},
 	nodriver: {
 		packages: ['nodriver'],
 		code: `import sys, asyncio, nodriver as uc
@@ -112,7 +180,7 @@ async def main():
     tab = await browser.get(sys.argv[1], new_tab=True)
     await tab.activate()
     await asyncio.sleep(600)
-uc.loop().run_until_complete(main())`
+asyncio.run(main())`
 	},
 	'seleniumbase-uc': {
 		packages: ['seleniumbase'],
@@ -140,21 +208,35 @@ const selected = values.only?.split(',') ?? [...Object.keys(node), ...Object.key
 const unknown = selected.filter((name) => !(name in node) && !(name in python));
 if (unknown.length) throw new Error(`Unknown drivers: ${unknown.join(', ')}`);
 
-const npmPackages = ['playwright', 'playwright-extra', 'puppeteer-extra-plugin-stealth', 'patchright', 'rebrowser-playwright'];
+// cloakbrowser supports only some playwright-core versions; it and clearcote use the top-level one.
+const npmPackages = ['playwright', 'playwright-extra', 'puppeteer-extra-plugin-stealth', 'patchright', 'rebrowser-playwright', 'cloakbrowser', 'clearcote'];
 const sh = (cmd, args, cwd = cache) => execFileSync(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
 const setupErrors = {};
 if (selected.some((name) => name in node)) {
 	if (!existsSync(join(cache, 'package.json'))) writeFileSync(join(cache, 'package.json'), '{"private":true}');
 	try {
 		sh('npm', ['install', '--no-audit', '--no-fund', ...npmPackages.map((p) => `${p}@latest`)]);
+		const range = JSON.parse(readFileSync(join(cache, 'node_modules', 'cloakbrowser', 'package.json'), 'utf8')).peerDependencies['playwright-core'];
+		sh('npm', ['install', '--no-audit', '--no-fund', `playwright-core@${range}`]);
 		sh('npx', ['playwright', 'install', 'chromium', 'firefox']);
 		sh('npx', ['patchright', 'install', 'chromium']);
 		sh('npx', ['rebrowser-playwright', 'install', 'chromium']);
+		sh('npx', ['clearcote', 'install']);
+		if (selected.includes('obscura')) {
+			const target = `${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-${process.platform === 'darwin' ? 'macos' : 'linux'}`;
+			mkdirSync(join(cache, 'obscura'), { recursive: true });
+			sh('curl', ['-fsSL', '-o', 'obscura.tar.gz', `https://github.com/h4ckf0r0day/obscura/releases/latest/download/obscura-${target}-stealth.tar.gz`], join(cache, 'obscura'));
+			sh('tar', ['-xzf', 'obscura.tar.gz'], join(cache, 'obscura'));
+		}
 	} catch (error) {
 		setupErrors.npm = String(error.stderr || error.message).slice(-2000);
 	}
 }
 const load = createRequire(join(cache, 'package.json'));
+const esm = (name) => {
+	const { exports } = JSON.parse(readFileSync(join(cache, 'node_modules', name, 'package.json'), 'utf8'));
+	return import(pathToFileURL(join(cache, 'node_modules', name, exports['.'].import ?? exports['.'].default)).href);
+};
 const versions = {};
 for (const name of npmPackages)
 	try {
@@ -185,7 +267,7 @@ const results = {};
 for (const name of selected) {
 	const url = `${base}?driver=${encodeURIComponent(name)}`;
 	const reported = new Promise((ok) => waiting.set(name, ok));
-	const timeout = new Promise((ok) => setTimeout(() => ok({ error: `no report within ${values.timeout}s` }), Number(values.timeout) * 1000));
+	const timeout = () => new Promise((ok) => setTimeout(() => ok({ error: `no report within ${values.timeout}s` }), Number(values.timeout) * 1000));
 	let close = async () => {};
 	try {
 		if (name in node) {
@@ -203,9 +285,9 @@ for (const name of selected) {
 					process.kill(-child.pid, 'SIGKILL');
 				} catch {}
 			};
-			results[name] = await Promise.race([reported, timeout, exited]);
+			results[name] = await Promise.race([reported, timeout(), exited]);
 		}
-		results[name] ??= await Promise.race([reported, timeout]);
+		results[name] ??= await Promise.race([reported, timeout()]);
 	} catch (error) {
 		results[name] = { error: String(error.message || error).slice(0, 2000) };
 	} finally {

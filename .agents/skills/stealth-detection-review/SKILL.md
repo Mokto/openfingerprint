@@ -1,6 +1,6 @@
 ---
 name: stealth-detection-review
-description: Review open-source bot-detection projects (CreepJS, BotD, rebrowser-bot-detector) and stealth browsers or drivers (Camoufox, Patchright, nodriver, puppeteer-extra-plugin-stealth, SeleniumBase UC) for techniques the SDK automation probes miss, run the built SDK against those stealth tools, and open a PR with precise new probes. Use for the weekly stealth review, or when asked to compare OpenFingerprint's automation detection with other projects or test it against stealth browsers.
+description: Review open-source bot-detection projects (CreepJS, BotD, rebrowser-bot-detector), anti-detect browsers (Camoufox and its competitors such as Clearcote, CloakBrowser and Obscura) and stealth drivers (Patchright, nodriver, zendriver, puppeteer-extra-plugin-stealth, SeleniumBase UC) for techniques the SDK automation probes miss, run the built SDK against those stealth tools, and open a PR with precise new probes. Use for the weekly stealth review, or when asked to compare OpenFingerprint's automation detection with other projects or test it against stealth browsers.
 ---
 
 # Stealth detection review
@@ -16,35 +16,42 @@ below, skip the PR and only report.
    or uncommitted changes, create a worktree for the new branch instead of
    switching.
 2. Run `pnpm install --frozen-lockfile` and `pnpm build`.
-3. Run the harness from the repo root and keep its output for the PR:
+3. Run the harness from the repo root, once as is and once with `--headed`, and keep
+   both outputs for the PR:
    `node .agents/skills/stealth-detection-review/scripts/harness.mjs`.
    It updates each tool to its latest release, opens a local page that runs
    `collect()` in it and prints which automation and tampering fields came back
-   `true` or `null`. A full run takes about 10 minutes; `--only camoufox,patchright`
-   limits it. Compare with the newest earlier file in
-   `~/.cache/openfingerprint-stealth/results/`: a tool that was detected last time and
-   is not now is the most important finding.
-4. Review the projects in [references/sources.md](references/sources.md). Clone or
+   `true` or `null`. Headed runs matter most: headless leaks hide every other gap.
+   A full run takes about 15 minutes; `--only camoufox,clearcote` limits it. Compare
+   with the newest earlier files in `~/.cache/openfingerprint-stealth/results/`: a
+   tool that was detected last time and is not now is the most important finding.
+   A tool detected by nothing is the next target.
+4. Look for anti-detect browsers and stealth drivers that aren't in
+   [references/sources.md](references/sources.md) yet: search the web and GitHub for
+   Camoufox alternatives and new or fast-rising stealth automation projects. Add
+   each one you find to `sources.md`, and add a driver to `scripts/harness.mjs` when
+   it can be installed and launched from a script. Commit those changes in the PR.
+5. Review the projects in [references/sources.md](references/sources.md). Clone or
    fetch each into `~/.cache/openfingerprint-stealth/repos/`, and read what changed
    since the commit recorded in `~/.cache/openfingerprint-stealth/reviewed.json`
    (`{"owner/repo": "sha"}`); for a repo with no entry, read its detection or
    evasion code. For an evasion tool, look for what it patches and how that patch
    could show. For a detector, look for checks the SDK lacks.
-5. For each candidate check, decide with the bar in [Precision bar](#precision-bar),
+6. For each candidate check, decide with the bar in [Precision bar](#precision-bar),
    then prototype it in the page of a Playwright Chromium, Firefox and WebKit run
    before writing SDK code.
-6. Implement the checks that pass. New fields, and changed meanings of existing
+7. Implement the checks that pass. New fields, and changed meanings of existing
    fields, need a new automation evidence version in both the SDK and
    `api/src/automation.rs` (follow how `V5` was added). Add assertions in
    `sdk/test.mjs` (clean page false, simulated patch true, unreadable input null)
    and Rust unit tests, and update the field tables in `sdk/README.md` and
    `api/README.md`.
-7. Run the checks for the areas you changed from the
+8. Run the checks for the areas you changed from the
    [Verification](../../../AGENTS.md#verification) table, then rerun the harness
    with the new build.
-8. Open the PR with `create_pr`, giving it the before/after harness lines, the
+9. Open the PR with `create_pr`, giving it the before/after harness lines, the
    sources each check came from and the checks you rejected with the reason.
-9. Write the head commit SHA of every repo you reviewed to `reviewed.json`, even
+10. Write the head commit SHA of every repo you reviewed to `reviewed.json`, even
    when no PR came out of it, and end with a short report: harness lines, PR link
    or "no change", and rejected ideas.
 
