@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/Mokto/openfingerprint/compare/api-v0.19.0...api-v0.20.0) (2026-11-11)
+
+
+### Features
+
+* **chart:** add the optional browser collection listener ([#118](https://github.com/Mokto/openfingerprint/issues/118)) ([abc2882](https://github.com/Mokto/openfingerprint/commit/abc28828d46b9d39d0192758f09cd3bee726853e))
+
 ## [0.19.0](https://github.com/Mokto/openfingerprint/compare/api-v0.18.1...api-v0.19.0) (2026-11-11)
 
 
