@@ -153,7 +153,7 @@ mod tests {
     fn every_compact_key_has_a_field_in_the_response_message() {
         let response: CheckResponse = serde_json::from_value(serde_json::json!({
             "fingerprint":"abc","automation":true,"tampering":false,"spoofing":true,"disposable":true,
-            "free":false,"spam":true,"relay":false,"cheapTld":true,"replayed":true,"nonce":false,"tokenAgeMs":-1500,"mx":true,"country":"dk","vpn":true,
+            "free":false,"spam":true,"relay":false,"cheapTld":true,"replayed":true,"tokenAgeMs":-1500,"mx":true,"country":"dk","vpn":true,
             "tor":false,"datacenter":true,"proxy":false,"invalid":["ip"]
         }))
         .unwrap();
@@ -194,7 +194,6 @@ mod tests {
             ]
         );
         assert_eq!(response.token_age_ms, Some(-1500));
-        assert_eq!(response.nonce, Some(false));
         assert_eq!(response.invalid, ["ip"]);
         assert_eq!(
             serde_json::from_value::<CheckResponse>(serde_json::json!({})).unwrap(),

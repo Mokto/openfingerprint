@@ -109,6 +109,7 @@ puts "Chart selectors, isolation, RBAC, refresh and monitoring checks passed."
 for empty in dnsTo rdapTo; do
   if render --set-json "networkPolicy.$empty=[]" >/dev/null 2>&1; then echo "An empty $empty must fail" >&2; exit 1; fi
 done
+helm template openfingerprint . --set nonce.required=true | grep -A1 'name: OPENFINGERPRINT_REQUIRE_NONCE' | grep -q 'value: "true"' || { echo "nonce.required must set OPENFINGERPRINT_REQUIRE_NONCE" >&2; exit 1; }
 minimal=$(helm template openfingerprint . --namespace openfingerprint)
 grep -q 'kind: NetworkPolicy' <<< "$minimal" && { echo "NetworkPolicies must be opt-in" >&2; exit 1; }
 grep -q 'value: "redis://openfingerprint-redis-ha-haproxy:6379/0"' <<< "$minimal" || { echo "The bundled Redis must be on by default" >&2; exit 1; }

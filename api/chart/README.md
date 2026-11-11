@@ -81,6 +81,13 @@ callers send only the domain. Its policy allows UDP 53 to `networkPolicy.dnsTo`.
 pod. A rolling update surges one extra pod, so it needs at least `replicaCount + 1` schedulable
 nodes; on fewer, set `onePodPerNode=false`. A non-empty `affinity` replaces it.
 
+## Nonces
+
+`nonce.required` (default `false`) sets `OPENFINGERPRINT_REQUIRE_NONCE`: a checked token
+without a nonce from `/v1/nonce` then counts as `spoofing`. Turn it on only after every
+page that collects a token gets a nonce; until then, honest visitors (and tabs still running
+an older page) are flagged. See the [API guide](../README.md#post-v1nonce).
+
 ## Sentry
 
 Set `sentry.dsn` (and optionally `sentry.environment`) to report panics, HTTP 5xx responses

@@ -7,10 +7,11 @@ use std::{
 use serde::Serialize;
 use serde_json::Value;
 
-const PROBES: [&str; 3] = [
+const PROBES: [&str; 4] = [
     "user_agent_mismatch",
     "client_hints_mismatch",
     "language_mismatch",
+    "nonce_invalid",
 ];
 const HEADERS: [&str; 5] = [
     "userAgent",
@@ -87,8 +88,15 @@ struct Evidence {
 }
 
 /// Compares what the browser reported in the token (`evidence`, absent for SDKs that
-/// predate it) with the headers of the request that carried the token.
-pub fn check(evidence: Option<&Value>, headers: &Value) -> Check {
+/// predate it) with the headers of the request that carried the token, and checks the
+/// token's nonce. Each family is evaluated only when the caller uses it: header probes
+/// with `headers`, the nonce probe with a nonce outcome (a nonce in the token, or one
+/// required). A family not in use is left out rather than reported unavailable.
+pub fn check(
+    evidence: Option<&Value>,
+    headers: Option<&Value>,
+    nonce: Option<crate::nonce::Status>,
+) -> Check {
     let mut result = Check {
         status: "invalid_input",
         rule_version: 1,
@@ -97,15 +105,19 @@ pub fn check(evidence: Option<&Value>, headers: &Value) -> Check {
         unavailable_probes: Vec::new(),
         reason: Some("invalid_headers"),
     };
-    let Some(headers) = headers.as_object().filter(|h| {
-        h.iter().all(|(key, value)| {
-            HEADERS.contains(&key.as_str())
-                && (value.is_null() || value.as_str().is_some_and(|v| v.len() <= HEADER_LIMIT))
-        })
-    }) else {
-        return result;
+    let headers = match headers {
+        None => None,
+        Some(headers) => match headers.as_object().filter(|h| {
+            h.iter().all(|(key, value)| {
+                HEADERS.contains(&key.as_str())
+                    && (value.is_null() || value.as_str().is_some_and(|v| v.len() <= HEADER_LIMIT))
+            })
+        }) {
+            Some(headers) => Some(headers),
+            None => return result,
+        },
     };
-    let header = |name: &str| headers.get(name).and_then(Value::as_str);
+    let header = |name: &str| headers.and_then(|h| h.get(name)).and_then(Value::as_str);
     let evidence = match evidence.map(parse) {
         Some(Some(evidence)) => Some(evidence),
         Some(None) => {
@@ -114,7 +126,7 @@ pub fn check(evidence: Option<&Value>, headers: &Value) -> Check {
         }
         None => None,
     };
-    let observations = match &evidence {
+    let compared = match &evidence {
         Some(evidence) => [
             evidence
                 .user_agent
@@ -138,7 +150,22 @@ pub fn check(evidence: Option<&Value>, headers: &Value) -> Check {
         ],
         None => [None; 3],
     };
-    for (observed, name) in observations.into_iter().zip(PROBES) {
+    let nonce_invalid = nonce.map(|status| {
+        use crate::nonce::Status::*;
+        match status {
+            Valid => Some(false),
+            Reused | Expired | NotIssued | Missing => Some(true),
+            Unavailable => None,
+        }
+    });
+    let observations = compared
+        .into_iter()
+        .map(|observed| headers.map(|_| observed))
+        .chain([nonce_invalid]);
+    for (observed, name) in observations.zip(PROBES) {
+        let Some(observed) = observed else {
+            continue;
+        };
         match observed {
             Some(true) => result.indicators.push(name),
             None => result.unavailable_probes.push(name),
@@ -297,7 +324,7 @@ mod tests {
         evidence: Option<Value>,
         headers: Value,
     ) -> (&'static str, Vec<&'static str>, Vec<&'static str>) {
-        let result = check(evidence.as_ref(), &headers);
+        let result = check(evidence.as_ref(), Some(&headers), None);
         (result.status, result.indicators, result.unavailable_probes)
     }
 
@@ -348,11 +375,11 @@ mod tests {
     fn missing_or_unreadable_sides_are_unknown_not_false() {
         assert_eq!(
             outcome(Some(chrome()), json!({})),
-            ("unknown", vec![], PROBES.to_vec())
+            ("unknown", vec![], PROBES[..3].to_vec())
         );
         assert_eq!(
             outcome(None, chrome_headers()),
-            ("unknown", vec![], PROBES.to_vec()),
+            ("unknown", vec![], PROBES[..3].to_vec()),
             "a token from an SDK without spoofing evidence"
         );
         for (key, value) in [
@@ -388,6 +415,36 @@ mod tests {
     }
 
     #[test]
+    fn a_nonce_outcome_is_its_own_probe_and_only_counts_when_in_use() {
+        use crate::nonce::Status::*;
+        let run = |headers: Option<Value>, nonce| {
+            let result = check(Some(&chrome()), headers.as_ref(), nonce);
+            (result.status, result.indicators, result.unavailable_probes)
+        };
+        assert_eq!(
+            run(Some(chrome_headers()), Some(Valid)),
+            ("not_detected", vec![], vec![])
+        );
+        assert_eq!(
+            run(None, Some(Valid)),
+            ("not_detected", vec![], vec![]),
+            "without headers the header probes are not in use, not unknown"
+        );
+        for status in [Reused, Expired, NotIssued, Missing] {
+            assert_eq!(run(None, Some(status)).1, ["nonce_invalid"], "{status:?}");
+        }
+        assert_eq!(
+            run(Some(chrome_headers()), Some(Unavailable)),
+            ("unknown", vec![], vec!["nonce_invalid"])
+        );
+        assert_eq!(
+            run(Some(chrome_headers()), None),
+            ("not_detected", vec![], vec![]),
+            "no nonce in use leaves the probe out"
+        );
+    }
+
+    #[test]
     fn brand_lists_parse_escapes_and_any_order() {
         let parsed = brand_list(r#""B\"rand";v="1","A;B, C";v="2""#).unwrap();
         assert_eq!(
@@ -418,7 +475,7 @@ mod tests {
             json!({"userAgent":1}),
             json!({"userAgent":"x".repeat(HEADER_LIMIT + 1)}),
         ] {
-            let result = check(Some(&chrome()), &headers);
+            let result = check(Some(&chrome()), Some(&headers), None);
             assert_eq!(
                 (result.status, result.reason),
                 ("invalid_input", Some("invalid_headers"))
@@ -437,7 +494,7 @@ mod tests {
             json!({"version":1,"clientHints":{"brands":[{"brand":"A"}],"mobile":false,"platform":"X"}}),
             too_many,
         ] {
-            let result = check(Some(&evidence), &chrome_headers());
+            let result = check(Some(&evidence), Some(&chrome_headers()), None);
             assert_eq!(
                 (result.status, result.reason),
                 ("invalid_input", Some("invalid_spoofing")),
@@ -457,12 +514,14 @@ mod tests {
         let before = metrics();
         let mut headers = chrome_headers();
         headers["userAgent"] = json!("curl/8");
-        check(Some(&chrome()), &headers);
-        check(Some(&json!({"version":9})), &headers);
+        check(Some(&chrome()), Some(&headers), None);
+        check(Some(&json!({"version":9})), Some(&headers), None);
+        check(None, None, Some(crate::nonce::Status::Reused));
         let after = metrics();
         for line in [
             "openfingerprint_spoofing_checks_total{status=\"detected\"}",
             "openfingerprint_spoofing_indicators_total{indicator=\"user_agent_mismatch\"}",
+            "openfingerprint_spoofing_indicators_total{indicator=\"nonce_invalid\"}",
         ] {
             assert!(value(&after, line) > value(&before, line), "{line}");
         }

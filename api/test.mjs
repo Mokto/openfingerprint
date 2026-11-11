@@ -653,19 +653,25 @@ try {
         assert.equal((await mint(bad)).status, 400, JSON.stringify(bad));
     assert.equal((await mint({}, { origin: 'https://evil.test' })).status, 403);
     const withNonce = (value) => ({ ...signals(), nonce: value });
-    const firstUse = await request('/v1/check', {}, { signals: withNonce(nonce) });
-    assert.deepEqual((await firstUse.json()).signals.nonce, { status: 'valid' });
+    const firstUse = (await (await request('/v1/check', {}, { signals: withNonce(nonce) })).json()).signals;
+    assert.deepEqual(firstUse.nonce, { status: 'valid' });
+    assert.deepEqual(firstUse.spoofing, spoofing('not_detected', [], []), 'header probes are not in use without headers');
     assert.deepEqual(
         await compactCall({ signals: seal(withNonce(nonce)) }),
-        { fingerprint: shortId(signals().fingerprint), replayed: false, nonce: false },
-        'a new token with a spent nonce: not replayed, nonce false'
+        { fingerprint: shortId(signals().fingerprint), replayed: false, spoofing: true },
+        'a new token with a spent nonce: not replayed, but spoofing'
     );
     const future = Buffer.alloc(24);
     future.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000) + 600));
     const invented = future.toString('base64url');
     assert.deepEqual((await (await request('/v1/check', {}, { signals: withNonce(invented) })).json()).signals.nonce, { status: 'not_issued' });
     assert.deepEqual((await (await request('/v1/check', {}, { signals: withNonce('A'.repeat(32)) })).json()).signals.nonce, { status: 'expired' });
-    assert.equal('nonce' in await compactCall({ signals: seal(signals()) }), false, 'no nonce, no verdict');
+    assert.equal('spoofing' in await compactCall({ signals: seal(signals()) }), false, 'no nonce, no headers, not required: no verdict');
+    assert.deepEqual(
+        (await (await request('/v1/check', {}, { signals: { ...withNonce(invented), spoofing: claims }, headers: sent })).json()).signals.spoofing,
+        spoofing('detected', ['nonce_invalid'], []),
+        'headers that agree do not hide an invalid nonce'
+    );
     const rpcNonce = await fetch(origin + '/openfingerprint.v1.OpenFingerprint/CreateNonce', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ttlSeconds: 300 })
     });
@@ -673,7 +679,7 @@ try {
     const created = await rpcNonce.json();
     assert(Math.abs(Number(created.expiresAt) - (Date.now() / 1000 + 300)) < 5);
     const nonceViaConnect = await connectCheck({ signals: seal(withNonce(created.nonce)) });
-    assert.equal((await nonceViaConnect.json()).nonce, true);
+    assert.equal((await nonceViaConnect.json()).spoofing, false);
     assert.equal((await fetch(origin + '/openfingerprint.v1.OpenFingerprint/CreateNonce', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"ttlSeconds":5}'
     })).status, 400);
@@ -930,6 +936,7 @@ try {
     assert(await metric('openfingerprint_nonces_total{result="reused"}') >= 1);
     assert(await metric('openfingerprint_nonces_total{result="not_issued"}') >= 1);
     assert(await metric('openfingerprint_nonces_total{result="expired"}') >= 1);
+    assert(await metric('openfingerprint_spoofing_indicators_total{indicator="nonce_invalid"}') >= 3);
     assert(await metric('openfingerprint_http_request_duration_seconds_count{route="nonce",status="2xx"}') >= 2);
     assert(await metric('openfingerprint_spoofing_checks_total{status="not_detected"}') >= 2);
     assert(await metric('openfingerprint_spoofing_indicators_total{indicator="user_agent_mismatch"}') >= 2);
@@ -1015,6 +1022,10 @@ if (!values['domain-data-mode'] && !process.exitCode) {
         ? spawnSync('docker', ['run', '--rm', '--env', 'OPENFINGERPRINT_SITES', '--env', 'OPENFINGERPRINT_LISTEN_ADDR', '--env', 'OPENFINGERPRINT_DNS', values.image], { env, encoding: 'utf8', timeout: 30000 })
         : spawnSync(values.binary, [], { env, encoding: 'utf8', timeout: 30000 });
     assert(noRedis.status !== 0 && noRedis.stderr.includes('OPENFINGERPRINT_REDIS_URL is required'), 'The API must refuse to start without Redis');
+    const badNonce = container
+        ? spawnSync('docker', ['run', '--rm', '--env', 'OPENFINGERPRINT_SITES', '--env', 'OPENFINGERPRINT_LISTEN_ADDR', '--env', 'OPENFINGERPRINT_DNS', '--env', 'OPENFINGERPRINT_REDIS_URL', '--env', 'OPENFINGERPRINT_REQUIRE_NONCE', values.image], { env: { ...env, OPENFINGERPRINT_REDIS_URL: 'redis://127.0.0.1:9/', OPENFINGERPRINT_REQUIRE_NONCE: 'yes' }, encoding: 'utf8', timeout: 30000 })
+        : spawnSync(values.binary, [], { env: { ...env, OPENFINGERPRINT_REDIS_URL: 'redis://127.0.0.1:9/', OPENFINGERPRINT_REQUIRE_NONCE: 'yes' }, encoding: 'utf8', timeout: 30000 });
+    assert(badNonce.status !== 0 && badNonce.stderr.includes('OPENFINGERPRINT_REQUIRE_NONCE must be true or false'), 'The API must refuse an unclear nonce setting');
     console.log('Startup without Redis refused.');
     await import('./test-domain-updater.mjs');
     for (const mode of ['stale', 'invalid', 'missing']) {

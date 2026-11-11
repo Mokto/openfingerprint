@@ -19,6 +19,8 @@ pub struct AppState {
     pub network: crate::network::Store,
     pub replay: crate::replay::Replay,
     pub nonces: crate::nonce::Nonces,
+    /// `OPENFINGERPRINT_REQUIRE_NONCE`: a token without a nonce counts as `nonce_invalid`.
+    pub require_nonce: bool,
 }
 impl AppState {
     pub fn from_env() -> Result<Self, &'static str> {
@@ -37,6 +39,11 @@ impl AppState {
         state.domains = crate::domains::DomainStore::from_env();
         state.countries = crate::country::CountryStore::from_env();
         state.network = crate::network::Store::from_env()?;
+        state.require_nonce = match std::env::var("OPENFINGERPRINT_REQUIRE_NONCE").as_deref() {
+            Err(_) | Ok("false") => false,
+            Ok("true") => true,
+            Ok(_) => return Err("OPENFINGERPRINT_REQUIRE_NONCE must be true or false"),
+        };
         Ok(state)
     }
     fn configure(
@@ -54,6 +61,7 @@ impl AppState {
             rdap,
             replay,
             nonces,
+            require_nonce: false,
             countries: crate::country::CountryStore::new(None),
         }
     }
@@ -332,9 +340,11 @@ pub(crate) struct SignalCheck {
     /// Negative when that clock is ahead; absent without a collection time.
     #[serde(rename = "tokenAgeMs", skip_serializing_if = "Option::is_none")]
     token_age_ms: Option<i64>,
-    /// The outcome of the token's nonce. Absent when the token has none.
+    /// The outcome of the token's nonce. Absent when the token has none and none is required.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) nonce: Option<crate::nonce::Check>,
+    #[serde(skip)]
+    spoofing_evidence: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -448,11 +458,6 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
                 out.insert(key.into(), value.clone());
             }
         }
-        match signals["nonce"]["status"].as_str() {
-            Some("valid") => out.insert("nonce".into(), json!(true)),
-            Some("reused" | "expired" | "not_issued") => out.insert("nonce".into(), json!(false)),
-            _ => None,
-        };
         if signals["status"] == "invalid_input" {
             invalid.push("signals");
         }
@@ -528,10 +533,7 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
     *response = Value::Object(out);
 }
 
-pub(crate) fn check_signals(
-    value: serde_json::Value,
-    headers: Option<&serde_json::Value>,
-) -> SignalCheck {
+pub(crate) fn check_signals(value: serde_json::Value) -> SignalCheck {
     if let Ok(signals) = serde_json::from_value::<Signals>(value)
         && let Ok(profile) = signals.verified()
     {
@@ -542,7 +544,8 @@ pub(crate) fn check_signals(
             nonce: None,
             automation: signals.automation.map(crate::automation::check),
             tampering: signals.tampering.map(crate::tampering::check),
-            spoofing: headers.map(|h| crate::spoofing::check(signals.spoofing.as_ref(), h)),
+            spoofing: None,
+            spoofing_evidence: signals.spoofing.clone(),
             profile,
             reason: None,
             evidence: Some(Evidence {
@@ -566,6 +569,7 @@ pub(crate) fn check_signals(
         automation: None,
         tampering: None,
         spoofing: None,
+        spoofing_evidence: None,
         profile: Verified {
             status: "invalid_input",
             schema_version: None,
@@ -666,22 +670,28 @@ pub(crate) async fn evaluate(
             let opened = open(&token);
             let mut check = {
                 let _timer = start(Step::Signals);
-                check_signals(opened.clone(), input.headers.as_ref())
+                check_signals(opened.clone())
             };
             if check.profile.status != "invalid_input" {
                 let key = crate::replay::key(&opened);
                 let nonce = async {
                     match opened.get("nonce").and_then(serde_json::Value::as_str) {
-                        Some(nonce) => Some(crate::nonce::Check {
-                            status: timed(Step::Nonce, state.nonces.consume(nonce)).await,
-                        }),
+                        Some(nonce) => Some(timed(Step::Nonce, state.nonces.consume(nonce)).await),
+                        None if state.require_nonce => Some(state.nonces.missing()),
                         None => None,
                     }
                 };
                 let (first, nonce) =
                     tokio::join!(timed(Step::Replay, state.replay.first_seen(&key)), nonce);
                 check.replayed = first.map(|first| !first);
-                check.nonce = nonce;
+                check.nonce = nonce.map(|status| crate::nonce::Check { status });
+                if input.headers.is_some() || nonce.is_some() {
+                    check.spoofing = Some(crate::spoofing::check(
+                        check.spoofing_evidence.as_ref(),
+                        input.headers.as_ref(),
+                        nonce,
+                    ));
+                }
             }
             Some(check)
         }
@@ -874,26 +884,22 @@ pub(crate) mod tests {
         }
         let mut input = payload();
         input["collectedAt"] = serde_json::json!(now_ms() - 90_000.0);
-        let age = check_signals(input.clone(), None).token_age_ms.unwrap();
+        let age = check_signals(input.clone()).token_age_ms.unwrap();
         assert!((90_000..120_000).contains(&age), "{age}");
         input["collectedAt"] = serde_json::json!(now_ms() + 5_000.0);
-        let age = check_signals(input, None).token_age_ms.unwrap();
+        let age = check_signals(input).token_age_ms.unwrap();
         assert!(
             (-5_100..0).contains(&age),
             "a clock ahead gives a negative age: {age}"
         );
-        assert!(check_signals(payload(), None).token_age_ms.is_none());
-        assert!(
-            check_signals(serde_json::json!({}), None)
-                .token_age_ms
-                .is_none()
-        );
+        assert!(check_signals(payload()).token_age_ms.is_none());
+        assert!(check_signals(serde_json::json!({})).token_age_ms.is_none());
     }
 
     #[tokio::test]
     async fn a_nonce_counts_once_even_when_the_rest_of_the_token_changes() {
         let (addr, _) = crate::cache::tests::fake_redis(None).await;
-        let state = state_with_redis(&addr);
+        let mut state = state_with_redis(&addr);
         let (nonce, _) = state.nonces.issue(600).await.unwrap();
         let with = |nonce: &str, duration: u32| {
             let mut token = payload();
@@ -908,46 +914,60 @@ pub(crate) mod tests {
             first["signals"]["nonce"],
             serde_json::json!({"status":"valid"})
         );
+        assert_eq!(first["signals"]["spoofing"]["status"], "not_detected");
+        assert_eq!(
+            first["signals"]["spoofing"]["unavailableProbes"],
+            serde_json::json!([]),
+            "header probes are not in use without headers"
+        );
         let edited = evaluate(&state, request(&with(&nonce, 2), false))
             .await
             .unwrap();
         assert_eq!(
-            (&edited["nonce"], &edited["replayed"]),
-            (&serde_json::json!(false), &serde_json::json!(false)),
+            (&edited["spoofing"], &edited["replayed"]),
+            (&serde_json::json!(true), &serde_json::json!(false)),
             "new content is not replayed, but its nonce is spent"
         );
         let invented = evaluate(&state, request(&with(&"A".repeat(32), 3), true))
             .await
             .unwrap();
         assert_eq!(invented["signals"]["nonce"]["status"], "expired");
+        assert_eq!(
+            invented["signals"]["spoofing"]["indicators"],
+            serde_json::json!(["nonce_invalid"])
+        );
         let none = evaluate(&state, request(&seal(&payload(), [5, 6, 7, 8]), false))
             .await
             .unwrap();
         assert!(
-            none.get("nonce").is_none(),
-            "a token without a nonce has no verdict"
+            none.get("spoofing").is_none(),
+            "no nonce, no headers, not required: nothing to say"
+        );
+        let mut long = payload();
+        long["nonce"] = serde_json::json!("A".repeat(65));
+        assert_eq!(check_signals(long).profile.status, "invalid_input");
+
+        state.require_nonce = true;
+        let required = evaluate(&state, request(&seal(&payload(), [6, 6, 6, 6]), true))
+            .await
+            .unwrap();
+        assert_eq!(
+            required["signals"]["nonce"],
+            serde_json::json!({"status":"missing"})
         );
         assert_eq!(
-            check_signals(
-                {
-                    let mut long = payload();
-                    long["nonce"] = serde_json::json!("A".repeat(65));
-                    long
-                },
-                None
-            )
-            .profile
-            .status,
-            "invalid_input"
+            required["signals"]["spoofing"]["indicators"],
+            serde_json::json!(["nonce_invalid"])
         );
 
         let down = state_with_redis("127.0.0.1:9");
-        let unknown = evaluate(&down, request(&with(&nonce, 4), false))
+        let unknown = evaluate(&down, request(&with(&nonce, 4), true))
             .await
             .unwrap();
-        assert!(
-            unknown.get("nonce").is_none(),
-            "unknown when Redis cannot say"
+        assert_eq!(unknown["signals"]["nonce"]["status"], "unavailable");
+        assert_eq!(
+            unknown["signals"]["spoofing"]["status"], "unknown",
+            "never a verdict when Redis cannot say"
         );
     }
 
@@ -1156,7 +1176,7 @@ pub(crate) mod tests {
 
     #[test]
     fn signal_results_report_counts_not_confidence_or_core_fallbacks() {
-        let result = check_signals(payload(), None);
+        let result = check_signals(payload());
         assert_eq!(result.profile.status, "ok");
         let evidence = result.evidence.unwrap();
         assert_eq!(evidence.included_components, 1);
@@ -1167,7 +1187,7 @@ pub(crate) mod tests {
         let mut input = payload();
         input["components"]["canvas"] = serde_json::json!(sha256("diagnostic"));
         input["excluded"] = serde_json::json!(["canvas"]);
-        let result = check_signals(input, None);
+        let result = check_signals(input);
         assert_eq!(result.profile.status, "ok");
         let evidence = result.evidence.unwrap();
         assert_eq!(evidence.included_components, 1);
@@ -1175,7 +1195,7 @@ pub(crate) mod tests {
 
         let mut input = payload();
         input["fingerprint"] = serde_json::Value::Null;
-        let result = check_signals(input, None);
+        let result = check_signals(input);
         assert_eq!(result.profile.status, "insufficient_signals");
         assert!(result.profile.fingerprint.is_none());
         assert!(result.profile.schema_version.is_none());
@@ -1186,7 +1206,7 @@ pub(crate) mod tests {
             p["fingerprint"] = serde_json::json!("b".repeat(64));
             p
         }] {
-            let result = check_signals(input, None);
+            let result = check_signals(input);
             assert_eq!(result.profile.status, "invalid_input");
             assert_eq!(result.reason, Some("invalid_signals"));
             assert!(result.evidence.is_none());

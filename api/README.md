@@ -116,6 +116,7 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_NETWORK_DATA` | Optional network manifest path. Keep its content-addressed ASN files in the same directory. No bundled/live fallback; absent/invalid data is unknown. Checked every 60 seconds; invalid replacements retain last-good data without extending expiry. |
 | `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL (Redis 7 or later for nonces) for the RDAP cache, token replay markers and nonces; the API does not start without it. Supports `rediss://` with certificate validation. An unreachable Redis means uncached RDAP lookups, no `replayed` or `nonce` answer and HTTP 503 from `/v1/nonce`; checks keep working and there is no memory fallback. Each pod keeps one multiplexed connection each for the RDAP cache, replay markers and nonces, replaced after any error, timeout or 60 s of idleness; commands are never retried. RDAP cache writes happen after the response (at most 64 in flight; extra writes are dropped and counted as cache errors). |
 | `OPENFINGERPRINT_REDIS_PASSWORD` | Optional Redis password, overriding one in the URL, so the URL can live outside a Secret. |
+| `OPENFINGERPRINT_REQUIRE_NONCE` | `true` or `false` (default). With `true`, a checked token without a [nonce](#post-v1nonce) counts as `spoofing` (`nonce_invalid`, nonce status `missing`). Enable it only once every page that collects a token gets a nonce. Any other value stops startup. |
 | `OPENFINGERPRINT_REPLAY_WINDOW_SECONDS` | How long a checked token is remembered: 1–604800 seconds, default 3600. Use identical settings on every replica. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
 | `OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS` | Seconds between checks of the override file, 1–86400, default 60. A changed file that fails to read or parse is rejected and the last valid snapshot stays until its sources expire. |
@@ -196,9 +197,8 @@ A key that is missing means unknown, so there are no `null` facts. Only the
 | --- | --- |
 | `fingerprint` | From `signals`; `null` when the token is invalid or has no full ID. |
 | `replayed`, `tokenAgeMs` | From a valid `signals` token: whether the same evidence was checked before, and milliseconds since the browser sealed it. See [Replayed tokens](#replayed-tokens-and-token-age). |
-| `nonce` | From a valid `signals` token that carries a [nonce](#post-v1nonce): `true` the first time an unexpired nonce issued here is seen, `false` when it is reused, expired or was never issued. |
 | `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
-| `spoofing` | The browser's own report contradicts the headers of the request that carried it. Only with `headers`. |
+| `spoofing` | The token does not belong to the request that carried it: the browser's own report contradicts `headers`, or its [nonce](#post-v1nonce) is reused, expired, not issued here or missing when required. Only when one of these is in use. |
 | `disposable`, `free`, `spam`, `relay`, `cheapTld`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `cheapTld` says the TLD is one registrars sell at teaser prices; `mx` says the domain has mail servers. |
 | `country`, `vpn`, `tor`, `datacenter`, `proxy` | From `ip`. `country` is a lowercase ISO 3166-1 alpha-2 code. |
 | `invalid` | Only present when an input was rejected: a list of `signals`, `automation`, `tampering`, `spoofing`, `headers`, `domain`, `email` and/or `ip`. |
@@ -541,6 +541,11 @@ the browser request that carried the token, `/v1/check` compares the two and ret
 | `user_agent_mismatch` | The reported user agent differs from `User-Agent`. | Either side is missing. |
 | `client_hints_mismatch` | The reported brands (in any order), mobile flag or platform differ from `Sec-CH-UA`, `Sec-CH-UA-Mobile` and `Sec-CH-UA-Platform`. | Only one side has client hints, or a header does not parse. Neither side having them (Firefox, Safari) counts as agreement. |
 | `language_mismatch` | The primary subtag of the reported language differs from the first `Accept-Language` tag (`en-US` and `en` agree, as WebKit reports `ja` while sending `ja-JP`). | Either side is missing or `*`. |
+| `nonce_invalid` | The token's [nonce](#post-v1nonce) is reused, expired or not issued here, or missing while `OPENFINGERPRINT_REQUIRE_NONCE` is set. `signals.nonce.status` gives which. | Redis cannot answer. |
+
+The three header probes run only when you send `headers`, and `nonce_invalid` only when
+the token has a nonce or one is required; a probe not in use is left out, not listed as
+unavailable. Without either, there is no `spoofing` result.
 
 Both sides come from the same browser, so they agree for ordinary visitors in
 Chromium, Firefox and WebKit. A mismatch means the token and the request did not come
@@ -743,7 +748,8 @@ Optional. Mints a single-use nonce for one page. Your backend calls it (the API 
 private), hands the nonce to the page, and the page passes it to the SDK:
 `collect({ nonce })`, which also takes a promise so collection can start before the
 nonce arrives. The SDK seals it into the token if it has resolved by then; otherwise
-the token has none. `/v1/check` then reports `nonce` for that token.
+the token has none. `/v1/check` then reports the outcome as `signals.nonce` and, when
+the nonce is not valid, as `spoofing` (indicator `nonce_invalid`).
 
 Request body `{}`, or `{"ttlSeconds": n}` for a lifetime of 60 to 86400 seconds
 (default 1800). Response:
@@ -756,21 +762,24 @@ The nonce is 32 base64url characters: its expiry and 128 random bits. Redis stor
 SHA-256 hash of it with the same lifetime. The first `/v1/check` of a token with that
 nonce marks it used, atomically, and reports:
 
-| `signals.nonce.status` | Compact `nonce` | Meaning |
+| `signals.nonce.status` | `nonce_invalid` | Meaning |
 | --- | --- | --- |
-| `valid` | `true` | Issued here, unexpired, not seen before. |
-| `reused` | `false` | Already seen in an earlier token, even if the rest of the token changed. |
-| `expired` | `false` | Past its expiry. |
-| `not_issued` | `false` | Not minted by this API, or not a nonce at all. |
-| `unavailable` | absent | Redis could not answer. |
+| `valid` | `false` | Issued here, unexpired, not seen before. |
+| `reused` | `true` | Already seen in an earlier token, even if the rest of the token changed. |
+| `expired` | `true` | Past its expiry. |
+| `not_issued` | `true` | Not minted by this API, or not a nonce at all. |
+| `missing` | `true` | The token has none while `OPENFINGERPRINT_REQUIRE_NONCE` is set. |
+| `unavailable` | unknown | Redis could not answer. |
 
-A token without a nonce has no `nonce` result. A nonce makes stockpiled or edited
+A token without a nonce has no nonce result unless one is required. Without
+`OPENFINGERPRINT_REQUIRE_NONCE`, a forger can simply leave the nonce out, so require it
+once your pages always mint one (chart value `nonce.required`). A nonce makes stockpiled or edited
 tokens fail, which `replayed` alone cannot (it keys on content, so changing one field
 of a captured token makes it look new), and every token needs a round trip to your
 backend, which you can rate-limit per IP or session. It does not show that the rest
 of the token is genuine: a script can fetch a nonce and forge everything else. Give
-each page its own nonce: a second tab or a re-submitted form reuses one, which is
-`false` for an honest visitor too, so treat it as a signal, not a block. Redis must be
+each page its own nonce: a second tab or a re-submitted form reuses one, which flags an
+honest visitor too, so treat `spoofing` as a signal, not a block. Redis must be
 version 7 or later (`SET … XX KEEPTTL GET`). Failures to store a nonce return HTTP 503
 `nonce_unavailable`; checks keep working without one.
 
@@ -857,7 +866,7 @@ contents, domains, addresses or credentials:
 | `openfingerprint_rdap_cache_total{result}` | RDAP cache hits, misses and errors. Errors mean checks are reaching the registry directly. |
 | `openfingerprint_spoofing_checks_total{status}`, `openfingerprint_spoofing_indicators_total{indicator}` | Tokens compared with their request `headers`, by verdict, and how often each comparison found a mismatch. They count evaluated tokens, not visitors. |
 | `openfingerprint_automation_checks_total{status}`, `openfingerprint_automation_indicators_total{indicator}` | Valid automation reports evaluated, by verdict (`detected`, `unknown`, `not_detected`), and how often each probe was positive. One positive probe is enough for `detected`, so the indicator counts show which probes fire in practice. They count evaluated reports, not visitors. |
-| `openfingerprint_nonces_total{result}` | Nonces `issued`, and nonces found in checked tokens by outcome: `valid`, `reused`, `expired`, `not_issued`, and `error` (Redis could not store or answer). |
+| `openfingerprint_nonces_total{result}` | Nonces `issued`, and nonces found in checked tokens by outcome: `valid`, `reused`, `expired`, `not_issued`, `missing` (none while required), and `error` (Redis could not store or answer). |
 | `openfingerprint_replay_checks_total{result}` | Token replay checks: `new` (first sighting), `replayed` (seen before) and `error` (Redis could not answer, so `replayed` was left out). |
 | `openfingerprint_http_request_duration_seconds{route,status}` | Histogram of time to produce a response. `route` is `check`, `nonce`, `rpc` or `other`; `status` is `2xx`, `4xx`, `5xx` or `other`. `rpc` covers the Connect/gRPC/gRPC-Web endpoint and reflection; gRPC failures are HTTP 200, so only Connect shows `4xx`. Buckets run from 1 ms to 5 s. |
 | `openfingerprint_check_step_duration_seconds{step}` | Histogram of where a `/v1/check` spends time. Sections: `automation`, `signals`, `domain`, `ip_country`, `ip_network`. The `domain` section runs `domain_mx`, `domain_registration` and `domain_mail_auth` concurrently, so it lasts as long as the slowest, not their sum. Beneath them: `dns_lookup` (each MX or TXT query), `redis_get` and `redis_set` (RDAP cache), `replay` (the token replay marker), `nonce` (marking the token's nonce used), `rdap_fetch` and `whois_fetch` (registry calls on a cache miss, including the wait for a per-registry slot). A step cut short by its timeout is recorded at the time it was cut. |

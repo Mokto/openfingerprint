@@ -18,7 +18,7 @@ OpenFingerprint is an experimental browser-signal SDK and a self-hosted check AP
 | [api/src/main.rs](api/src/main.rs) | HTTP routes, process startup, snapshot reload scheduling, metrics listener and graceful shutdown. |
 | [api/src/check.rs](api/src/check.rs) | Browser-origin refusal, request validation, canonical profile/hash verification, and `/v1/check`. |
 | [api/src/replay.rs](api/src/replay.rs) | Redis token replay markers behind the `replayed` signal. |
-| [api/src/nonce.rs](api/src/nonce.rs) | `POST /v1/nonce` and the single-use nonce outcome behind the `nonce` signal. |
+| [api/src/nonce.rs](api/src/nonce.rs) | `POST /v1/nonce` and the single-use nonce outcome behind the `nonce_invalid` spoofing indicator. |
 | [api/src/domains.rs](api/src/domains.rs), [api/src/mx.rs](api/src/mx.rs) | Licensed domain-snapshot matching, provenance/expiry and bounded DNS MX lookup/provider inference. |
 | [api/src/rdap.rs](api/src/rdap.rs), [api/src/cache.rs](api/src/cache.rs) | Registered-domain RDAP lookup and Redis cache/connection handling. |
 | [api/data/](api/data/), [api/update-domain-data.mjs](api/update-domain-data.mjs) | Bundled source/review metadata, RDAP bootstrap data and the validated domain-snapshot updater. Dataset licenses are separate from the code's MIT license. |
@@ -30,7 +30,7 @@ OpenFingerprint is an experimental browser-signal SDK and a self-hosted check AP
 ## How the pieces connect
 
 - Local collection: `collect()` runs bounded browser probes and returns identity hashes, availability/timing diagnostics and separate automation evidence. Collection failures and browser-policy exclusions are not evidence of malicious behavior.
-- Token trust: the SDK token is obfuscated, not signed, so a script can build one. `/v1/check` reports `replayed` (the same evidence checked before, from a Redis marker) and `tokenAgeMs` (from the token's `collectedAt`) so the backend can limit reuse; neither stops a forger. An optional nonce from `/v1/nonce`, sealed into the token, is reported as `nonce` (valid once, then `false`) and makes stockpiled or edited tokens fail.
+- Token trust: the SDK token is obfuscated, not signed, so a script can build one. `/v1/check` reports `replayed` (the same evidence checked before, from a Redis marker) and `tokenAgeMs` (from the token's `collectedAt`) so the backend can limit reuse; neither stops a forger. An optional nonce from `/v1/nonce`, sealed into the token, counts toward `spoofing` when reused, expired or not issued (or missing, with `OPENFINGERPRINT_REQUIRE_NONCE`), so stockpiled or edited tokens fail.
 - Direct checks: backends call `/v1/check` for independent requested sections. It does not execute browser probes.
 - Domain intelligence: the API matches versioned local snapshots, uses DNS MX evidence where applicable and obtains registered-domain registration dates through RDAP. The separate updater refreshes public datasets; source provenance, licensing and expiry travel with the data.
 

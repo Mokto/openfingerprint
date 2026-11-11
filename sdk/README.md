@@ -180,8 +180,9 @@ backend should act on them:
 For a stronger check, have your backend mint a single-use nonce from the API's
 [`POST /v1/nonce`](../api/README.md#post-v1nonce) for each page and pass it to
 `collect({ nonce })`, as a string or a promise. It is sealed into the token if it has
-resolved by then, and `/v1/check` reports whether it is valid, reused or expired; a
-pending or failed nonce never delays or breaks collection.
+resolved by then, and `/v1/check` reports `spoofing` when it is reused, expired, not
+issued or (if the API requires one) missing; a pending or failed nonce never delays or
+breaks collection.
 
 Forward the `User-Agent`, `Accept-Language` and `Sec-CH-UA*` headers of the same
 request as `headers`, and the API also reports `spoofing`: whether the token

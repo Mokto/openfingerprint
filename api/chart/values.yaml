@@ -37,6 +37,11 @@ sentry:
 service:
   port: 80
 
+nonce:
+  # Count a token without a nonce from /v1/nonce as `spoofing` (nonce_invalid). Enable it only
+  # once every page that collects a token gets a nonce, or honest visitors are flagged.
+  required: false
+
 metrics:
   # Serves /metrics on a separate port that the API's NetworkPolicy opens only to metricsFrom.
   enabled: true

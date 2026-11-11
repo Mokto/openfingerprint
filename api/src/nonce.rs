@@ -19,12 +19,13 @@ use crate::{cache::Link, check::ApiError};
 const TIMEOUT: Duration = Duration::from_millis(250);
 pub const DEFAULT_TTL_SECONDS: u64 = 1800;
 pub const TTL_SECONDS: RangeInclusive<u64> = 60..=86_400;
-const RESULTS: [&str; 6] = [
+const RESULTS: [&str; 7] = [
     "issued",
     "valid",
     "reused",
     "expired",
     "not_issued",
+    "missing",
     "error",
 ];
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -36,6 +37,8 @@ pub enum Status {
     Reused,
     Expired,
     NotIssued,
+    /// The token has none although `OPENFINGERPRINT_REQUIRE_NONCE` is set.
+    Missing,
     /// Redis could not say; never reported as valid or invalid.
     Unavailable,
 }
@@ -163,9 +166,16 @@ impl Nonces {
             Status::Reused => "reused",
             Status::Expired => "expired",
             Status::NotIssued => "not_issued",
+            Status::Missing => "missing",
             Status::Unavailable => "error",
         });
         status
+    }
+
+    /// The outcome for a token without a nonce when one is required.
+    pub fn missing(&self) -> Status {
+        self.count("missing");
+        Status::Missing
     }
 
     pub fn metrics(&self) -> String {

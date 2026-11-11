@@ -9,7 +9,7 @@ package openfingerprint.v1;
 service OpenFingerprint {
   rpc Check(CheckRequest) returns (CheckResponse);
   // A single-use nonce for one page: give it to the SDK (`collect({ nonce })`)
-  // and Check reports whether the token's nonce is valid.
+  // and Check reports `spoofing` when the token's nonce is not valid.
   rpc CreateNonce(CreateNonceRequest) returns (CreateNonceResponse);
 }
 
@@ -52,9 +52,10 @@ message CheckResponse {
   optional string fingerprint = 1;
   optional bool automation = 2;
   optional bool tampering = 3;
-  // The browser's own report (user agent, client hints, language) contradicts
-  // the headers of the request that carried it. Unset without `headers` or when
-  // nothing could be compared.
+  // The token does not belong to the request that carried it: the browser's own
+  // report (user agent, client hints, language) contradicts `headers`, or its
+  // nonce from CreateNonce is reused, expired, not issued here, or missing when
+  // required. Unset when neither is in use or nothing could be compared.
   optional bool spoofing = 18;
   optional bool disposable = 4;
   optional bool free = 5;
@@ -70,10 +71,6 @@ message CheckResponse {
   // Milliseconds from the browser's collection time to now, by the browser's clock: negative
   // when that clock is ahead. Unset when the token has no collection time.
   optional int64 token_age_ms = 17;
-  // The token carries a nonce from CreateNonce that is unexpired and was not
-  // used before; false when it is reused, expired or was never issued. Unset
-  // when the token has no nonce or Redis cannot say.
-  optional bool nonce = 19;
   // Lowercase ISO 3166-1 alpha-2 code.
   optional string country = 9;
   optional bool vpn = 10;
