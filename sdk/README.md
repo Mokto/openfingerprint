@@ -95,12 +95,12 @@ Every `collect()` result and `onIdentity` snapshot includes `automation`.
 Forward `{ signals: result.token }` to a compatible `/v1/check` to receive the evaluation
 in `response.automation` (`response.signals.automation` with `detail: true`). No opt-in or separate call is needed.
 Automation remains outside fingerprint hashes, so the identity schema is unchanged.
-Deploy the compatible API first: older versions reject automation evidence versions they do not define, including version 5.
+Deploy the compatible API first: older versions reject automation evidence versions they do not define, including version 6.
 `collectAutomation()` remains available as a synchronous browser-only helper.
 
 | Field | Observation |
 | --- | --- |
-| `version` | Always `5`, independent of the fingerprint schema. |
+| `version` | Always `6`, independent of the fingerprint schema. |
 | `webdriver` | The boolean `navigator.webdriver` value. |
 | `headlessUserAgent` | A `HeadlessChrome/` token in the user-agent string, or a `HeadlessChrome` brand in `navigator.userAgentData`, which survives a replaced user-agent string. |
 | `seleniumArtifacts` | Presence of `__webdriver_evaluate`, `__selenium_evaluate`, `__webdriver_script_fn` or `__selenium_unwrapped` on `document`. |
@@ -118,6 +118,7 @@ Deploy the compatible API first: older versions reject automation evidence versi
 | `driverArtifacts` | A global left by ChromeDriver (`cdc_…_Array` and similar, `$cdc_…`), other WebDriver and Watir bindings, Playwright's exposed-function binding, NightmareJS or Chrome's `domAutomation`, or a `selenium`, `webdriver` or `driver` attribute on `<html>`. |
 | `engineMismatch` | The JavaScript engine, told apart by its `RangeError` wording, is not the one the user agent claims: V8 for `Chrome/`, SpiderMonkey for `Firefox/`, JavaScriptCore for `Version/… Safari/`. iOS user agents and unrecognized engines are unknown. |
 | `userAgentDataMismatch` | The `Chromium` brand major version in `navigator.userAgentData` differs from the `Chrome/` major version in the user-agent string, as when a script or flag replaces only the string. |
+| `proportionalMonospace` | The generic `monospace` font measures `m` more than 1.5 times wider than `i` in a 2D canvas, so it is not fixed-width. Every platform maps `monospace` to a fixed-width font; Camoufox doesn't when it claims another operating system than its host. Unknown without a 2D canvas. |
 
 The standalone `collectAutomation()` returns `null` for the three `collect()`-only
 observations, which need async or GPU-probe results. The worker probe needs

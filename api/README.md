@@ -457,7 +457,8 @@ The response contains:
 ```
 
 Evidence accepts `version: 1` with four optional booleans, `version: 2`, `3` or `4`
-with those four plus ten more, or `version: 5` with three more after those. Versions 3
+with those four plus ten more, `version: 5` with three more after those, or `version: 6`
+with one more after the version 5 fields. Versions 3
 and 4 have the same fields as version 2; they only change how the SDK observes
 `nativeFunctionTampering` (3) and `cdpDetected` (4), as the table describes. Version 5
 also widens how the SDK observes `headlessUserAgent`, `zeroDimensions` and
@@ -486,6 +487,7 @@ evidence version. Null or omitted observations remain unknown. `indicators` and
 | `driverArtifacts` | `driver_artifacts` | 5 | A ChromeDriver, WebDriver, Watir, Playwright-binding, NightmareJS or `domAutomation` global, or a driver attribute on `<html>`. |
 | `engineMismatch` | `engine_mismatch` | 5 | The JavaScript engine is not the one the UA claims (V8, SpiderMonkey or JavaScriptCore). |
 | `userAgentDataMismatch` | `user_agent_data_mismatch` | 5 | The `Chromium` brand major version differs from the UA's `Chrome/` major version. |
+| `proportionalMonospace` | `proportional_monospace` | 6 | The generic `monospace` font is not fixed-width (Camoufox claiming another OS than its host). |
 
 Rules for every version report `detected` if any observation is true, `unknown`
 if none is true and any is unavailable, or `not_detected` only if every

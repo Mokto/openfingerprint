@@ -1,5 +1,5 @@
 export interface AutomationEvidence {
-	version: 5;
+	version: 6;
 	webdriver: boolean | null;
 	headlessUserAgent: boolean | null;
 	seleniumArtifacts: boolean | null;
@@ -17,6 +17,7 @@ export interface AutomationEvidence {
 	driverArtifacts: boolean | null;
 	engineMismatch: boolean | null;
 	userAgentDataMismatch: boolean | null;
+	proportionalMonospace: boolean | null;
 }
 
 type AsyncKeys = 'notificationPermissionQuirk' | 'workerUserAgentMismatch';
@@ -49,6 +50,18 @@ function chromium(userAgent: string): boolean {
 
 function desktop(userAgent: string): boolean {
 	return !/Mobile|Android/.test(userAgent);
+}
+
+// Every platform maps the generic monospace family to a fixed-width font. Camoufox, when it claims
+// another OS than its host, hides the host's fixed-width fonts and falls back to a proportional one.
+// Canvas text ignores page and extension CSS, unlike DOM text.
+function proportionalMonospace(): boolean | null {
+	const context = document.createElement('canvas').getContext('2d');
+	if (!context) return null;
+	context.font = '20px monospace';
+	const wide = context.measureText('mmmmmmmmmm').width;
+	const narrow = context.measureText('iiiiiiiiii').width;
+	return wide > 0 && narrow > 0 ? wide > narrow * 1.5 : null;
 }
 
 function brands(): { brand: string; version: string }[] | null {
@@ -316,7 +329,7 @@ export function collectAutomation(): AutomationEvidence {
 		throw new Error('A browser context is required');
 	const [cdp, patched] = observeInFrame();
 	return {
-		version: 5,
+		version: 6,
 		webdriver: observe(() => navigator.webdriver),
 		headlessUserAgent: observe(() => {
 			const userAgent = navigator.userAgent;
@@ -356,6 +369,7 @@ export function collectAutomation(): AutomationEvidence {
 		workerUserAgentMismatch: null,
 		driverArtifacts: observe(driverArtifacts),
 		engineMismatch: observe(engineMismatch),
-		userAgentDataMismatch: observe(userAgentDataMismatch)
+		userAgentDataMismatch: observe(userAgentDataMismatch),
+		proportionalMonospace: observe(proportionalMonospace)
 	};
 }

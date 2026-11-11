@@ -178,11 +178,11 @@ try {
 		try {
 			await page.goto(`${origin}/custom`);
 			const automation = await page.evaluate(() => OpenFingerprint.collectAutomation());
-			assert.equal(automation.version, 5);
+			assert.equal(automation.version, 6);
 			assert.equal(automation.cdpDetected, name === 'chromium' || name === 'chrome', 'Playwright enables CDP Runtime in Chromium only');
 			const headlessBrand = await page.evaluate(() =>
 				!!navigator.userAgentData?.brands.some((entry) => entry.brand === 'HeadlessChrome'));
-			for (const key of ['nativeFunctionTampering', 'driverArtifacts', 'engineMismatch', 'userAgentDataMismatch'])
+			for (const key of ['nativeFunctionTampering', 'driverArtifacts', 'engineMismatch', 'userAgentDataMismatch', 'proportionalMonospace'])
 				assert.equal(automation[key], false, `a clean page has no ${key}`);
 			for (const [key, value] of Object.entries(automation)) assert(key === 'version' || value === null || typeof value === 'boolean', key);
 			assert.equal(automation.softwareRenderer, null);
@@ -218,7 +218,7 @@ try {
 					assert.deepEqual(
 						Object.fromEntries(Object.entries(observed).slice(0, 5)),
 						{
-							version: 5,
+							version: 6,
 							webdriver: unreadable ? null : false,
 							headlessUserAgent: unreadable ? null : scenario === 'markers' || headlessBrand,
 							seleniumArtifacts: scenario === 'markers',
@@ -246,10 +246,15 @@ try {
 				define(window, 'chrome', undefined);
 				define(screen, 'width', 0);
 				Function.prototype.toString = function toString() { return 'function toString() {}'; };
+				const measure = CanvasRenderingContext2D.prototype.measureText;
+				CanvasRenderingContext2D.prototype.measureText = function measureText(text) {
+					this.font = this.font.replace('monospace', 'sans-serif');
+					return measure.call(this, text);
+				};
 			});
 			try {
 				const spoofed = await spoof.evaluate(() => OpenFingerprint.collectAutomation());
-				for (const key of ['platformMismatch', 'missingChromeObject', 'emptyPlugins', 'emptyLanguages', 'zeroDimensions', 'nativeFunctionTampering'])
+				for (const key of ['platformMismatch', 'missingChromeObject', 'emptyPlugins', 'emptyLanguages', 'zeroDimensions', 'nativeFunctionTampering', 'proportionalMonospace'])
 					assert.equal(spoofed[key], true, key);
 				const blink = name === 'chromium' || name === 'chrome';
 				assert.equal(spoofed.engineMismatch, !blink, 'a Chrome user agent contradicts a non-V8 engine');
@@ -349,6 +354,7 @@ try {
 			}), true, 'a detached frame with a window, as puppeteer-extra-plugin-stealth fakes, is found');
 			assert.equal(await probe(undefined, true), null, 'no frame means unknown, not a verdict');
 			assert.equal(await probe(undefined, true, 'cdpDetected'), null, 'no frame leaves CDP unknown');
+			assert.equal(await probe(() => { HTMLCanvasElement.prototype.getContext = () => null; }, false, 'proportionalMonospace'), null, 'no 2D canvas leaves monospace unknown');
 			const wrapped = await fresh(() => {
 				const debug = console.debug;
 				window.stackReads = 0;
@@ -1197,7 +1203,7 @@ try {
 			assert(!diagnosticTimeout.excluded.includes('fonts'));
 			assert(diagnosticTimeout.timings.gpu.durationMs >= 0);
 			assert(diagnosticTimeout.durationMs > early.snapshot.durationMs);
-			assert.equal(diagnosticTimeout.automation.version, 5);
+			assert.equal(diagnosticTimeout.automation.version, 6);
 			assert(diagnosticTimeout.components.canvas);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.components.canvas), undefined);
 			assert.equal(await p.evaluate(() => window.earlySnapshot.timings.audio), undefined);
