@@ -214,6 +214,38 @@ abort("Network alerts missing") unless groups.any? { |g| g["name"] == "openfinge
 done
 if grep -q 'network-updater' <<< "$(render)"; then echo "Network sidecar must be opt-in" >&2; exit 1; fi
 echo "Per-pod network sidecar, egress, isolation and alerts passed."
+grep -q 'collect' <<< "$(render)" && { echo "The collection listener must be opt-in" >&2; exit 1; }
+render --set collect.enabled=true --set collect.proxyProtocol=true \
+  --set-json 'collect.origins=["https://app.example.com","https://www.example.com"]' \
+  --set-json 'collect.certificates=[{"host":"c.example.com","secretName":"c-tls"},{"host":"c.example.org","secretName":"org-tls"}]' \
+  --set-json 'networkPolicy.collectFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"traefik"}}}]' > "$rendered"
+ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact.reject { |d| d["metadata"]["name"].start_with?("openfingerprint-redis-ha") }
+pod = docs.find { |d| d["kind"] == "Deployment" }["spec"]["template"]["spec"]
+api = pod["containers"][0]
+env = api["env"].to_h { |e| [e["name"], e["value"]] }
+abort("Collection environment") unless env.values_at("OPENFINGERPRINT_COLLECT_ADDR", "OPENFINGERPRINT_COLLECT_CERTS", "OPENFINGERPRINT_COLLECT_ORIGINS", "OPENFINGERPRINT_COLLECT_PROXY_PROTOCOL") == ["0.0.0.0:8443", "/collect-certs", "https://app.example.com,https://www.example.com", "true"]
+abort("Collection port") unless api["ports"].include?({"name" => "collect", "containerPort" => 8443})
+abort("Certificates mount read-only") unless api["volumeMounts"].include?({"name" => "collect-certs", "mountPath" => "/collect-certs", "readOnly" => true})
+sources = pod["volumes"].find { |v| v["name"] == "collect-certs" }["projected"]["sources"]
+abort("One directory per hostname") unless sources == [["c-tls", "c.example.com"], ["org-tls", "c.example.org"]].map { |name, host| {"secret" => {"name" => name, "items" => [{"key" => "tls.crt", "path" => "#{host}/tls.crt"}, {"key" => "tls.key", "path" => "#{host}/tls.key"}]}} }
+main = docs.find { |d| d["kind"] == "Service" && d["metadata"]["name"] == "openfingerprint" }
+abort("The private Service must not expose the collection port") if main["spec"]["ports"].any? { |p| p["name"] == "collect" }
+collect = docs.find { |d| d["kind"] == "Service" && d["metadata"]["name"] == "openfingerprint-collect" } || abort("Missing collection Service")
+abort("Collection Service") unless collect["spec"]["type"] == "ClusterIP" && collect["spec"]["ports"] == [{"name" => "collect", "port" => 443, "targetPort" => "collect"}] && collect["spec"]["selector"] == main["spec"]["selector"]
+abort("The ServiceMonitor must not select the collection Service") if collect["metadata"]["labels"]["app.kubernetes.io/name"] == "openfingerprint"
+ingress = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-api" }["spec"]["ingress"]
+abort("Collection port open to collectFrom only") unless ingress.map { |r| r["ports"] } == [[{"protocol" => "TCP", "port" => 8180}], [{"protocol" => "TCP", "port" => 8443}], [{"protocol" => "TCP", "port" => 9180}]] && ingress[1]["from"] == [{"namespaceSelector" => {"matchLabels" => {"kubernetes.io/metadata.name" => "traefik"}}}]
+groups = docs.find { |d| d["kind"] == "PrometheusRule" }["spec"]["groups"]
+abort("Certificate reload alert") unless groups.any? { |g| g["name"] == "openfingerprint-collect" && g["rules"].map { |r| r["alert"] } == ["OpenFingerprintCollectCertificateReloadFailing"] }
+' "$rendered"
+collect=(--set collect.enabled=true --set-json 'collect.origins=["*"]' --set-json 'collect.certificates=[{"host":"c.example.com","secretName":"c-tls"}]' --set-json 'networkPolicy.collectFrom=[{"podSelector":{}}]')
+for bad in 'collect.origins=[]' 'collect.certificates=[]' 'collect.certificates=[{"host":"../etc","secretName":"c-tls"}]' 'collect.certificates=[{"host":"c.example.com"}]' 'networkPolicy.collectFrom=[]'; do
+  if render "${collect[@]}" --set-json "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi
+done
+lb=$(render "${collect[@]}" --set collect.service.type=LoadBalancer --set-json 'collect.service.annotations={"load-balancer.hetzner.cloud/uses-proxyprotocol":"true"}')
+grep -q 'load-balancer.hetzner.cloud/uses-proxyprotocol: "true"' <<< "$lb" && grep -q 'type: LoadBalancer' <<< "$lb" || { echo "Collection Service type and annotations" >&2; exit 1; }
+echo "Opt-in collection listener, certificates, separate Service, ingress policy and alert passed."
 for bad in "redis-ha.enabled=false" "image.digest=invalid" "domainData.refresh.image.digest=sha256:short" "networkPolicy.redisTo=bad" "networkPolicy.redisPort=0" "networkPolicy.redisPort=65536" "networkPolicy.redisPort=6379.5"; do
   if render --set "$bad" >/dev/null 2>&1; then echo "Rendering must fail with $bad" >&2; exit 1; fi
 done

@@ -37,6 +37,28 @@ sentry:
 service:
   port: 80
 
+# Optional public TLS listener for browser collection (POST /v1/events). The API terminates TLS
+# itself to read the browser's handshake, so route the port with TCP passthrough (a
+# LoadBalancer Service, Traefik IngressRouteTCP with passthrough), never through a proxy that
+# terminates TLS. Only this port is meant to be public; the API port stays private.
+collect:
+  enabled: false
+  port: 8443
+  # Required: page origins allowed to post events, such as https://app.example.com, or ["*"].
+  origins: []
+  # true when the load balancer or TCP proxy in front sends the PROXY protocol (v1 or v2);
+  # connections without it are then dropped.
+  proxyProtocol: false
+  # Required: kubernetes.io/tls Secrets, such as cert-manager certificates, each serving one
+  # hostname: [{host: collect.example.com, secretName: collect-example-com-tls}].
+  certificates: []
+  # The separate <release>-collect Service. Set type LoadBalancer and your provider's
+  # annotations to expose it directly instead of through an ingress controller.
+  service:
+    type: ClusterIP
+    port: 443
+    annotations: {}
+
 metrics:
   # Serves /metrics on a separate port that the API's NetworkPolicy opens only to metricsFrom.
   enabled: true
@@ -166,6 +188,9 @@ networkPolicy:
   apiFrom: []
   # Peers allowed to scrape the metrics port, for example Prometheus.
   metricsFrom: []
+  # Required with collect.enabled: peers allowed to reach the collection port, such as the
+  # ingress controller's namespace, or an ipBlock for a LoadBalancer that keeps client IPs.
+  collectFrom: []
   # The updater needs DNS, HTTPS to GitHub and the Kubernetes API (often 6443 behind the
   # kubernetes Service).
   kubeApiServerPorts: [6443]
