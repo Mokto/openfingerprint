@@ -12,8 +12,9 @@ below, skip the PR and only report.
 
 ## Steps
 
-1. Work on a fresh branch from `origin/main`. The weekly job already starts in a
-   detached worktree of `origin/main`; create the branch there.
+1. Work on a fresh branch from `origin/main`. When the checkout has another branch
+   or uncommitted changes, create a worktree for the new branch instead of
+   switching.
 2. Run `pnpm install --frozen-lockfile` and `pnpm build`.
 3. Run the harness from the repo root and keep its output for the PR:
    `node .agents/skills/stealth-detection-review/scripts/harness.mjs`.
