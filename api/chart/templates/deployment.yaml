@@ -1,4 +1,11 @@
 {{- if and (not (index .Values "redis-ha").enabled) (not .Values.existingSecret) }}{{ fail "existingSecret must name the Secret holding OPENFINGERPRINT_REDIS_URL when redis-ha.enabled=false" }}{{ end }}
+{{- if .Values.collect.enabled }}
+{{- if or (not (kindIs "slice" .Values.collect.origins)) (empty .Values.collect.origins) }}{{ fail "collect.origins must list the page origins allowed to post events, or [\"*\"]" }}{{ end }}
+{{- if or (not (kindIs "slice" .Values.collect.certificates)) (empty .Values.collect.certificates) }}{{ fail "collect.certificates must list the TLS Secrets of the collection hostnames" }}{{ end }}
+{{- range .Values.collect.certificates }}
+{{- if not (and (kindIs "string" .host) (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$" .host) .secretName) }}{{ fail "each collect.certificates entry needs a lowercase hostname as host and a secretName" }}{{ end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,6 +59,10 @@ spec:
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
             {{- end }}
+            {{- if .Values.collect.enabled }}
+            - name: collect
+              containerPort: {{ .Values.collect.port }}
+            {{- end }}
           env:
             - name: OPENFINGERPRINT_LISTEN_ADDR
               value: 0.0.0.0:8180
@@ -93,6 +104,16 @@ spec:
             - name: OPENFINGERPRINT_NETWORK_DATA
               value: /network-data/network.json
             {{- end }}
+            {{- if .Values.collect.enabled }}
+            - name: OPENFINGERPRINT_COLLECT_ADDR
+              value: "0.0.0.0:{{ .Values.collect.port }}"
+            - name: OPENFINGERPRINT_COLLECT_CERTS
+              value: /collect-certs
+            - name: OPENFINGERPRINT_COLLECT_ORIGINS
+              value: {{ join "," .Values.collect.origins | quote }}
+            - name: OPENFINGERPRINT_COLLECT_PROXY_PROTOCOL
+              value: {{ .Values.collect.proxyProtocol | toString | quote }}
+            {{- end }}
           {{- if .Values.existingSecret }}
           envFrom:
             - secretRef:
@@ -118,7 +139,7 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled .Values.networkData.existingClaim .Values.networkData.sidecar.enabled }}
+          {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled .Values.networkData.existingClaim .Values.networkData.sidecar.enabled .Values.collect.enabled }}
           volumeMounts:
             {{- if .Values.domainData.refresh.enabled }}
             - name: domain-data
@@ -133,6 +154,11 @@ spec:
             {{- if .Values.countryData.enabled }}
             - name: country-data
               mountPath: /country-data
+              readOnly: true
+            {{- end }}
+            {{- if .Values.collect.enabled }}
+            - name: collect-certs
+              mountPath: /collect-certs
               readOnly: true
             {{- end }}
           {{- end }}
@@ -163,7 +189,7 @@ spec:
             - name: network-data
               mountPath: /network-data
         {{- end }}
-      {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled .Values.networkData.existingClaim .Values.networkData.sidecar.enabled }}
+      {{- if or .Values.domainData.refresh.enabled .Values.countryData.enabled .Values.networkData.existingClaim .Values.networkData.sidecar.enabled .Values.collect.enabled }}
       volumes:
         {{- if .Values.countryData.enabled }}
         - name: country-data
@@ -185,6 +211,22 @@ spec:
         - name: network-data
           persistentVolumeClaim:
             claimName: {{ .Values.networkData.existingClaim | quote }}
+        {{- end }}
+        {{- if .Values.collect.enabled }}
+        # One directory per hostname, the layout the listener reads. A projected volume follows
+        # Secret renewals, which the API rereads every 5 minutes.
+        - name: collect-certs
+          projected:
+            sources:
+              {{- range .Values.collect.certificates }}
+              - secret:
+                  name: {{ .secretName | quote }}
+                  items:
+                    - key: tls.crt
+                      path: {{ printf "%s/tls.crt" .host | quote }}
+                    - key: tls.key
+                      path: {{ printf "%s/tls.key" .host | quote }}
+              {{- end }}
         {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}

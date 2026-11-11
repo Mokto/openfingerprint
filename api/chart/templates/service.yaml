@@ -18,3 +18,25 @@ spec:
       port: {{ .Values.metrics.port }}
       targetPort: metrics
     {{- end }}
+{{- if .Values.collect.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "of.name" . }}-collect
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+    app.kubernetes.io/name: openfingerprint-collect
+  {{- with .Values.collect.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.collect.service.type }}
+  selector:
+    {{- include "of.apiSelector" . | nindent 4 }}
+  ports:
+    - name: collect
+      port: {{ .Values.collect.service.port }}
+      targetPort: collect
+{{- end }}
