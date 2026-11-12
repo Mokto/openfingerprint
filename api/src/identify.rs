@@ -107,6 +107,7 @@ pub fn metrics() -> String {
         CERTIFICATES.load(Ordering::Relaxed),
         CERT_RELOAD_FAILURES.load(Ordering::Relaxed),
     );
+    out.push_str(&crate::behavior::metrics());
     out
 }
 
@@ -719,6 +720,7 @@ async fn create(
         );
     }
     count(&RESULT_COUNTS, &RESULTS, "stored");
+    crate::behavior::observe_stored(&record.evidence["behavior"]);
     let client = match peer.ja4.as_deref() {
         None => "none",
         Some(ja4) => match crate::tls::client(ja4) {

@@ -19,6 +19,7 @@ certificate(join(certs, 'collect.example.test'), 'collect.example.test', false);
 mkdirSync(join(certs, '..data'));
 
 const store = new Map();
+let refuseNextStore = false;
 const redis = createServer((socket) => {
 	let buffer = '';
 	socket.on('data', (chunk) => {
@@ -33,7 +34,10 @@ const redis = createServer((socket) => {
 				const v = store.get(args[1]);
 				socket.write(v === undefined ? '$-1\r\n' : `$${Buffer.byteLength(v)}\r\n${v}\r\n`);
 			} else if (args[0] === 'SET' && args[3] === 'NX') {
-				if (store.has(args[1])) socket.write('$-1\r\n');
+				if (refuseNextStore) {
+					refuseNextStore = false;
+					socket.write('$-1\r\n');
+				} else if (store.has(args[1])) socket.write('$-1\r\n');
 				else {
 					store.set(args[1], args[2]);
 					socket.write('+OK\r\n');
@@ -193,10 +197,44 @@ try {
 	assert.equal(await peer('COLLECT.example.test'), 'collect.example.test');
 	assert.equal(await peer('other.test'), 'default.test');
 
+	phase = 'behavior metrics count stored snapshots, not repeated evaluations';
+	const observation = (version, sample) => `openfingerprint_behavior_observations_total{evidence="${version}",mouse_clicks="${sample}"}`;
+	const patternMetric = (version, sample, pattern) => `openfingerprint_behavior_patterns_total{evidence="${version}",mouse_clicks="${sample}",pattern="${pattern}"}`;
+	assert.equal(await metric(observation('missing', 'unknown')), 2);
+	for (const version of [1, 2]) {
+		for (const [clicks, sample] of [[0, '0'], [1, '1'], [2, '2'], [3, '3_4'], [4, '3_4'], [5, '5_9'], [9, '5_9'], [10, '10_plus']]) {
+			const watched = { version, watchedMs: 1200, pointerMoves: clicks, mouseClicks: clicks, clicksWithoutMovement: clicks, centeredClicks: clicks, keys: 0, instantKeys: 0, insertedTexts: 0, touches: 0, wheels: 0, untrustedEvents: 0 };
+			const body = { ...JSON.parse(evidence()), behavior: watched };
+			const series = observation(`v${version}`, sample);
+			const before = await metric(series);
+			const created = await post(JSON.stringify(body), allowed);
+			assert.equal(created.status, 200, created.text);
+			assert.equal(await metric(series), before + 1);
+			const id = JSON.parse(created.text).identificationId;
+			for (let i = 0; i < 3; i++) {
+				const detail = (await check({ identificationId: id, detail: true })).body.identification;
+				assert.equal(detail.fingerprint, compact.fingerprint, 'behavior never changes identity');
+				assert.deepEqual(detail.behavior, { status: 'observed', ruleVersion: 1, source: 'client_reported', patterns: clicks ? ['clicks_without_movement', 'centered_clicks'] : ['no_input'] });
+			}
+			assert.equal(await metric(series), before + 1, 'checks do not recount observations');
+			for (const pattern of clicks ? ['clicks_without_movement', 'centered_clicks'] : ['no_input'])
+				assert.equal(await metric(patternMetric(`v${version}`, sample, pattern)), before + 1);
+		}
+	}
+	const beforeInvalid = await metric(observation('v2', '1'));
+	assert.equal((await post(JSON.stringify({ ...JSON.parse(evidence()), behavior: { version: 3 } }), allowed)).status, 400);
+	assert.equal(await metric(observation('v2', '1')), beforeInvalid, 'rejected reports are not observations');
+	assert.equal(await metric(observation('missing', 'unknown')), 2, 'missing is not observed zero input');
+
+	refuseNextStore = true;
+	assert.equal((await post(evidence(), allowed)).status, 503, 'failed storage is not an observation');
+	assert.equal(await metric(observation('missing', 'unknown')), 2);
+
 	phase = 'rate limit and metrics';
+	const consumed = (await Promise.all(['stored', 'invalid', 'error'].map(result => metric(`openfingerprint_identifications_total{result="${result}"}`)))).reduce((a, b) => a + b, 0);
 	let limited = 0;
 	for (let i = 0; i < 61 && !limited; i++) if ((await post(evidence(), allowed)).status === 429) limited = i;
-	assert(limited > 50, `the per-network limit applies after 60 identifications a minute (${limited})`);
+	assert.equal(limited, 60 - consumed, 'the per-network limit applies after exactly 60 allowed-origin posts a minute');
 	for (const [name, minimum] of [
 		['openfingerprint_identifications_total{result="stored"}', 2],
 		['openfingerprint_identifications_total{result="origin_refused"}', 2],

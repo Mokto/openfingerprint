@@ -43,7 +43,7 @@
 	"scripts": {
 		"check": "tsc -p tsconfig.json --noEmit",
 		"build": "node build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
-		"test": "node test.mjs"
+		"test": "node test.mjs && node test-behavior.mjs"
 	},
 	"devDependencies": {
 		"@fingerprintjs/fingerprintjs": "5.3.0",

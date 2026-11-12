@@ -1,3 +1,8 @@
+use std::{
+    fmt::Write,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -33,7 +38,7 @@ impl Check {
 
 fn counts(value: &Value) -> Option<&Map<String, Value>> {
     let fields = value.as_object()?;
-    let valid = fields.get("version").and_then(Value::as_u64) == Some(1)
+    let valid = matches!(fields.get("version").and_then(Value::as_u64), Some(1 | 2))
         && fields.len() == COUNTS.len() + 1
         && COUNTS
             .iter()
@@ -91,6 +96,80 @@ pub fn check(value: Value) -> Check {
     }
 }
 
+const SAMPLES: [&str; 6] = ["0", "1", "2", "3_4", "5_9", "10_plus"];
+const PATTERNS: [&str; 5] = [
+    "clicks_without_movement",
+    "centered_clicks",
+    "instant_keys",
+    "text_without_keys",
+    "no_input",
+];
+static MISSING: AtomicU64 = AtomicU64::new(0);
+static OBSERVATIONS: [[AtomicU64; SAMPLES.len()]; 2] =
+    [const { [const { AtomicU64::new(0) }; SAMPLES.len()] }; 2];
+static MATCHES: [[[AtomicU64; PATTERNS.len()]; SAMPLES.len()]; 2] =
+    [const { [const { [const { AtomicU64::new(0) }; PATTERNS.len()] }; SAMPLES.len()] }; 2];
+
+pub(crate) fn observe_stored(value: &Value) {
+    if value.is_null() {
+        MISSING.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let Some(fields) = counts(value) else {
+        return;
+    };
+    let version = fields["version"].as_u64().unwrap() as usize - 1;
+    let sample = match fields["mouseClicks"].as_u64().unwrap() {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3..=4 => 3,
+        5..=9 => 4,
+        _ => 5,
+    };
+    OBSERVATIONS[version][sample].fetch_add(1, Ordering::Relaxed);
+    for pattern in check(value.clone()).patterns {
+        if let Some(i) = PATTERNS.iter().position(|p| *p == pattern) {
+            MATCHES[version][sample][i].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+pub(crate) fn metrics() -> String {
+    let mut out = String::from(
+        "# HELP openfingerprint_behavior_observations_total Stored identification snapshots by evidence version and mouse-click sample size; not unique visitors.\n# TYPE openfingerprint_behavior_observations_total counter\n",
+    );
+    let _ = writeln!(
+        out,
+        "openfingerprint_behavior_observations_total{{evidence=\"missing\",mouse_clicks=\"unknown\"}} {}",
+        MISSING.load(Ordering::Relaxed)
+    );
+    for (version, samples) in OBSERVATIONS.iter().enumerate() {
+        for (sample, count) in SAMPLES.iter().zip(samples) {
+            let _ = writeln!(
+                out,
+                "openfingerprint_behavior_observations_total{{evidence=\"v{}\",mouse_clicks=\"{sample}\"}} {}",
+                version + 1,
+                count.load(Ordering::Relaxed)
+            );
+        }
+    }
+    out.push_str("# HELP openfingerprint_behavior_patterns_total Existing ruleVersion 1 pattern matches per stored identification snapshot; frequency is not accuracy.\n# TYPE openfingerprint_behavior_patterns_total counter\n");
+    for (version, samples) in MATCHES.iter().enumerate() {
+        for (sample, patterns) in SAMPLES.iter().zip(samples) {
+            for (pattern, count) in PATTERNS.iter().zip(patterns) {
+                let _ = writeln!(
+                    out,
+                    "openfingerprint_behavior_patterns_total{{evidence=\"v{}\",mouse_clicks=\"{sample}\",pattern=\"{pattern}\"}} {}",
+                    version + 1,
+                    count.load(Ordering::Relaxed)
+                );
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,15 +213,43 @@ mod tests {
     }
 
     #[test]
+    fn both_evidence_versions_keep_descriptive_rule_semantics() {
+        for version in [1, 2] {
+            for clicks in [1, 2, 4, 5, 10, 100] {
+                let result = check(report(json!({
+                    "version": version, "mouseClicks": clicks,
+                    "clicksWithoutMovement": clicks, "centeredClicks": clicks
+                })));
+                assert_eq!(result.rule_version, 1);
+                assert_eq!(
+                    result.patterns,
+                    ["clicks_without_movement", "centered_clicks"]
+                );
+                assert_eq!(result.status, "observed");
+                let mixed = check(report(json!({
+                    "version": version, "mouseClicks": clicks + 1,
+                    "clicksWithoutMovement": clicks, "centeredClicks": clicks
+                })));
+                assert!(mixed.patterns.is_empty());
+            }
+            for input in ["keys", "touches", "wheels", "pointerMoves"] {
+                let mut value = report(json!({"version": version}));
+                value[input] = json!(1);
+                assert!(check(value).patterns.is_empty(), "{input}");
+            }
+        }
+    }
+
+    #[test]
     fn malformed_reports_are_invalid() {
         let mut missing = report(json!({}));
         missing.as_object_mut().unwrap().remove("wheels");
         for value in [
             json!(null),
             json!({}),
-            json!({"version": 2}),
+            json!({"version": 3}),
             missing,
-            report(json!({"version": 2})),
+            report(json!({"version": 3})),
             report(json!({"keys": -1})),
             report(json!({"keys": 1.5})),
             report(json!({"keys": "1"})),
