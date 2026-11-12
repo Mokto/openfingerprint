@@ -61,6 +61,8 @@ message CheckResponse {
   // centered_clicks, instant_keys, text_without_keys, no_input. Real users can produce each,
   // so they are context, not a verdict. Empty when none matched; unset without watch().
   repeated string behavior = 19;
+  // Context only, not an automation verdict; unset when evidence is insufficient.
+  optional bool suspicious_click_pattern = 23;
   // Only with `detail` and an `identification_id`: the identification section of
   // POST /v1/check with `detail: true`.
   IdentificationDetail identification = 21;
@@ -136,4 +138,5 @@ message BehaviorCheck {
   // Same values as CheckResponse.behavior.
   repeated string patterns = 4;
   optional string reason = 5;
+  optional bool suspicious_click_pattern = 6;
 }

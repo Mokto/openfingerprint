@@ -479,11 +479,28 @@ try {
         [{}, ['no_input']]
     ]) {
         const result = await checked({ ...signals(), behavior: behavior(counts) });
-        assert.deepEqual(result.behavior, { status: 'observed', ruleVersion: 1, source: 'client_reported', patterns });
+        assert.deepEqual(result.behavior, { status: 'observed', ruleVersion: 2, source: 'client_reported', patterns, suspiciousClickPattern: null });
     }
     for (const invalid of [false, { version: 2 }, behavior({ keys: -1 }), behavior({ extra: 1 })])
         assert.equal((await identifyRaw({ ...signals(), behavior: invalid })).status, 400);
     assert.equal((await checked(signals())).behavior, undefined, 'no watch(), no section');
+    for (const [counts, expected] of [
+        [{ mouseClicks: 3, clicksWithoutMovement: 3, centeredClicks: 3 }, true],
+        [{ mouseClicks: 3, clicksWithoutMovement: 2, centeredClicks: 3 }, false],
+        [{ mouseClicks: 3, clicksWithoutMovement: 3, centeredClicks: 2 }, false],
+        [{ mouseClicks: 2, clicksWithoutMovement: 2, centeredClicks: 2 }, null],
+        [{}, null],
+        [{ keys: 10, touches: 10 }, null],
+        [{ version: 1, mouseClicks: 3, clicksWithoutMovement: 3, centeredClicks: 3 }, null]
+    ]) {
+        for (const observations of [automation, { version: 7 }, { ...automation, webdriver: true }]) {
+            const baseline = await checked({ ...signals(), automation: observations });
+            const result = await checked({ ...signals(), automation: observations, behavior: behavior({ version: 2, ...counts }) });
+            assert.equal(result.behavior.suspiciousClickPattern, expected);
+            assert.deepEqual(result.automation, baseline.automation, 'a suspicious click pattern never changes automation');
+            assert.deepEqual(core(result), core(baseline), 'the flag never changes identity');
+        }
+    }
     console.log('Automation, tampering and behavior rules, unknowns, stable identities and rejected parts passed.');
 
     phase = 'compact responses, gRPC and Connect';
@@ -668,6 +685,36 @@ try {
     const noIdentification = await (await connectCheck({ ip: 'nope', detail: true })).json();
     assert.deepEqual(noIdentification, { invalid: ['ip'] });
     assert.equal((await fetch(origin + rpcCheck, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.test' }, body: '{"ip":"8.8.8.8"}' })).status, 403);
+
+    phase = 'suspicious click pattern has tri-state presence across transports';
+    for (const [counts, expected] of [
+        [{ mouseClicks: 3, clicksWithoutMovement: 3, centeredClicks: 3 }, true],
+        [{ mouseClicks: 3, clicksWithoutMovement: 2, centeredClicks: 3 }, false],
+        [{ mouseClicks: 3, clicksWithoutMovement: 3, centeredClicks: 2 }, false],
+        [{ mouseClicks: 2, clicksWithoutMovement: 2, centeredClicks: 2 }, null],
+        [{}, null],
+        [{ version: 1, mouseClicks: 3, clicksWithoutMovement: 3, centeredClicks: 3 }, null],
+        [null, null]
+    ]) {
+        const identificationId = await identified({ ...signals(), automation, behavior: counts === null ? null : behavior({ version: 2, ...counts }) });
+        const rest = await compactCall({ identificationId });
+        const connected = await (await connectCheck({ identificationId, detail: true })).json();
+        const wire = await grpcCall({ 6: identificationId, 7: true });
+        assert.equal(wire.status, 0);
+        assert.equal(rest.suspiciousClickPattern, expected ?? undefined);
+        assert.equal(connected.suspiciousClickPattern, expected ?? undefined);
+        assert.equal(connected.identification.behavior?.suspiciousClickPattern, expected ?? undefined);
+        assert.equal(wire.decoded[23], expected ?? undefined);
+        const detail = protobufFields(wire.decoded[21]);
+        assert.equal(detail[14] ? protobufFields(detail[14])[6] : undefined, expected === null ? undefined : Number(expected));
+        for (const response of [rest, connected]) {
+            assert.equal(response.fingerprint, shortId(signals().fingerprint));
+            assert.equal(response.automation, false, 'behavior is not an automation verdict');
+        }
+        const detailedRest = (await (await request('/v1/check', {}, { identificationId })).json()).identification;
+        if (counts !== null) assert.equal(detailedRest.behavior.suspiciousClickPattern, expected);
+        else assert.equal(detailedRest.behavior, undefined);
+    }
 
     phase = 'spoofing compares the evidence with the request the listener received';
     const claims = {
