@@ -126,7 +126,7 @@ mod tests {
         let response: CheckResponse = serde_json::from_value(serde_json::json!({
             "fingerprint":"abc","automation":true,"tampering":false,"spoofing":true,"disposable":true,
             "free":false,"spam":true,"relay":false,"cheapTld":true,"replayed":true,"ageMs":1500,"mx":true,"country":"dk","vpn":true,
-            "tor":false,"datacenter":true,"proxy":false,"invalid":["ip"]
+            "tor":false,"datacenter":true,"proxy":false,"suspiciousClickPattern":false,"invalid":["ip"]
         }))
         .unwrap();
         assert_eq!(response.fingerprint.as_deref(), Some("abc"));
@@ -165,6 +165,7 @@ mod tests {
                 Some(false)
             ]
         );
+        assert_eq!(response.suspicious_click_pattern, Some(false));
         assert_eq!(response.age_ms, Some(1500));
         assert_eq!(response.invalid, ["ip"]);
         assert_eq!(
@@ -311,6 +312,50 @@ mod tests {
                 (Some(1), Some(0), Some(0), Some(0))
             );
             assert_eq!((rpc.replayed, detail.replayed), (Some(true), Some(true)));
+        }
+    }
+
+    #[tokio::test]
+    async fn click_flag_keeps_true_false_and_unknown_in_both_shapes() {
+        let (addr, _) = crate::cache::tests::fake_redis(None).await;
+        let state = crate::check::tests::state_with_redis(&addr);
+        for (i, (version, clicks, low, centered, expected)) in [
+            (2, 3, 3, 3, Some(true)),
+            (2, 3, 2, 3, Some(false)),
+            (2, 3, 3, 2, Some(false)),
+            (2, 2, 2, 2, None),
+            (2, 0, 0, 0, None),
+            (1, 3, 3, 3, None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = format!("ClickIdentification{i:03}");
+            let mut record = record(Some(CHROME_JA4));
+            for (key, value) in [
+                ("version", version),
+                ("mouseClicks", clicks),
+                ("clicksWithoutMovement", low),
+                ("centeredClicks", centered),
+            ] {
+                record.evidence["behavior"][key] = serde_json::json!(value);
+            }
+            state.identifications.store(&id, &record).await.unwrap();
+            let rpc = Box::pin(parity(&state, &id)).await;
+            assert_eq!(rpc.suspicious_click_pattern, expected);
+            let behavior = rpc
+                .identification
+                .as_option()
+                .unwrap()
+                .behavior
+                .as_option()
+                .unwrap();
+            assert_eq!(behavior.suspicious_click_pattern, expected);
+            assert_eq!(behavior.rule_version, Some(2));
+            let compact = Box::pin(respond(&state, input(Some(id.into()), None)))
+                .await
+                .unwrap();
+            assert_eq!(compact.suspicious_click_pattern, expected);
         }
     }
 

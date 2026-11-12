@@ -27,6 +27,7 @@ pub struct Check {
     rule_version: u8,
     source: &'static str,
     patterns: Vec<&'static str>,
+    suspicious_click_pattern: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
 }
@@ -53,9 +54,10 @@ pub fn check(value: Value) -> Check {
     let Some(fields) = counts(&value) else {
         return Check {
             status: "invalid_input",
-            rule_version: 1,
+            rule_version: 2,
             source: "client_reported",
             patterns: Vec::new(),
+            suspicious_click_pattern: None,
             reason: Some("invalid_behavior"),
         };
     };
@@ -89,8 +91,11 @@ pub fn check(value: Value) -> Check {
     }
     Check {
         status: "observed",
-        rule_version: 1,
+        rule_version: 2,
         source: "client_reported",
+        suspicious_click_pattern: (fields["version"] == 2 && clicks >= 3).then(|| {
+            patterns.contains(&"clicks_without_movement") && patterns.contains(&"centered_clicks")
+        }),
         patterns,
         reason: None,
     }
@@ -105,6 +110,7 @@ const PATTERNS: [&str; 5] = [
     "no_input",
 ];
 static MISSING: AtomicU64 = AtomicU64::new(0);
+static CLICK_FLAGS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
 static OBSERVATIONS: [[AtomicU64; SAMPLES.len()]; 2] =
     [const { [const { AtomicU64::new(0) }; SAMPLES.len()] }; 2];
 static MATCHES: [[[AtomicU64; PATTERNS.len()]; SAMPLES.len()]; 2] =
@@ -113,6 +119,7 @@ static MATCHES: [[[AtomicU64; PATTERNS.len()]; SAMPLES.len()]; 2] =
 pub(crate) fn observe_stored(value: &Value) {
     if value.is_null() {
         MISSING.fetch_add(1, Ordering::Relaxed);
+        CLICK_FLAGS[2].fetch_add(1, Ordering::Relaxed);
         return;
     }
     let Some(fields) = counts(value) else {
@@ -128,7 +135,14 @@ pub(crate) fn observe_stored(value: &Value) {
         _ => 5,
     };
     OBSERVATIONS[version][sample].fetch_add(1, Ordering::Relaxed);
-    for pattern in check(value.clone()).patterns {
+    let result = check(value.clone());
+    let flag = match result.suspicious_click_pattern {
+        Some(true) => 0,
+        Some(false) => 1,
+        None => 2,
+    };
+    CLICK_FLAGS[flag].fetch_add(1, Ordering::Relaxed);
+    for pattern in result.patterns {
         if let Some(i) = PATTERNS.iter().position(|p| *p == pattern) {
             MATCHES[version][sample][i].fetch_add(1, Ordering::Relaxed);
         }
@@ -154,7 +168,7 @@ pub(crate) fn metrics() -> String {
             );
         }
     }
-    out.push_str("# HELP openfingerprint_behavior_patterns_total Existing ruleVersion 1 pattern matches per stored identification snapshot; frequency is not accuracy.\n# TYPE openfingerprint_behavior_patterns_total counter\n");
+    out.push_str("# HELP openfingerprint_behavior_patterns_total Descriptive pattern matches per stored identification snapshot; frequency is not accuracy.\n# TYPE openfingerprint_behavior_patterns_total counter\n");
     for (version, samples) in MATCHES.iter().enumerate() {
         for (sample, patterns) in SAMPLES.iter().zip(samples) {
             for (pattern, count) in PATTERNS.iter().zip(patterns) {
@@ -166,6 +180,14 @@ pub(crate) fn metrics() -> String {
                 );
             }
         }
+    }
+    out.push_str("# HELP openfingerprint_suspicious_click_patterns_total Click-pattern context flags per stored identification snapshot, not automation verdicts or accuracy.\n# TYPE openfingerprint_suspicious_click_patterns_total counter\n");
+    for (result, count) in ["true", "false", "unknown"].iter().zip(&CLICK_FLAGS) {
+        let _ = writeln!(
+            out,
+            "openfingerprint_suspicious_click_patterns_total{{result=\"{result}\"}} {}",
+            count.load(Ordering::Relaxed)
+        );
     }
     out
 }
@@ -220,7 +242,7 @@ mod tests {
                     "version": version, "mouseClicks": clicks,
                     "clicksWithoutMovement": clicks, "centeredClicks": clicks
                 })));
-                assert_eq!(result.rule_version, 1);
+                assert_eq!(result.rule_version, 2);
                 assert_eq!(
                     result.patterns,
                     ["clicks_without_movement", "centered_clicks"]
@@ -241,6 +263,45 @@ mod tests {
     }
 
     #[test]
+    fn suspicious_clicks_need_v2_samples_and_both_patterns() {
+        for version in [1, 2] {
+            for clicks in 0_u64..=10 {
+                for (low, centered) in [
+                    (clicks, clicks),
+                    (clicks.saturating_sub(1), clicks),
+                    (clicks, clicks.saturating_sub(1)),
+                ] {
+                    let result = check(report(json!({
+                        "version": version, "mouseClicks": clicks,
+                        "clicksWithoutMovement": low, "centeredClicks": centered
+                    })));
+                    let expected = (version == 2 && clicks >= 3)
+                        .then_some(low == clicks && centered == clicks);
+                    assert_eq!(
+                        result.suspicious_click_pattern, expected,
+                        "{version}/{clicks}/{low}/{centered}"
+                    );
+                    assert_eq!(
+                        serde_json::to_value(result).unwrap()["suspiciousClickPattern"],
+                        json!(expected)
+                    );
+                }
+            }
+        }
+        for input in [
+            "keys",
+            "touches",
+            "wheels",
+            "insertedTexts",
+            "untrustedEvents",
+        ] {
+            let mut value = report(json!({"version": 2}));
+            value[input] = json!(10);
+            assert_eq!(check(value).suspicious_click_pattern, None, "{input}");
+        }
+    }
+
+    #[test]
     fn malformed_reports_are_invalid() {
         let mut missing = report(json!({}));
         missing.as_object_mut().unwrap().remove("wheels");
@@ -256,6 +317,7 @@ mod tests {
             report(json!({"extra": 0})),
         ] {
             let result = check(value.clone());
+            assert_eq!(result.suspicious_click_pattern, None);
             assert_eq!(
                 (result.status, result.reason),
                 ("invalid_input", Some("invalid_behavior")),

@@ -244,6 +244,7 @@ A key that is missing means unknown, so there are no `null` facts. Only the
 | `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
 | `spoofing` | The browser's own report contradicts the request the public listener received: its headers or its TLS handshake. |
 | `behavior` | [Input patterns](#behavior-patterns) since the page called the SDK's `watch()`, as a list. Context, not a verdict. Only for pages that call `watch()`. |
+| `suspiciousClickPattern` | Repeated mouse clicks match both click patterns below. Context only, separate from `automation`; omitted when evidence is missing, legacy or insufficient. |
 | `disposable`, `free`, `spam`, `relay`, `cheapTld`, `mx` | From `domain` or the domain of `email`. `free` is a public mailbox; `cheapTld` says the TLD is one registrars sell at teaser prices; `mx` says the domain has mail servers. |
 | `country`, `vpn`, `tor`, `datacenter`, `proxy` | From `ip`. `country` is a lowercase ISO 3166-1 alpha-2 code. |
 | `invalid` | Only present when an input was rejected: a list of `identificationId` (malformed, unknown or expired), `domain`, `email` and/or `ip`. |
@@ -572,7 +573,7 @@ does not rule out tampering that spares these two reads, such as a spoofed value
 After the SDK's `watch()`, the evidence carries `behavior`: counts of trusted pointer,
 click, key, touch and wheel input since the page called it (see the
 [SDK guide](../sdk/README.md#watching-the-page)). `/v1/check` returns
-`identification.behavior` with `status: "observed"`, `ruleVersion: 1`,
+`identification.behavior` with `status: "observed"`, `ruleVersion: 2`,
 `source: "client_reported"` and the `patterns` that matched:
 
 | Pattern | Matches when |
@@ -590,7 +591,8 @@ at page load match some of them. Evidence accepts `version: 1` or `version: 2` w
 same exact fields and every count as a non-negative integer. Version 2 requires a mouse
 press as well as a mouse click, fixing WebKit touch compatibility clicks that version 1
 could miscount. Deploy this compatible API before an SDK emitting version 2. The
-existing descriptive rules retain `ruleVersion: 1`; their meaning has not changed.
+behavior evaluation is now `ruleVersion: 2` for the new context flag below; the existing
+pattern meanings have not changed.
 Evidence without `watch()` has no section, not an empty/clean evaluation. An observed
 zero-input snapshot matches `no_input`, not automation.
 
@@ -601,6 +603,39 @@ off-centre clicks. These are behavioral context, never automatic bot verdicts or
 signup/login blocking rules. See the [controlled study](../evaluation/behavior.md) for
 sample-size guidance and limitations. No transmitted counters or identity inputs were
 added.
+
+##### Suspicious click pattern
+
+The API derives `suspiciousClickPattern` from those same aggregates, with no additional
+SDK collection. It is a **reviewable pattern, not a bot verdict**, and never changes
+`automation`, identity hashes or protected-action decisions.
+
+| Value | Meaning |
+| --- | --- |
+| `true` | Behavior evidence v2 has at least 3 mouse clicks and every click matches **both** `clicks_without_movement` and `centered_clicks`. |
+| `false` | Behavior evidence v2 has at least 3 mouse clicks, but that combination does not match. This does not establish human input. |
+| Unknown | No watcher evidence, fewer than 3 mouse clicks, unavailable/invalid identification, or legacy behavior evidence v1. V1 remains accepted, but its known touch ambiguity cannot produce a reliable mouse-only flag. |
+
+Three is an initial minimum sample floor excluding a single click or a lone double-click,
+**not a calibrated automation threshold**. Ordinary stationary repeats, a late watcher,
+changing layouts and assistive mouse input can still return `true`. Automation that adds
+movement or clicks off-centre can return `false`. Keyboard and touch activations do not
+supply the required mouse samples in v2; identification before input stays unknown.
+The SDK's cumulative totals are not independent samples or a sliding window.
+
+The compact REST/Connect response exposes this boolean at the top level when known.
+Unknown is omitted, following the existing compact convention. With `detail: true`,
+REST includes `identification.behavior.suspiciousClickPattern` as `true`, `false` or
+`null`; the behavior section itself remains absent without watcher evidence. RPC also
+has the top-level optional boolean and the optional boolean inside `BehaviorCheck`.
+Unknown is unset/omitted in protobuf/Connect JSON, never encoded as `false`. For compact
+JavaScript callers, `result.suspiciousClickPattern ?? null` normalizes missing to null.
+
+Only the API changes. Existing behavior evidence versions 1 and 2 are still accepted;
+old clients can ignore the additive response fields. Regenerate RPC clients to read
+`CheckResponse.suspicious_click_pattern` (field 23) and
+`BehaviorCheck.suspicious_click_pattern` (field 6); existing field numbers are unchanged.
+There is no SDK evidence upgrade, new telemetry or rollout configuration.
 
 #### Spoofing indicators
 
@@ -1005,7 +1040,7 @@ For example, using an ID returned by the public listener:
 | `schemaVersion`, `fingerprint`, `replayed`, `ageMs` | The validated schema/ID, lookup marker and age by the API's clock. Compact fields remain unchanged. |
 | `origin`, `ja4`, `tlsClient` | The origin and TLS observations of the public identify listener. An unlisted JA4 has no `tlsClient`; it is unknown, not a mismatch. |
 | `automation`, `tampering`, `spoofing` | Typed `status`, `indicators`, `ruleVersion`, `unavailableProbes`, `source` and optional `reason`. An unknown verdict stays `unknown`; it does not turn into `false`. |
-| `behavior` | Typed `status`, `patterns`, `ruleVersion`, `source` and optional `reason`. Absent without `watch()` evidence; patterns are context, not a verdict. |
+| `behavior` | Typed `status`, `patterns`, `ruleVersion`, `source`, optional `reason` and optional `suspiciousClickPattern`. The flag is unset when evidence is insufficient; false stays explicitly present. Absent without `watch()` evidence; patterns and the flag are context, not a verdict. |
 | `evidence` | The existing summary: `includedComponents`, `includedHints`, `unavailableProbes`, `excludedProbes` and `identityGroups`. No raw probes or behavioral input counts are added. |
 
 Unset optional scalars and absent messages mean unknown/missing, never false or zero.
@@ -1078,7 +1113,8 @@ contents, domains, addresses or credentials:
 | `openfingerprint_identifications_total{result}` | Browser posts to `/v1/identify`: `stored`, `origin_refused`, `rate_limited`, `invalid` (not valid evidence) and `error` (Redis could not store it). |
 | `openfingerprint_identification_lookups_total{result}` | Identifications looked up by `/v1/check`: `found`, `unknown` (never stored or expired) and `error`. |
 | `openfingerprint_behavior_observations_total{evidence,mouse_clicks}` | One observation per successfully stored identification: `evidence` is `missing`, `v1` or `v2`; mouse-click sample size is `unknown` for missing, otherwise `0`, `1`, `2`, `3_4`, `5_9` or `10_plus`. Includes denominators for every pattern slice. |
-| `openfingerprint_behavior_patterns_total{evidence,mouse_clicks,pattern}` | Existing ruleVersion 1 pattern matches per stored observation, with the same version/sample labels and the five fixed pattern names above. Repeated `/v1/check`/RPC evaluations do not increment either behavior metric. |
+| `openfingerprint_behavior_patterns_total{evidence,mouse_clicks,pattern}` | Descriptive pattern matches per stored observation, with the same version/sample labels and the five fixed pattern names above. Repeated `/v1/check`/RPC evaluations do not increment either behavior metric. |
+| `openfingerprint_suspicious_click_patterns_total{result}` | Context flags per successfully stored identification snapshot, with fixed `result` values `true`, `false`, `unknown`. Includes missing, legacy and insufficient evidence as unknown; repeated checks, rejected reports and failed stores do not increment it. |
 | `openfingerprint_identification_tls_clients_total{client}` | Stored identifications by the client their JA4 matched, `unknown` for an unlisted fingerprint, `none` when none was read. A rising `unknown` share means the reference table needs new browser versions. |
 | `openfingerprint_identify_certificates`, `openfingerprint_identify_certificate_reload_failures_total` | Certificates loaded for the public listener, and reloads that failed (the previous certificates stay in use). |
 | `openfingerprint_replay_checks_total{result}` | Identification lookups: `new` (first), `replayed` (looked up before) and `error` (Redis could not answer, so `replayed` was left out). |
@@ -1096,6 +1132,9 @@ touch. For repeated-click context, divide pattern counts in the `v2` sample buck
 Do not sum overlapping patterns into a detection rate. The
 [study](../evaluation/behavior.md#aggregate-observability) gives a runnable PromQL example.
 No visitor IDs, IPs, coordinates or request-supplied strings occur in these labels.
+For the context flag, `true + false` is the eligible-snapshot denominator; `unknown`
+is separate, not a negative result. A `true / (true + false)` ratio is pattern
+prevalence, not bot prevalence or detection accuracy; a zero denominator is unknown.
 
 Alert on source expiry, not on `/health`: an expired source silently degrades
 domain checks to unknown while the process stays healthy.

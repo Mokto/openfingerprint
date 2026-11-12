@@ -411,21 +411,32 @@ async fn concurrent_replicas_and_lost_response_retries_converge() {
                 "locale",
                 &format!("locale-{index}"),
             );
-            replica
-                .resolve(&format!("observation-{index}"), &observation)
-                .await
+            let id = format!("observation-{index}");
+            let decision = replica.resolve(&id, &observation).await;
+            (id, observation, decision)
         });
     }
-    let mut identities = std::collections::HashSet::new();
+    let mut decisions = Vec::new();
     while let Some(task) = tasks.join_next().await {
-        let decision = task.unwrap();
-        assert_eq!(decision.status, "resolved");
-        identities.insert(decision.visitor_id.unwrap());
+        decisions.push(task.unwrap());
+    }
+    let store = db.store("study");
+    let mut identities = std::collections::HashSet::new();
+    for (id, observation, decision) in decisions {
+        let retried = store.resolve(&id, &observation).await;
+        assert_eq!(retried.status, "resolved");
+        if decision.status == "unavailable" {
+            assert_eq!(decision, Decision::unknown("unavailable"));
+        } else {
+            assert_eq!(decision.status, "resolved");
+            assert_eq!(retried, decision);
+        }
+        identities.insert(retried.visitor_id.unwrap());
     }
     assert_eq!(identities.len(), 1);
-    let store = db.store("study");
     let baseline = record();
     let lost_reply = store.resolve("lost-reply", &baseline).await;
+    assert_eq!(lost_reply.status, "resolved");
     drop(store);
     let replica = db.store("study");
     assert_eq!(replica.resolve("lost-reply", &baseline).await, lost_reply);

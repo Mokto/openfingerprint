@@ -493,6 +493,11 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
                 "behavior".into(),
                 identification["behavior"]["patterns"].clone(),
             );
+            put(
+                &mut out,
+                "suspiciousClickPattern",
+                &identification["behavior"]["suspiciousClickPattern"],
+            );
         }
     }
     let email = map.remove("email");
@@ -1097,6 +1102,26 @@ pub(crate) mod tests {
             invalid,
             serde_json::json!({"fingerprint":null,"invalid":["identificationId","email","ip"]})
         );
+    }
+
+    #[test]
+    fn compact_click_flag_keeps_false_and_omits_unknown() {
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!(false),
+            serde_json::json!(true),
+        ] {
+            let mut response = serde_json::json!({"identification": {
+                "fingerprint": "abc", "behavior": {
+                    "status": "observed", "patterns": [], "suspiciousClickPattern": value
+                }
+            }});
+            compact(&mut response);
+            assert_eq!(
+                response.get("suspiciousClickPattern"),
+                (!value.is_null()).then_some(&value)
+            );
+        }
     }
 
     #[test]

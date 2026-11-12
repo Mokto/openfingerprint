@@ -7,8 +7,9 @@ rules pipeline already collects both patterns. No duplicate detector is needed.
 Controlled checks exposed one correctness defect: WebKit's touch compatibility click
 reports `pointerType: "mouse"` after a touch press. Behavior evidence v2 requires the
 preceding press to be mouse too. The API accepts v1 and v2; deploy that API before the
-v2 SDK. No fields, identity hashes, automation verdicts or production settings change.
-The existing descriptive pattern evaluation retains `ruleVersion: 1`.
+v2 SDK. That collection correction added no fields or identity inputs and changed no
+automation verdicts or production settings. The pattern meanings remain unchanged;
+behavior ruleVersion 2 later adds the separate context flag described below.
 
 The other missing pieces were regression coverage and aggregate observability. Pattern
 frequency is useful operational context, but is not detection accuracy.
@@ -105,7 +106,8 @@ proof of automation. For an aggregate **repeated-click review slice**, use **n�
 100% qualifying clicks**, separately for each existing pattern: n=1 is an isolated
 click and n=2 can be a double-click. This is a sample-size filter for context, not a
 calibrated detector. Inspect 3–4, 5–9 and 10+ separately rather than claiming higher
-counts make the pattern accurate. No new threshold is implemented in the API.
+counts make the pattern accurate. The original patterns retain their thresholds; the
+new context flag below requires at least three clicks and both patterns.
 
 A production accuracy claim requires consented, independently labelled human and
 automation cohorts, varied pages/devices and assistive input, with per-cohort false
@@ -114,17 +116,41 @@ population false-positive rate, precision or recall. Assistive tools producing m
 press/click sequences remain indistinguishable from other mouse input. Never turn
 these observations into automatic bot verdicts or signup/login blocking rules.
 
+## Separate suspicious-click context flag
+
+After this study, the API adds `suspiciousClickPattern` as **context, not an automation
+verdict**, under behavior `ruleVersion: 2`. It reuses both existing patterns: v2 evidence,
+at least 3 mouse clicks, all low-movement and all centred means true. A sufficient v2
+sample not matching both means false. Missing evidence, fewer than 3 mouse clicks and
+legacy v1 evidence mean unknown; v1 is not reliable enough because of the touch bug.
+
+This is a minimum-sample convention, not a detection threshold justified by human
+accuracy measurements. It deliberately still describes ordinary stationary controls as
+suspicious; it must not be read as proof of automation. The existing patterns, automation
+verdict, collector, evidence schema and fingerprint inputs do not change.
+
+Compact REST/RPC responses expose the flag only when known; REST detail includes a
+nullable `identification.behavior.suspiciousClickPattern` when behavior is present.
+See the [API contract](../api/README.md#suspicious-click-pattern) for presence rules and
+RPC compatibility. Runnable API checks cover the sample boundary, both patterns,
+non-mouse input, legacy/missing evidence, true/false/unknown transport parity, unchanged
+automation/identity and once-per-store metrics.
+
 ## Aggregate observability
 
-Two bounded-label counter families use only existing evidence:
+Three bounded-label counter families use only existing evidence:
 
 - `openfingerprint_behavior_observations_total{evidence,mouse_clicks}` is the denominator:
   one increment after each successful identification store. Evidence is `missing`,
   `v1` or `v2`. Sample buckets are `unknown` for missing, otherwise `0`, `1`, `2`, `3_4`,
   `5_9`, `10_plus`. Unknown is deliberately separate from zero.
 - `openfingerprint_behavior_patterns_total{evidence,mouse_clicks,pattern}` increments
-  for each of the five existing ruleVersion 1 patterns in that stored snapshot.
+  for each of the five existing descriptive patterns in that stored snapshot.
   Multiple patterns can match one snapshot. Keep v1 separate because of the touch bug.
+- `openfingerprint_suspicious_click_patterns_total{result}` counts the new context flag
+  as `true`, `false` or `unknown`, once per successful store. The eligible denominator
+  is true plus false snapshots; unknown is not a negative. This is not an accuracy
+  metric, and repeated check evaluations do not increment it.
 
 Repeated REST/Connect/gRPC checks never increment these counters. Rejected evidence and
 failed stores do not count as observations. Multiple posts from one page still count
