@@ -9,7 +9,8 @@ signals locally and adds automation, tampering and spoofing observations outside
 hashes. `identify({ endpoint })` posts that evidence to the API's public listener, which
 observes the request itself (headers and TLS handshake), and returns an
 `identificationId` for your backend to check. The API is self-hosted or hosted; it keeps
-identifications for an hour and no visitor history.
+identifications for an hour. Optional server-side [visitor reconciliation](../api/README.md#visitor-reconciliation)
+adds a separate, durable `visitorId` to backend checks without changing `identify()` or browser storage.
 
 **Experimental:** a profile hash is not proof of physical-device identity. Different
 devices can collide; settings, updates and missing signals can split repeat visits.

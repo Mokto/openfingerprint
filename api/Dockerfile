@@ -3,6 +3,7 @@ WORKDIR /build
 COPY api/Cargo.toml api/Cargo.lock api/build.rs ./
 COPY api/proto ./proto
 COPY api/src ./src
+COPY api/migrations ./migrations
 COPY api/data ./data
 ENV CARGO_BUILD_JOBS=2
 RUN set -eu; \

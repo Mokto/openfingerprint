@@ -16,14 +16,18 @@ maxminddb = "0.32.0"
 psl = "2.1.248"
 ring = "0.17.14"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "tls12"] }
+rustls-native-certs = "0.8"
 redis = { version = "1.8.1", default-features = false, features = ["tokio-rustls-comp"] }
 url = "2.5.8"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 tokio = { version = "1.54.1", features = ["full"] }
+tokio-postgres = { version = "0.7.18", features = ["with-serde_json-1"] }
+tokio-postgres-rustls = { version = "0.14.0", features = ["ring"] }
 connectrpc = { version = "0.9", default-features = false, features = ["axum", "gzip", "json"] }
 connectrpc-reflection = "0.9"
+deadpool-postgres = "0.14.2"
 buffa = { version = "0.9", features = ["json"] }
 buffa-types = { version = "0.9", features = ["json"] }
 sentry = { version = "0.49.5", default-features = false, features = ["backtrace", "contexts", "panic", "ureq", "rustls-no-provider"] }

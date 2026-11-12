@@ -572,6 +572,21 @@ try {
 			});
 			await page.evaluate(() => {
 				Object.defineProperty(navigator, 'language', { value: 'zz-ZZ', configurable: true });
+			});
+			const localeOnly = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
+			valid(localeOnly);
+			assert.notEqual(localeOnly.fingerprint, a.fingerprint);
+			assert.equal(localeOnly.coreFingerprint, a.coreFingerprint);
+			assert.deepEqual(localeOnly.components, a.components);
+			assert.notEqual(localeOnly.hints.locale, a.hints.locale);
+			for (const key of Object.keys(a.hints).filter((key) => key !== 'locale'))
+				assert.equal(localeOnly.hints[key], a.hints[key], key);
+			report.checks.push({
+				browser: name,
+				check: 'A language-only change alters only the locale hint and full fingerprint',
+				passed: true
+			});
+			await page.evaluate(() => {
 				Object.defineProperty(screen, 'width', { value: 999, configurable: true });
 				Object.defineProperty(navigator, 'hardwareConcurrency', { value: 1, configurable: true });
 			});

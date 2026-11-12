@@ -4,8 +4,9 @@ Documentation: [openfingerprint.com/docs/deploy](https://openfingerprint.com/doc
 
 Runs the API, its public identify listener and its open domain and country data refresh,
 with the Redis it requires for the RDAP cache and identifications: bundled `redis-ha` or
-your own.
-When enabled, NetworkPolicies permit DNS, Redis, registry HTTPS and public HTTPS
+your own. Optional PostgreSQL integration uses a dedicated visitor database on an
+existing cluster; it does not install another PostgreSQL server.
+When enabled, NetworkPolicies permit DNS, Redis, configured PostgreSQL peers, registry HTTPS and public HTTPS
 for country downloads. Policies apply to the entire pod, not individual containers.
 Disable `countryData.enabled` to remove country refresh and its HTTPS allowance;
 the RDAP HTTPS allowance remains.
@@ -116,6 +117,93 @@ instance uses `noeviction`, a 64 MB limit and no persistence; a full Redis rejec
 writes, which makes `/v1/identify` answer 503 and turns RDAP caching off until keys expire.
 An identification takes a few kilobytes for an hour, so size Redis for your peak hourly
 identifications.
+
+## PostgreSQL visitor identities
+
+Visitor IDs and exact aliases have **no automatic expiry**. See
+[matching, retention, isolation and migrations](../README.md#visitor-reconciliation)
+before enabling this storage. Defaults leave reconciliation off and preserve existing
+fingerprint-only responses. The SDK and current fingerprint hashes are unchanged.
+
+Use a new `openfingerprint` database and dedicated owner/application role on your
+existing PostgreSQL cluster. Do not use another application's database or a superuser.
+Provision the role/password through the cluster's existing secret-management process.
+This chart does not mutate shared cluster roles or copy credentials between namespaces.
+
+Supply a Secret **in the API release namespace** with:
+- `url`: a PostgreSQL connection string specifying the write endpoint, dedicated database,
+  application username and `sslmode=require`.
+- Optionally a separate `password`, selected by `postgres.passwordKey`.
+
+Mount the cluster CA as a separate Secret containing only its public `ca.crt`.
+Do not copy a CA private key or server private key. The client validates certificate
+chains and hostnames; use the write Service's certificate-covered FQDN.
+
+```yaml
+postgres:
+  enabled: true
+  namespace: my_application
+  existingSecret: openfingerprint-postgres
+  passwordKey: password
+  caSecret: openfingerprint-postgres-ca
+networkPolicy:
+  enabled: true
+  postgresTo:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: database
+      podSelector:
+        matchLabels:
+          cnpg.io/cluster: shared-postgres
+```
+
+Also configure the existing required API/identify peers. With policies enabled,
+PostgreSQL peers are required; `networkPolicy.postgresPort` defaults to 5432.
+A separate policy permits only the API and migration pods to reach those peers
+and DNS. PostgreSQL's own namespace policies must independently allow these clients.
+The country/network sidecars share the API pod's network permissions but receive
+no PostgreSQL credentials.
+
+For an existing CloudNativePG cluster, the chart can declaratively request the new
+database after its owner role exists:
+
+```yaml
+postgres:
+  database:
+    create: true
+    name: openfingerprint
+    owner: openfingerprint
+    clusterName: shared-postgres
+    clusterNamespace: database
+```
+
+This emits a `postgresql.cnpg.io/v1 Database` in the cluster's namespace, with
+`ensure: present` and `databaseReclaimPolicy: retain`. It requires that CRD and
+permission to manage a Database in that namespace. It never creates a PostgreSQL
+server or modifies the existing Cluster. Leave `create: false` to provision the
+database using another operator or your normal database administration workflow.
+Database URL, database resource name and owner must agree.
+
+With `postgres.migrations=true` (default when integration is enabled), a non-root,
+tokenless post-install/post-upgrade Job runs the pinned API image with
+`--migrate-visitors`. It receives only the database configuration and public CA.
+It retries database provisioning/startup failures for up to ten minutes. Failed
+migrations fail the Helm operation; API fingerprint/domain/IP checks remain available
+while visitor resolution is unknown. For GitOps or separately managed maintenance
+windows, set `postgres.migrations=false` and run the same command through your approved
+migration workflow before relying on new visitor results.
+
+Migration SQL is forward-only and checksummed. A rule backfill never merges canonical
+visitors or rewrites frozen decisions. Large backfills currently hold the migration
+lock transactionally; plan a maintenance window and test against a private copy first.
+An older binary cannot issue new identities against a newer unsupported revision.
+Do not use a destructive database rollback as an application rollback mechanism.
+
+Keep `postgres.namespace` stable across upgrades. Changing it intentionally starts a
+different identity population. Back up the database and use durable acknowledged-write/
+failover settings; restoring an old snapshot can lose newer identities. The chart
+does not change the shared cluster's persistence, replication, backup or retention policy.
+Removing a release must not be treated as deleting its retained visitor data.
 
 ## Access
 

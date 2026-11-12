@@ -11,6 +11,6 @@
 		"build": "pnpm --dir sdk build",
 		"test": "pnpm --dir sdk test && node evaluation/test-browser.mjs",
 		"accuracy": "node evaluation/analyze.mjs",
-		"api:check": "cargo fmt --manifest-path api/Cargo.toml --check && cargo clippy --manifest-path api/Cargo.toml --locked --all-targets -- -D warnings && cargo test --manifest-path api/Cargo.toml --locked && cargo build --manifest-path api/Cargo.toml --locked && node api/test-proto.mjs && node api/test.mjs && node api/test-identify.mjs && node api/test-country.mjs && node api/test-network.mjs"
+		"api:check": "cargo fmt --manifest-path api/Cargo.toml --check && cargo clippy --manifest-path api/Cargo.toml --locked --all-targets -- -D warnings && cargo test --manifest-path api/Cargo.toml --locked && cargo build --manifest-path api/Cargo.toml --locked && node api/test-visitors.mjs && node api/test-proto.mjs && node api/test.mjs && node api/test-identify.mjs && node api/test-country.mjs && node api/test-network.mjs"
 	}
 }

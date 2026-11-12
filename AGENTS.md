@@ -5,7 +5,7 @@
 OpenFingerprint is an experimental browser-signal SDK and a self-hosted check API. It collects pseudonymous browser evidence for application security; it does not prove physical-device identity, attest browser execution or establish Fingerprint Pro accuracy.
 
 - `sdk/` is the TypeScript browser package, published as `@openfingerprint/sdk`. It collects rendering probes and environment hints, hashes identity locally with Web Crypto, reports automation, tampering and spoofing observations separately, and `identify()` posts the evidence to the API.
-- `api/` is a Rust service using Axum and Tokio with two listeners. The public, TLS-terminating identify listener (`POST /v1/identify`, mandatory) receives evidence from browsers and records their headers and JA4 TLS fingerprint. The internal listener (`POST /v1/check` and gRPC/Connect) has no authentication and must stay on a private network; it evaluates identifications by ID and provides domain and IP intelligence. Redis holds cached RDAP registry answers, hour-long identifications and their lookup markers, not a visitor-history database.
+- `api/` is a Rust service using Axum and Tokio with two listeners. The public, TLS-terminating identify listener (`POST /v1/identify`, mandatory) receives evidence from browsers and records their headers and JA4 TLS fingerprint. The internal listener (`POST /v1/check` and gRPC/Connect) has no authentication and must stay on a private network; it evaluates identifications by ID and provides domain and IP intelligence. Redis holds cached RDAP registry answers, hour-long identifications and their lookup markers. Optional PostgreSQL-backed reconciliation retains visitor IDs, exact aliases and reference hashes until explicit deletion.
 - The repository root is a private pnpm workspace for development, CI and release orchestration, not another published package.
 
 ## Code map
@@ -20,6 +20,7 @@ OpenFingerprint is an experimental browser-signal SDK and a self-hosted check AP
 | [api/src/check.rs](api/src/check.rs) | Browser-origin refusal, request validation, canonical evidence/hash verification, and `/v1/check`. |
 | [api/src/identify.rs](api/src/identify.rs), [api/src/tls.rs](api/src/tls.rs) | The public identify listener (`POST /v1/identify`: TLS, SNI certificates, PROXY protocol, origins, rate limit, identifications in Redis) and JA4 fingerprints with their reference table. |
 | [api/src/replay.rs](api/src/replay.rs) | Redis lookup markers behind the `replayed` signal. |
+| [api/src/visitor.rs](api/src/visitor.rs), [api/migrations/](api/migrations/) | Durable visitor reconciliation, immutable reference profiles and forward SQL/rule migrations. |
 | [api/src/domains.rs](api/src/domains.rs), [api/src/mx.rs](api/src/mx.rs) | Licensed domain-snapshot matching, provenance/expiry and bounded DNS MX lookup/provider inference. |
 | [api/src/rdap.rs](api/src/rdap.rs), [api/src/cache.rs](api/src/cache.rs) | Registered-domain RDAP lookup and Redis cache/connection handling. |
 | [api/data/](api/data/), [api/update-domain-data.mjs](api/update-domain-data.mjs) | Bundled source/review metadata, RDAP bootstrap data and the validated domain-snapshot updater. Dataset licenses are separate from the code's MIT license. |
@@ -46,7 +47,7 @@ OpenFingerprint is an experimental browser-signal SDK and a self-hosted check AP
 ## Read the relevant guide
 
 - For browser collection, identity schemas or `identify()`, read the [SDK guide](sdk/README.md).
-- For API contracts, the identify listener, deployment security or replay signals, read the [API guide](api/README.md).
+- For API contracts, the identify listener, deployment security, replay signals or visitor reconciliation, read the [API guide](api/README.md).
 - For dataset sources, matching, licensing or refresh, read the [data guide](api/data/README.md).
 - For deployment, network policy or monitoring, read the [Helm guide](api/chart/README.md).
 - For publishing changes, read [Releases](README.md#releases). The SDK and API release independently through Release Please.
@@ -66,7 +67,7 @@ Use the Node and pnpm versions declared in [package.json](package.json). Install
 | Changed area | Checks |
 | --- | --- |
 | SDK or shared build/release wiring | `pnpm check`, `pnpm build`, `pnpm test` |
-| Rust API or API data logic | `pnpm api:check` |
+| Rust API or API data logic | `pnpm api:check`; for visitor changes, supply `OPENFINGERPRINT_TEST_POSTGRES_URL` for a disposable database so the [visitor integration checks](api/README.md#verification-and-limits) do not skip. |
 | Helm chart | `bash api/chart/test.sh` |
 | GitHub workflows | `zizmor --min-severity low .github` |
 | Rust dependencies or licenses | `cargo deny --manifest-path api/Cargo.toml check` |

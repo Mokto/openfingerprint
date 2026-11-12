@@ -253,3 +253,50 @@ if render --set-json 'networkPolicy.apiFrom=[]' >/dev/null 2>&1; then echo "Empt
 helm template openfingerprint . "${identify[@]}" --set networkPolicy.enabled=false | grep -q 'kind: NetworkPolicy' && { echo "Disabled policies must not render" >&2; exit 1; }
 helm lint . --strict "${identify[@]}" --set-json 'networkPolicy.apiFrom=[{"podSelector":{}}]' >/dev/null
 echo "Disabled refresh, required values and lint checks passed."
+pg=(--set postgres.enabled=true --set postgres.namespace=example --set postgres.existingSecret=visitor-db --set postgres.passwordKey=password --set postgres.caSecret=visitor-ca --set-json 'networkPolicy.postgresTo=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"database"}},"podSelector":{"matchLabels":{"cnpg.io/cluster":"shared"}}}]')
+render "${pg[@]}" > "$rendered"
+ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact
+pod = docs.find { |d| d["kind"] == "Deployment" && d["metadata"]["name"] == "openfingerprint" }["spec"]["template"]["spec"]
+env = pod["containers"][0]["env"].to_h { |e| [e["name"], e["value"] || e["valueFrom"]] }
+abort("Stable server-side namespace") unless env["OPENFINGERPRINT_VISITOR_NAMESPACE"] == "example"
+abort("Database URL must come from a Secret") unless env["OPENFINGERPRINT_POSTGRES_URL"] == {"secretKeyRef"=>{"name"=>"visitor-db","key"=>"url"}}
+abort("Password override must come from a Secret") unless env["OPENFINGERPRINT_POSTGRES_PASSWORD"] == {"secretKeyRef"=>{"name"=>"visitor-db","key"=>"password"}}
+abort("Verified private CA configuration") unless env["OPENFINGERPRINT_POSTGRES_CA"] == "/postgres-ca/ca.crt"
+ca = {"name"=>"postgres-ca","secret"=>{"secretName"=>"visitor-ca","items"=>[{"key"=>"ca.crt","path"=>"ca.crt"}]}}
+mount = {"name"=>"postgres-ca","mountPath"=>"/postgres-ca","readOnly"=>true}
+abort("Only the public CA is mounted read-only") unless pod["volumes"].include?(ca) && pod["containers"][0]["volumeMounts"].include?(mount)
+abort("Refresh sidecars get no database credentials") unless pod["containers"].drop(1).all? { |c| c["envFrom"].nil? && c["env"].nil? }
+job = docs.find { |d| d["kind"] == "Job" && d["metadata"]["name"] == "openfingerprint-visitor-migrations" } || abort("Missing migrations")
+abort("Explicit forward migration hook") unless job["metadata"]["annotations"]["helm.sh/hook"] == "post-install,post-upgrade"
+migration = job["spec"]["template"]["spec"]
+container = migration["containers"][0]
+abort("Migration hardening") unless migration["automountServiceAccountToken"] == false && migration["securityContext"]["runAsNonRoot"] && container["securityContext"]["readOnlyRootFilesystem"]
+abort("Same pinned image, explicit command") unless container["image"] == pod["containers"][0]["image"] && container["args"] == ["--migrate-visitors"]
+abort("Migration needs no Redis or browser configuration") unless container["env"].map { |e| e["name"] }.sort == %w[OPENFINGERPRINT_POSTGRES_CA OPENFINGERPRINT_POSTGRES_PASSWORD OPENFINGERPRINT_POSTGRES_URL OPENFINGERPRINT_VISITOR_NAMESPACE]
+abort("Same public CA") unless migration["volumes"] == [ca] && container["volumeMounts"] == [mount]
+policy = docs.find { |d| d["kind"] == "NetworkPolicy" && d["metadata"]["name"] == "openfingerprint-postgres" }["spec"]
+abort("Only API/migration pods") unless policy["podSelector"] == {"matchLabels"=>{"app.kubernetes.io/instance"=>"openfingerprint"},"matchExpressions"=>[{"key"=>"app.kubernetes.io/name","operator"=>"In","values"=>["openfingerprint","openfingerprint-visitor-migrations"]}]}
+abort("Database and DNS only") unless policy["ingress"] == [] && policy["egress"].flat_map { |e| e["ports"].map { |p| [p["protocol"],p["port"]] } } == [["TCP",5432],["UDP",53],["TCP",53]]
+abort("Do not silently provision a server or database") if docs.any? { |d| d["apiVersion"] == "postgresql.cnpg.io/v1" }
+' "$rendered"
+render "${pg[@]}" --set postgres.database.create=true --set postgres.database.clusterName=shared --set postgres.database.clusterNamespace=database > "$rendered"
+ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact
+database = docs.find { |d| d["kind"] == "Database" } || abort("Missing dedicated database request")
+abort("Existing cluster, dedicated owner, retained data") unless database["metadata"]["namespace"] == "database" && database["spec"] == {"cluster"=>{"name"=>"shared"},"name"=>"openfingerprint","owner"=>"openfingerprint","ensure"=>"present","databaseReclaimPolicy"=>"retain"}
+abort("No replacement PostgreSQL server") if docs.any? { |d| d["kind"] == "Cluster" && d["apiVersion"] == "postgresql.cnpg.io/v1" }
+' "$rendered"
+render "${pg[@]}" --set postgres.caSecret= --set postgres.passwordKey= --set postgres.migrations=false > "$rendered"
+grep -q 'name: openfingerprint-visitor-migrations' "$rendered" && { echo "Disabled migrations must not render a Job" >&2; exit 1; }
+render "${pg[@]}" --set postgres.caSecret= > "$rendered"
+ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact
+pod = docs.find { |d| d["kind"] == "Job" && d["metadata"]["name"] == "openfingerprint-visitor-migrations" }["spec"]["template"]["spec"]
+abort("Optional private CA") unless pod["volumes"].nil? && pod["containers"][0]["volumeMounts"].nil?
+' "$rendered"
+for bad in "postgres.namespace=" "postgres.existingSecret=" "networkPolicy.postgresPort=0" "networkPolicy.postgresPort=5432.5" "postgres.database.create=true"; do
+  if render "${pg[@]}" --set "$bad" >/dev/null 2>&1; then echo "PostgreSQL rendering must reject $bad" >&2; exit 1; fi
+done
+if render "${pg[@]}" --set-json 'networkPolicy.postgresTo=[]' >/dev/null 2>&1; then echo "PostgreSQL requires scoped peers" >&2; exit 1; fi
+echo "External PostgreSQL, retained database, migration Job, CA and network isolation checks passed."

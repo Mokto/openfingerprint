@@ -11,6 +11,22 @@ imagePullSecrets: []
 # this is how you supply OPENFINGERPRINT_REDIS_URL (required when redis-ha.enabled=false).
 existingSecret: ""
 
+postgres:
+  enabled: false
+  namespace: ""
+  existingSecret: ""
+  urlKey: url
+  passwordKey: ""
+  caSecret: ""
+  caKey: ca.crt
+  migrations: true
+  database:
+    create: false
+    name: openfingerprint
+    owner: openfingerprint
+    clusterName: ""
+    clusterNamespace: ""
+
 replicaCount: 1
 podAnnotations: {}
 resources:
@@ -200,6 +216,8 @@ networkPolicy:
   # automatically.
   redisTo: []
   redisPort: 6379
+  postgresTo: []
+  postgresPort: 5432
   # MX, SPF and DMARC lookups use UDP 53 through the pod's first resolv.conf nameserver,
   # which these peers must include, and TCP 53 only for answers too large for UDP.
   dnsTo:
