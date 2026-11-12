@@ -1,7 +1,7 @@
 import { engine } from './automation';
 
 export interface BehaviorEvidence {
-	version: 1;
+	version: 2;
 	watchedMs: number;
 	pointerMoves: number;
 	mouseClicks: number;
@@ -169,7 +169,11 @@ function listen() {
 	on('click', (event) => {
 		const click = event as MouseEvent & { pointerType?: string };
 		// A click from the keyboard has detail 0 and no pointer position.
-		if (untrusted(event) || click.detail === 0 || (click.pointerType || pointerType) !== 'mouse') return;
+		// WebKit labels a touch compatibility click as mouse; the preceding press stays touch.
+		if (
+			untrusted(event) || click.detail === 0 || pointerType !== 'mouse' ||
+			(click.pointerType && click.pointerType !== 'mouse')
+		) return;
 		counts.mouseClicks++;
 		if (movesAtDown <= 1) counts.clicksWithoutMovement++;
 		const target = event.target;
@@ -233,5 +237,5 @@ export function observedProtocolScript(): boolean | null {
 
 export function collectBehavior(): BehaviorEvidence | null {
 	if (started === null) return null;
-	return { version: 1, watchedMs: Math.round(performance.now() - started), ...counts };
+	return { version: 2, watchedMs: Math.round(performance.now() - started), ...counts };
 }

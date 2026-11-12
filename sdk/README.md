@@ -206,12 +206,12 @@ It does two things, both network-free:
 
 | Field | Counts |
 | --- | --- |
-| `version` | Always `1`. |
+| `version` | Always `2`; deploy an API accepting behavior versions 1 and 2 first. |
 | `watchedMs` | Milliseconds since `watch()`. |
 | `pointerMoves` | Trusted mouse `pointermove` events. |
-| `mouseClicks` | Trusted mouse clicks (keyboard activation and touch excluded). |
-| `clicksWithoutMovement` | Mouse clicks with at most one pointer move since the previous press, as a driver's click produces. |
-| `centeredClicks` | Mouse clicks within 1 px of the target's centre, where drivers click. |
+| `mouseClicks` | Trusted clicks with nonzero `detail`, a preceding mouse `pointerdown`, and no contradictory click pointer type. Keyboard activation, touch and pen are excluded. |
+| `clicksWithoutMovement` | Mouse clicks whose press saved at most one trusted mouse `pointermove` since the previous trusted press (or watcher start). This counts events, not distance. |
+| `centeredClicks` | Mouse clicks within ±1 CSS px on each axis of the clicked element's bounding-box centre, measured at click time; both box dimensions must exceed 4 px. |
 | `keys` | Trusted key presses (repeats, IME composition and `keyCode` 229 excluded). |
 | `instantKeys` | Keys released less than 5 ms after being pressed. |
 | `insertedTexts` | `insertText` input with no key press before it, as CDP `Input.insertText` (Playwright's `fill`) produces. Dictation and some autofill do too. |
@@ -222,7 +222,29 @@ It does two things, both network-free:
 Every count is something real users can produce: keyboard-only use, autofill,
 dictation, on-screen keyboards, or an identification at page load before any input.
 The [API](../api/README.md#behavior-patterns) turns them into patterns, never into a
-detection. No positions, timings, keys or text are kept.
+detection. Browser-marked `isTrusted` is not proof of human input: browser drivers
+produce trusted events too. No pointer paths, raw coordinates, typed text or event
+streams are retained or transmitted. Key-down timestamps are transiently held until
+release to calculate `instantKeys`; only aggregates are reported.
+
+Totals last for this module's page lifetime; another `watch()` does nothing, and neither
+`collect()` nor `identify()` resets them. Each trusted `pointerdown` saves and resets only
+the local movement interval, even for touch or pen. Movement after that press belongs to
+the next interval, not the current click. Before the first press, the interval starts at
+`watch()`. Evidence is copied at the end of asynchronous collection, just before
+`identify()` posts it; input during collection is included, input during posting is not.
+
+Version 2 fixes WebKit touch compatibility clicks labelled `mouse`: the preceding press
+must also be mouse input. Version 1 could include those taps. The fields and behavior
+rule meaning are unchanged; fingerprint hashes are unaffected. A watcher started
+between press and click conservatively excludes that click without an observed mouse
+press. No watcher means null evidence, not a zero-input observation.
+
+Stationary repeats, double-clicks and starting `watch()` over a button can match the same
+patterns as automation. Assistive tools that generate mouse input are indistinguishable
+from other mouse input here; do not use these patterns to block signup/login. See the
+[controlled click study](../evaluation/behavior.md) for checks, sample-size guidance and
+known false positives/evasions.
 
 ### What the API reports about an identification
 

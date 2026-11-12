@@ -378,7 +378,7 @@ try {
 				const traps = name !== 'webkit';
 				assert.equal(await watching.evaluate(() => window.pageOnly), traps ? false : null, 'page scripts without a URL are not driver code');
 				const idle = await watching.evaluate(() => window.pageBehavior);
-				assert.equal(idle.version, 1);
+				assert.equal(idle.version, 2);
 				assert.equal(idle.untrustedEvents, 2, 'the page clicked twice from script');
 				assert.equal(idle.mouseClicks + idle.keys + idle.pointerMoves, 0);
 				await watching.click('#target');

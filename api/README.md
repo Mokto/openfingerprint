@@ -573,8 +573,8 @@ click, key, touch and wheel input since the page called it (see the
 
 | Pattern | Matches when |
 | --- | --- |
-| `clicks_without_movement` | Every mouse click (at least one) came with at most one pointer move since the previous press. |
-| `centered_clicks` | Every mouse click (at least one) landed within 1 px of its target's centre. |
+| `clicks_without_movement` | Every mouse click (at least one) had at most one trusted mouse pointer-move event before its press, since the previous trusted press or watcher start. Event count, not distance. |
+| `centered_clicks` | Every mouse click (at least one) landed within ±1 CSS px on both axes of its clicked element's bounding-box centre; both dimensions exceed 4 px. |
 | `instant_keys` | At least half of the key presses were released within 5 ms. |
 | `text_without_keys` | Text was inserted without a key press before it (CDP `Input.insertText`, Playwright's `fill`). |
 | `no_input` | No pointer move, click, key press, inserted text, touch or wheel event at all. |
@@ -582,9 +582,21 @@ click, key, touch and wheel input since the page called it (see the
 The compact response lists them as `behavior` (an empty list when none matched). These
 are context for your own rules, not a verdict, and they never change `automation`:
 keyboard-only users, autofill, dictation, on-screen keyboards and identifications made
-at page load match some of them. Evidence must be `version: 1` with every count as a
-non-negative integer; the listener rejects anything else. Evidence without `watch()` has
-no section.
+at page load match some of them. Evidence accepts `version: 1` or `version: 2` with the
+same exact fields and every count as a non-negative integer. Version 2 requires a mouse
+press as well as a mouse click, fixing WebKit touch compatibility clicks that version 1
+could miscount. Deploy this compatible API before an SDK emitting version 2. The
+existing descriptive rules retain `ruleVersion: 1`; their meaning has not changed.
+Evidence without `watch()` has no section, not an empty/clean evaluation. An observed
+zero-input snapshot matches `no_input`, not automation.
+
+A single stationary click is not proof of automation. Neither are repeated stationary or
+centred clicks: double-clicks, a late watcher and assistive mouse input can produce them;
+automation can generate trusted events and evade both patterns with movement and
+off-centre clicks. These are behavioral context, never automatic bot verdicts or
+signup/login blocking rules. See the [controlled study](../evaluation/behavior.md) for
+sample-size guidance and limitations. No transmitted counters or identity inputs were
+added.
 
 #### Spoofing indicators
 
@@ -882,6 +894,8 @@ contents, domains, addresses or credentials:
 | `openfingerprint_automation_checks_total{status}`, `openfingerprint_automation_indicators_total{indicator}` | Valid automation reports evaluated, by verdict (`detected`, `unknown`, `not_detected`), and how often each probe was positive. One positive probe is enough for `detected`, so the indicator counts show which probes fire in practice. They count evaluated reports, not visitors. |
 | `openfingerprint_identifications_total{result}` | Browser posts to `/v1/identify`: `stored`, `origin_refused`, `rate_limited`, `invalid` (not valid evidence) and `error` (Redis could not store it). |
 | `openfingerprint_identification_lookups_total{result}` | Identifications looked up by `/v1/check`: `found`, `unknown` (never stored or expired) and `error`. |
+| `openfingerprint_behavior_observations_total{evidence,mouse_clicks}` | One observation per successfully stored identification: `evidence` is `missing`, `v1` or `v2`; mouse-click sample size is `unknown` for missing, otherwise `0`, `1`, `2`, `3_4`, `5_9` or `10_plus`. Includes denominators for every pattern slice. |
+| `openfingerprint_behavior_patterns_total{evidence,mouse_clicks,pattern}` | Existing ruleVersion 1 pattern matches per stored observation, with the same version/sample labels and the five fixed pattern names above. Repeated `/v1/check`/RPC evaluations do not increment either behavior metric. |
 | `openfingerprint_identification_tls_clients_total{client}` | Stored identifications by the client their JA4 matched, `unknown` for an unlisted fingerprint, `none` when none was read. A rising `unknown` share means the reference table needs new browser versions. |
 | `openfingerprint_identify_certificates`, `openfingerprint_identify_certificate_reload_failures_total` | Certificates loaded for the public listener, and reloads that failed (the previous certificates stay in use). |
 | `openfingerprint_replay_checks_total{result}` | Identification lookups: `new` (first), `replayed` (looked up before) and `error` (Redis could not answer, so `replayed` was left out). |
@@ -890,6 +904,15 @@ contents, domains, addresses or credentials:
 | `openfingerprint_country_data_loaded` | 1 when a valid country database is loaded (not necessarily fresh). |
 | `openfingerprint_country_data_expiry_timestamp_seconds` | When the country database stops being used, or 0 when unavailable. |
 | `openfingerprint_country_data_reload_failures_total` | Changed country files rejected, including rollbacks to older builds. |
+
+Behavior counters count submitted snapshots, not unique visitors, independent click
+samples or accuracy. Multiple identifications can overlap the same cumulative events.
+Missing evidence is not observed zero input; version 1 may contain misclassified WebKit
+touch. For repeated-click context, divide pattern counts in the `v2` sample buckets
+`3_4|5_9|10_plus` by observations in those same buckets, not by all checks or all visits.
+Do not sum overlapping patterns into a detection rate. The
+[study](../evaluation/behavior.md#aggregate-observability) gives a runnable PromQL example.
+No visitor IDs, IPs, coordinates or request-supplied strings occur in these labels.
 
 Alert on source expiry, not on `/health`: an expired source silently degrades
 domain checks to unknown while the process stays healthy.
