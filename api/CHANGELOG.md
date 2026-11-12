@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/Mokto/openfingerprint/compare/api-v0.21.0...api-v0.22.0) (2026-11-12)
+
+
+### Features
+
+* **api:** expose identification evidence over Connect and gRPC ([#122](https://github.com/Mokto/openfingerprint/issues/122)) ([8c7d58a](https://github.com/Mokto/openfingerprint/commit/8c7d58ae74f0f41bde03a54de52a15cc6ade1a36))
+
 ## [0.21.0](https://github.com/Mokto/openfingerprint/compare/api-v0.20.0...api-v0.21.0) (2026-11-11)
 
 
