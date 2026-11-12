@@ -114,6 +114,73 @@ population false-positive rate, precision or recall. Assistive tools producing m
 press/click sequences remain indistinguishable from other mouse input. Never turn
 these observations into automatic bot verdicts or signup/login blocking rules.
 
+## Cross-target follow-up: rejected verdict candidate
+
+The follow-up tests the narrower hypothesis that repeated centred, low-movement clicks
+**across different targets** could safely promote the automation verdict, preferring
+false negatives over false positives. The hypothesis still has concrete false-positive
+controls; no production rule or transmitted counter is added.
+
+Two proposed aggregates are evaluated **only inside the local test fixture**:
+
+- `targetChanges`: transitions between different DOM target nodes on consecutive
+  mouse clicks already counted by the existing SDK. The first click adds no transition.
+- `distinctTargets`: unique DOM target nodes among those counted mouse clicks.
+
+The fixture reads changes in `SDK.collectBehavior().mouseClicks` after the SDK's handler
+runs, rather than implementing another event-qualification or click-pattern detector.
+It retains no node identifiers, markup, coordinates or event stream in the report. Only
+aggregate counts leave the fixture, into the local ignored test report; they are not SDK
+fields, API inputs or telemetry. Node references stay in the fixture (a previous-node
+reference and a `WeakSet`). Keyboard, touch and script activation do not add targets.
+
+The deliberately stricter candidate requires at least 10 mouse clicks, every click
+qualifying for both existing patterns, at least 9 target changes and at least 10 distinct
+DOM targets. Ten is an experimental stress case, **not a calibrated threshold**.
+
+| Controlled case (10 activations each) | Mouse / low-movement / centred | Target changes / distinct | Candidate matches? |
+| --- | --- | --- | --- |
+| Playwright clicks across 10 fixed, separated buttons | 10 / 10 / 10 | 9 / 10 | Yes |
+| Chromium protocol clicks across those buttons, no move events | 10 / 10 / 10 | 9 / 10 | Yes |
+| Stationary repeats on the same DOM button | 10 / 10 / 10 | 0 / 1 | No |
+| Wizard shows a different button at the same location after each click | 10 / 10 / 10 | 9 / 10 | **Yes: false-positive control** |
+| Page replaces the clicked button with an identical DOM node after each click | 10 / 10 / 10 | 9 / 10 | **Yes: false-positive control** |
+| Simulated pointer snapping between the 10 fixed buttons | 10 / 10 / 10 | 9 / 10 | **Yes: accessibility-style ambiguity** |
+| Multi-event movement between the button centres | 10 / 0 / 10 | 9 / 10 | No: ordinary-motion control or automation evasion |
+| Multi-event movement plus off-centre clicks | 10 / 0 / 0 | 9 / 10 | No: known evasion |
+| Keyboard, touch, or script activation across the buttons | 0 / 0 / 0 | 0 / 0 | No |
+
+All cross-target cases except the Chromium-only direct protocol sequence pass in
+Chromium, Firefox and WebKit. The test asserts that locator clicks and the simulated
+snapping control have identical **entire behavior aggregates and target aggregates**,
+excluding `watchedMs`. In Chromium it also asserts equality between direct protocol
+clicks and both stationary layout controls, including `pointerMoves: 0`. These are not
+merely overlapping labels or ratios. Timing distributions were not measured.
+
+The wizard uses ten distinct pre-existing buttons; the replacement control creates a new
+node with the same markup/ID after every click. Counting semantic controls instead of
+DOM nodes could avoid the replacement example but would not resolve the wizard or
+snapping examples. Both layout controls park the pointer before `watch()` and then use
+trusted press/release events without movement. They reproduce ordinary interaction
+sequences; they are not observations of real users. Pointer snapping is simulated using
+one browser-generated move per target, **not validation of an OS accessibility feature
+or physical assistive device**.
+
+**Decision:** reject both proposed transmitted target aggregates for verdict promotion.
+They remove the same-button example but not the concrete layout/snapping ambiguities.
+No low-false-positive threshold is supported here. More clicks, distinct nodes or target
+changes cannot establish whether these otherwise identical events came from a driver,
+a person or assistive input. Prefer the false negatives: leave the verdict unchanged
+rather than label these ordinary-interaction controls automated. This study does not
+estimate population error rates or test actual Selenium, physical accessibility input,
+real-user cohorts or production layouts. Existing DevTools-related verdict behavior is
+outside this follow-up and has not been changed.
+
+Reproduce with the same `node sdk/test-behavior.mjs` command above, or `pnpm test`.
+The local `.test-results/behavior.json` report includes optional fixture-only `targets`
+aggregates for these scenarios. Regression assertions keep the known false positives,
+non-mouse exclusions and evasions visible if collection changes later.
+
 ## Aggregate observability
 
 Two bounded-label counter families use only existing evidence:
