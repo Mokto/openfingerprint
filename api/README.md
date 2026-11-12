@@ -36,8 +36,7 @@ forged, and matching hashes can collide or change with settings and updates.
 
 ## Data minimization and networking
 
-Stateless checks have no visitor database, observation cache or account history.
-Their evidence, email addresses, domains and IPs are dropped after processing; an
+Domain, email and IP checks have no account history. Their inputs are dropped after processing; an
 email address is never logged, cached, echoed or used as a metric label.
 Redis holds three kinds of key, all with a TTL: cached RDAP answers keyed by SHA-256
 hashes of registered domains, identifications keyed by a SHA-256 hash of their ID for one
@@ -56,7 +55,8 @@ only an `ip` your backend passes is evaluated. Identification-only calls do not 
 
 The process retains read-only domain/country/network datasets; the RDAP cache and
 identifications are shared in Redis, not an in-memory fallback. There is no visitor
-history. The internal listener does no rate limiting: apply quotas at your gateway. The
+history unless PostgreSQL-backed [visitor reconciliation](#visitor-reconciliation) is configured.
+Its canonical IDs, exact aliases and reference hashes have no automatic expiry. The internal listener does no rate limiting: apply quotas at your gateway. The
 public listener limits each client network.
 
 A separate operator updater refreshes public snapshots without rebuilding the
@@ -98,7 +98,7 @@ registry. The cache holds public registry dates, not who asked. Tenants of priva
 listed free-subdomain service) are not looked up: their registered domain belongs
 to the namespace operator. The API needs HTTPS and TCP 43 to public addresses for
 this; without them, results report `unavailable`.
-There are no lookup retries, remote-provider waits or visitor-history fallbacks.
+There are no registry lookup retries, remote-provider waits or network-based visitor fallbacks.
 
 The SDK hashes identity signals locally and includes bounded automation, tampering and
 spoofing evidence outside those hashes. `identify()` posts it to the public listener;
@@ -122,6 +122,10 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_NETWORK_DATA` | Optional network manifest path. Keep its content-addressed ASN files in the same directory. No bundled/live fallback; absent/invalid data is unknown. Checked every 60 seconds; invalid replacements retain last-good data without extending expiry. |
 | `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL for the RDAP cache, identifications and lookup markers; the API does not start without it. Supports `rediss://` with certificate validation. An unreachable Redis means uncached RDAP lookups, HTTP 503 from `/v1/identify` and unknown identifications; domain and IP checks keep working and there is no memory fallback. Each pod keeps one multiplexed connection for each of these, replaced after any error, timeout or 60 s of idleness; commands are never retried. RDAP cache writes happen after the response (at most 64 in flight; extra writes are dropped and counted as cache errors). |
 | `OPENFINGERPRINT_REDIS_PASSWORD` | Optional Redis password, overriding one in the URL, so the URL can live outside a Secret. |
+| `OPENFINGERPRINT_POSTGRES_URL` | Optional dedicated PostgreSQL database connection string for visitor reconciliation. Without it, existing fingerprint-only behavior is unchanged. TLS is required by default, with certificate and hostname verification; only explicit `sslmode=disable` permits plaintext for trusted local tests. Credentials belong in a Secret. |
+| `OPENFINGERPRINT_POSTGRES_PASSWORD` | Optional password override for a URL without credentials. |
+| `OPENFINGERPRINT_POSTGRES_CA` | Optional PEM file adding a private PostgreSQL CA to the system roots. No insecure certificate-verification mode exists. |
+| `OPENFINGERPRINT_VISITOR_NAMESPACE` | Required with PostgreSQL: 1–64 ASCII letters, digits, underscores or hyphens. Stable, operator-controlled isolation boundary. Do not change it during rule upgrades. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
 | `OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS` | Seconds between checks of the override file, 1–86400, default 60. A changed file that fails to read or parse is rejected and the last valid snapshot stays until its sources expire. |
 | `OPENFINGERPRINT_COUNTRY_DATA` | Optional read-only DB-IP Country Lite MMDB path. Without it, IP checks return `unknown/not_configured`. Missing/invalid files yield unknown country results without disabling other checks. |
@@ -778,6 +782,180 @@ An identification can be looked up more than once within its hour, so a signup f
 checks it at two steps keeps working; treat `replayed` as a signal for your own rules,
 such as one identification per signup, not as a block.
 
+### Visitor reconciliation
+
+Configure a **dedicated database and least-privilege role** on an existing PostgreSQL
+cluster, then apply migrations explicitly before relying on visitor results:
+
+```sh
+cargo build --manifest-path api/Cargo.toml --locked
+# Supply OPENFINGERPRINT_POSTGRES_URL and OPENFINGERPRINT_VISITOR_NAMESPACE privately.
+./api/target/debug/openfingerprint-api --migrate-visitors
+```
+
+Normal API startup never runs DDL. Missing migrations or an unavailable database leave
+visitor identity unavailable; they do not create a memory/Redis replacement. The API
+uses at most eight PostgreSQL connections per replica and a two-second resolution budget.
+Redis must still supply the identification before any identity lookup, even when a
+PostgreSQL decision already exists.
+
+#### Three different identifiers
+
+- `identificationId`: a random 128-bit reference to one hour-long observation.
+- `fingerprint`: the existing deterministic evidence hash, shortened in API responses.
+  Its hashing, meaning and storage keys are unchanged.
+- `visitorId`: a separate random 128-bit server-issued reference to a retained browser
+  evidence grouping. It is not an account, authentication credential or physical-device ID.
+
+With PostgreSQL configured, successful compact checks add `visitorId`. It is absent
+when unknown. With `detail: true`, `identification.visitorId` carries the same value and
+`identification.reconciliation` explains the decision: `status`, `ruleVersion`,
+optional `visitorId` and `method`. Existing identification/fingerprint statuses remain
+independent. No PostgreSQL configuration means no additional response fields.
+
+Statuses include `resolved`, `insufficient_evidence`, `ambiguous`, `unavailable`,
+`namespace_mismatch`, `invalid_site`, `invalid_observation_time` and
+`expired_identification`; `invalid_evidence` is returned for rejected stored evidence.
+Methods are `new`, `exact` and `locale-v1`. These are categorical decisions, not
+confidence percentages or calibrated accuracy claims.
+
+#### Initial rules
+
+Visitor issuance requires a verified non-null full fingerprint and every expected
+policy-included schema-1 probe in its expected component/hint map. Unknown names,
+incomplete included evidence and unrecognized exclusion masks cannot mint visitors,
+even if the older fingerprint verifier can verify their smaller profiles.
+
+The supported masks are the empty mask and the SDK's Safari 17+ mask
+(`audio`, `canvas`, `screen`). Excluded diagnostics are not required. The latter
+mask is exact-only; eligibility is based on the evidence policy, not a second
+user-agent classifier.
+
+1. An exact full SHA-256 match in the same namespace, canonical origin and schema
+   returns its existing visitor. The shortened fingerprint is never the lookup key.
+2. Migration 002 adds `locale-v1`: all six rendering components and every hint except
+   `locale` must equal an immutable reference profile. All four complete identity
+   groups must match too, with the same schema and exclusions. This permits language
+   or time-zone changes, not arbitrary hardware, software or rendering changes.
+3. Candidate retrieval is an indexed composite-signature lookup capped at eight
+   visitors plus an overflow sentinel. Multiple candidates abstain; none is selected
+   by score, ordering or group count. Existing exact mappings take precedence.
+4. Sufficient evidence without a qualifying candidate creates a visitor. Partial
+   groups and core-only matches never authorize reconciliation.
+5. Accepted changed fingerprints become permanent exact aliases. They do not become
+   new reference profiles. Existing visitors are never automatically merged, and
+   a chain of small changes cannot expand the baseline.
+
+These groups are correlated, not independent votes. The locale rule is a narrow
+experimental policy, **not independently calibrated on real devices**. Identical
+non-locale evidence can belong to different browsers; the rule can then merge their
+observations. Even exact evidence cannot distinguish identical configurations.
+Browser updates and cumulative changes outside the rule can still split a returning
+browser. Neither a visitor ID nor absence of automation establishes trust.
+
+Automation, tampering, spoofing and behavior verdicts, network inputs, headers and
+JA4 never participate in matching. The SDK gains no probes, cache, cookies or stored
+identity; `identify()` still returns only `{ identificationId }`.
+
+#### Isolation, retention and concurrency
+
+Set a stable deployment namespace and use one per independently authorized customer.
+New identifications are stamped with that namespace by the server; legacy observations
+without one and records from another namespace cannot acquire visitors. Exact canonical
+origins are separate site partitions: subdomains are not joined. Origin is
+browser-supplied and forgeable, **not authentication**. Shared hosting needs a trusted
+tenant/deployment boundary; this API still has no authentication or tenant request field.
+
+PostgreSQL retains visitor references, original component/hint and group hashes,
+exclusion/schema metadata, exact aliases and migration history until explicit deletion.
+There is no 30-day rotation or inactivity expiry. No IP, raw header, raw probe, JA4,
+account, email or behavioral history is copied into this store. Hashes remain
+pseudonymous data, including low-entropy values that can be guessed.
+
+Identification decisions expire at the original observation deadline, not one hour
+after the first lookup. Expired decisions cannot be read and are pruned in indexed
+batches of 1,000, normally every minute, draining additional batches immediately.
+Physical deletion can lag during an outage or backlog; backups need their own retention
+and deletion policy. Canonical profiles and exact aliases are not pruned.
+
+A transaction takes a shared migration lock and deterministic identification/signature
+locks before reading candidates or writing visitors, aliases and decisions together.
+Concurrent API replicas, including distinct identifications with equivalent qualifying
+evidence, converge on one visitor. Decisions are immutable for the life of an
+identification, including insufficient and ambiguous results. Failed transactions roll
+back. A lost response is retried by reading the committed decision; database/Redis
+failures remain unknown instead of generating replacement IDs.
+
+The continuity guarantee depends on retaining the authoritative database and its
+acknowledged writes. Use durable storage, tested backups and a failover policy matching
+your recovery-point requirement. Recovering an old backup can lose newer identities;
+no matching algorithm repairs lost authoritative history. Configure gateway quotas and
+database capacity for indefinite alias growth. Storage rejection is unavailable, never
+a reason to evict identities or mint substitutes.
+
+For an approved full namespace deletion, an operator can run parameterized equivalents
+of the following transaction against this dedicated database:
+
+```sql
+BEGIN;
+DELETE FROM of_resolutions WHERE namespace = 'your_namespace';
+DELETE FROM of_visitors WHERE namespace = 'your_namespace';
+COMMIT;
+```
+
+Visitor deletion cascades to exact aliases and rule indexes. Coordinate deletion with
+writers and backup retention; ongoing traffic can create new identities. There is no
+public deletion or account-linking endpoint.
+
+#### Forward migrations and later rules
+
+Committed SQL in `api/migrations/` is append-only. `--migrate-visitors` checks ordered
+migration checksums, rejects edited/unsupported histories, and applies each pending
+migration transactionally under an exclusive database advisory lock. An interrupted
+migration rolls back; rerunning resumes after the last committed migration.
+
+Migration 001 establishes durable exact matching. Migration 002 backfills locale
+indexes from retained immutable reference hashes, **without assigning or merging IDs**.
+An index may reference several existing visitors; that makes future fuzzy lookups
+ambiguous while their established exact mappings stay intact.
+
+To add a rule, add a new numbered SQL migration and register it in `MIGRATIONS` in
+`src/visitor.rs`, implement its bounded comparison and locking, and extend the labelled
+regression cases. Derive new indexes only from available retained evidence; missing
+historical inputs stay unsupported. Do not change fingerprint domains, visitor IDs,
+namespace, old aliases or frozen decisions. `ruleVersion` records the applied visitor
+migration revision that made each decision.
+
+Deploy compatible readers before explicitly applying a rule migration. Backfills
+currently run transactionally while new resolutions are blocked; large histories need
+an operator-sized maintenance window, otherwise checks may report unavailable.
+Existing identification decisions remain unchanged after upgrading. Older binaries
+refuse to make new decisions against an unknown newer revision. Do not downgrade the
+database or silently run new rules through old readers. Rule retirement/correction
+needs a new migration and explicit policy; an ordinary upgrade is not permission to
+merge existing visitors or rewrite old assignments.
+
+The matcher, migrations and checks are MIT-licensed and identical for self-hosters.
+There is no hosted-only reconciliation tier.
+
+#### Verification and limits
+
+```sh
+# A disposable local database only; these tests create and drop isolated schemas.
+# Supply OPENFINGERPRINT_TEST_POSTGRES_URL with explicit sslmode=disable.
+node api/test-visitors.mjs
+```
+
+Without that variable the runner explicitly reports a skip; CI supplies PostgreSQL.
+Tests cover exact repeats, locale changes, partial groups, incomplete evidence, site/
+namespace isolation, expired observations with persistent identities, concurrent replicas,
+frozen decisions, rule migration ambiguity, rollback/failure and REST/protobuf parity.
+Independently assigned **synthetic** browser labels exercise both expected false splits
+and unavoidable indistinguishable-evidence false merges; they are not real-device
+measurements or population accuracy. The existing evaluation recorder does not retain
+component/hint hashes, so a consented real-device churn study still needs an explicitly
+approved extension. Fingerprint.com is a reference, not ground truth.
+
 ### Connect, gRPC and gRPC-Web (`openfingerprint.v1.OpenFingerprint/Check`)
 
 The `/v1/check` verdicts and identification evidence are also an RPC, on the same internal
@@ -825,6 +1003,11 @@ behavior from observed behavior without patterns. Protobuf JSON omits nulls and 
 lists/maps, uses camelCase (`schemaVersion`, `ruleVersion`, `unavailableProbes`, including
 for tampering), and encodes `int64` ages as strings. These are representation differences,
 not different evidence. REST is unchanged. Domain, email and IP details remain REST-only.
+
+Visitor fields have the same semantics across REST, Connect and gRPC: compact
+\`visitor_id\` uses new wire number 22; detail adds \`visitor_id\` at 15 and
+\`reconciliation\` at 16. Unknown visitor IDs remain unset. Existing wire numbers
+and reservations are unchanged.
 
 Regenerate clients from the updated protobuf to request detail. Existing clients and
 requests keep their compact behavior and wire numbers; reserved fields stay reserved.

@@ -1,0 +1,64 @@
+{{- if .Values.postgres.enabled }}
+{{- if .Values.postgres.database.create }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: {{ include "of.name" . }}-visitors
+  namespace: {{ required "postgres.database.clusterNamespace is required" .Values.postgres.database.clusterNamespace | quote }}
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+spec:
+  cluster:
+    name: {{ required "postgres.database.clusterName is required" .Values.postgres.database.clusterName | quote }}
+  name: {{ .Values.postgres.database.name | quote }}
+  owner: {{ .Values.postgres.database.owner | quote }}
+  ensure: present
+  databaseReclaimPolicy: retain
+---
+{{- end }}
+{{- if .Values.postgres.migrations }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "of.name" . }}-visitor-migrations
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openfingerprint-visitor-migrations
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        {{- include "of.podSecurity" . | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "of.image" (dict "image" .Values.image "appVersion" .Chart.AppVersion) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--migrate-visitors"]
+          env:
+            {{- include "of.postgresEnv" . | nindent 12 }}
+          securityContext:
+            {{- include "of.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.postgres.caSecret }}
+          volumeMounts:
+            {{- include "of.postgresMount" . | nindent 12 }}
+      volumes:
+        {{- include "of.postgresVolume" . | nindent 8 }}
+          {{- end }}
+{{- end }}
+{{- end }}

@@ -119,6 +119,8 @@ pub struct Record {
     pub ja4: Option<String>,
     pub origin: String,
     pub created_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 pub struct Identifications {
@@ -145,7 +147,7 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
-fn new_id() -> Option<String> {
+pub(crate) fn new_id() -> Option<String> {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut bytes = [0u8; 16];
     SystemRandom::new().fill(&mut bytes).ok()?;
@@ -691,6 +693,11 @@ async fn create(
         ja4: peer.ja4.clone(),
         origin: origin.to_ascii_lowercase(),
         created_at_ms: now_ms(),
+        namespace: identify
+            .state
+            .visitors
+            .as_ref()
+            .map(|store| store.namespace().to_owned()),
     };
     let Some(id) = new_id() else {
         return cors(

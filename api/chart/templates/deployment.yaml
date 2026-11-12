@@ -60,6 +60,9 @@ spec:
             - name: identify
               containerPort: {{ .Values.identify.port }}
           env:
+            {{- if .Values.postgres.enabled }}
+            {{- include "of.postgresEnv" . | nindent 12 }}
+            {{- end }}
             - name: OPENFINGERPRINT_LISTEN_ADDR
               value: 0.0.0.0:8180
             {{- with .Values.sentry.dsn }}
@@ -136,6 +139,9 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            {{- if and .Values.postgres.enabled .Values.postgres.caSecret }}
+            {{- include "of.postgresMount" . | nindent 12 }}
+            {{- end }}
             {{- if .Values.domainData.refresh.enabled }}
             - name: domain-data
               mountPath: /domain-data
@@ -182,6 +188,9 @@ spec:
               mountPath: /network-data
         {{- end }}
       volumes:
+        {{- if and .Values.postgres.enabled .Values.postgres.caSecret }}
+        {{- include "of.postgresVolume" . | nindent 8 }}
+        {{- end }}
         {{- if .Values.countryData.enabled }}
         - name: country-data
           emptyDir:

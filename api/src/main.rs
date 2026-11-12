@@ -18,6 +18,7 @@ mod spoofing;
 mod tampering;
 mod tld;
 mod tls;
+mod visitor;
 mod whois;
 
 use std::{sync::Arc, time::Duration};
@@ -128,6 +129,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::io::copy(&mut std::io::stdin(), &mut std::io::sink())?;
         return Ok(());
     }
+    if args.as_slice() == ["--migrate-visitors"] {
+        let store = visitor::Store::from_env()?.ok_or("PostgreSQL configuration is required")?;
+        store.migrate().await?;
+        println!("Visitor migrations applied.");
+        return Ok(());
+    }
     if !args.is_empty() {
         return Err("Unknown arguments".into());
     }
@@ -141,6 +148,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
     let _sentry = sentry::init(options);
     let state = Arc::new(check::AppState::from_env()?);
+    if state.visitors.is_some() {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                if let Some(visitors) = &state.visitors {
+                    while matches!(visitors.prune().await, Ok(1000)) {
+                        tokio::task::yield_now().await;
+                    }
+                }
+            }
+        });
+    }
     if state.network.reloads() {
         let state = state.clone();
         tokio::spawn(async move {

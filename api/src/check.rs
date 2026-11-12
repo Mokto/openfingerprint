@@ -19,6 +19,7 @@ pub struct AppState {
     pub network: crate::network::Store,
     pub replay: crate::replay::Replay,
     pub identifications: crate::identify::Identifications,
+    pub visitors: Option<crate::visitor::Store>,
 }
 impl AppState {
     pub fn from_env() -> Result<Self, &'static str> {
@@ -32,6 +33,7 @@ impl AppState {
         state.domains = crate::domains::DomainStore::from_env();
         state.countries = crate::country::CountryStore::from_env();
         state.network = crate::network::Store::from_env()?;
+        state.visitors = crate::visitor::Store::from_env()?;
         Ok(state)
     }
     fn configure(
@@ -50,6 +52,7 @@ impl AppState {
             replay,
             identifications,
             countries: crate::country::CountryStore::new(None),
+            visitors: None,
         }
     }
     async fn check_domain(&self, value: serde_json::Value) -> crate::domains::DomainCheck {
@@ -255,6 +258,74 @@ impl Evidence {
     }
 }
 
+pub(crate) fn visitor_profile(value: serde_json::Value) -> Option<crate::visitor::Profile> {
+    const COMPONENTS: [&str; 6] = [
+        "audio",
+        "canvas",
+        "fontFallbacks",
+        "fontPreferences",
+        "fonts",
+        "gpu",
+    ];
+    const HINTS: [&str; 10] = [
+        "architecture",
+        "browser",
+        "display",
+        "features",
+        "hardware",
+        "locale",
+        "math",
+        "media",
+        "platform",
+        "screen",
+    ];
+    let evidence: Evidence = serde_json::from_value(value).ok()?;
+    if !evidence.valid() {
+        return None;
+    }
+    let fingerprint = evidence.fingerprint.clone()?;
+    let mut excluded = evidence.excluded.clone();
+    excluded.sort();
+    if !excluded.is_empty() && excluded != ["audio", "canvas", "screen"] {
+        return None;
+    }
+    let complete = |map: &BTreeMap<String, String>, expected: &[&str]| {
+        map.keys().all(|key| expected.contains(&key.as_str()))
+            && expected
+                .iter()
+                .all(|key| excluded.iter().any(|e| e == key) || map.contains_key(*key))
+    };
+    if !complete(&evidence.components, &COMPONENTS) || !complete(&evidence.hints, &HINTS) {
+        return None;
+    }
+    let identity_groups: BTreeMap<String, String> = evidence
+        .identity_groups()
+        .into_iter()
+        .map(|(key, value)| (key.into(), value))
+        .collect();
+    let locale_signature =
+        (excluded.is_empty() && identity_groups.len() == GROUPS.len()).then(|| {
+            sha256(&format!(
+                "openfingerprint:visitor:locale:1\0{}",
+                serde_json::to_string(&identity_groups).expect("group hashes")
+            ))
+        });
+    let included = |map: BTreeMap<String, String>| {
+        map.into_iter()
+            .filter(|(name, _)| !excluded.contains(name))
+            .collect()
+    };
+    Some(crate::visitor::Profile {
+        schema_version: i32::from(evidence.version),
+        fingerprint,
+        components: included(evidence.components),
+        hints: included(evidence.hints),
+        identity_groups,
+        locale_signature,
+        excluded,
+    })
+}
+
 #[derive(Serialize)]
 struct Verified {
     status: &'static str,
@@ -320,6 +391,10 @@ pub(crate) struct IdentificationCheck {
     ja4: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tls_client: Option<crate::tls::Client>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visitor_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reconciliation: Option<crate::visitor::Decision>,
 }
 impl IdentificationCheck {
     /// Well-formed evidence (with or without a full ID) whose automation, tampering,
@@ -396,7 +471,7 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
     };
     if let Some(identification) = map.remove("identification") {
         out.insert("fingerprint".into(), identification["fingerprint"].clone());
-        for key in ["replayed", "ageMs"] {
+        for key in ["visitorId", "replayed", "ageMs"] {
             if let Some(value) = identification.get(key).filter(|v| !v.is_null()) {
                 out.insert(key.into(), value.clone());
             }
@@ -493,6 +568,8 @@ pub(crate) fn check_evidence(
         origin: None,
         ja4: None,
         tls_client: None,
+        visitor_id: None,
+        reconciliation: None,
     };
     if let Ok(evidence) = serde_json::from_value::<Evidence>(value)
         && let Ok(profile) = evidence.verified()
@@ -650,7 +727,7 @@ async fn check_identification(state: &AppState, id: &serde_json::Value) -> Ident
     let mut check = {
         let _timer = crate::metrics::start(Step::Evidence);
         check_evidence(
-            record.evidence,
+            record.evidence.clone(),
             Some(&record.headers),
             Some(record.ja4.as_deref()),
         )
@@ -660,6 +737,15 @@ async fn check_identification(state: &AppState, id: &serde_json::Value) -> Ident
         check.replayed = timed(Step::Replay, state.replay.first_seen(id))
             .await
             .map(|first| !first);
+    }
+    if let Some(visitors) = &state.visitors {
+        let decision = if check.is_valid() {
+            visitors.resolve(id, &record).await
+        } else {
+            crate::visitor::Decision::unknown("invalid_evidence")
+        };
+        check.visitor_id = decision.visitor_id.clone();
+        check.reconciliation = Some(decision);
     }
     check.tls_client = record.ja4.as_deref().and_then(crate::tls::client);
     check.ja4 = record.ja4;
@@ -788,6 +874,7 @@ pub(crate) mod tests {
             ja4: Some(ja4.into()),
             origin: "https://app.example.test".into(),
             created_at_ms: now_ms() - 1_500,
+            namespace: None,
         };
         let id = "AbCdEfGhIjKlMnOpQrStU_";
         let curl = "t13d4907h2_0d8feac7bc37_7395dae3b2f3";

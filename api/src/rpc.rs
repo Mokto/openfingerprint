@@ -220,6 +220,7 @@ mod tests {
             ja4: ja4.map(str::to_owned),
             origin: "https://app.example.test".into(),
             created_at_ms: crate::check::tests::now_ms() - 1_500,
+            namespace: None,
         }
     }
 
@@ -441,6 +442,49 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL"]
+    async fn visitor_reconciliation_matches_rest_and_protobuf_presence() {
+        let db = crate::visitor::tests::Database::new().await;
+        let store = db.store("study");
+        store.migrate().await.unwrap();
+        let (addr, _) = crate::cache::tests::fake_redis(None).await;
+        let mut state = crate::check::tests::state_with_redis(&addr);
+        state.visitors = Some(store);
+        let id = crate::identify::new_id().unwrap();
+        let record = crate::visitor::tests::record();
+        state.identifications.store(&id, &record).await.unwrap();
+        let rpc = Box::pin(parity(&state, &id)).await;
+        let visitor = rpc.visitor_id.clone().unwrap();
+        let detail = rpc.identification.as_option().unwrap();
+        assert_eq!(detail.visitor_id.as_ref(), Some(&visitor));
+        assert_eq!(
+            detail.reconciliation.as_option().unwrap().status.as_deref(),
+            Some("resolved")
+        );
+        use buffa::Message;
+        assert_eq!(
+            CheckResponse::decode_from_slice(&rpc.encode_to_vec()).unwrap(),
+            rpc
+        );
+        let mut missing = crate::visitor::tests::record();
+        missing.evidence = crate::check::tests::payload();
+        let missing_id = crate::identify::new_id().unwrap();
+        state
+            .identifications
+            .store(&missing_id, &missing)
+            .await
+            .unwrap();
+        let rpc = Box::pin(parity(&state, &missing_id)).await;
+        let detail = rpc.identification.as_option().unwrap();
+        assert!(rpc.visitor_id.is_none() && detail.visitor_id.is_none());
+        assert_eq!(
+            detail.reconciliation.as_option().unwrap().status.as_deref(),
+            Some("insufficient_evidence")
+        );
+        db.cleanup().await;
     }
 
     #[test]

@@ -29,6 +29,18 @@ jobs:
   api:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_PASSWORD: local-test-only
+          POSTGRES_DB: openfingerprint_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d openfingerprint_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      OPENFINGERPRINT_TEST_POSTGRES_URL: host=127.0.0.1 port=5432 user=postgres password=local-test-only dbname=openfingerprint_test sslmode=disable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -45,6 +57,7 @@ jobs:
       - run: cargo +stable fmt --manifest-path api/Cargo.toml --check
       - run: cargo +stable clippy --manifest-path api/Cargo.toml --locked --all-targets -- -D warnings
       - run: cargo +stable test --manifest-path api/Cargo.toml --locked
+      - run: node api/test-visitors.mjs
       - run: cargo +stable build --manifest-path api/Cargo.toml --locked
       - run: node api/test.mjs
       - run: node api/test-identify.mjs

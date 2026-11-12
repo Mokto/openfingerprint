@@ -22,8 +22,10 @@ automation does not, which the automation probes cover.
 
 The API's internal listener has no authentication: run it on a private network behind
 your backend (see the [security notes](api/README.md#security)); only the identify
-listener faces the Internet. There is no visitor history: the Redis it requires holds
-cached registry answers and hour-long identifications, nothing that identifies a person. Open
+listener faces the Internet. Redis holds cached registry answers and hour-long
+identifications. Optional PostgreSQL-backed [visitor reconciliation](api/README.md#visitor-reconciliation)
+retains server-issued visitor IDs, exact fingerprint aliases and reference hashes until
+explicit deletion. These are pseudonymous browser groupings, not person or physical-device identities. Open
 domain snapshots provide independent disposable, free-subdomain, public-mailbox,
 email-relay and scoped referrer-spam evidence, including recently monitored provider
 domains, provenance, expiry and exact reviewed disputes, plus typo suggestions for
@@ -81,8 +83,9 @@ pnpm api:check
 The root package is private and provides convenience commands. SDK source,
 build configuration, browser tests and generated `dist/` live in `sdk/`.
 The API owns its Cargo package, Dockerfile, HTTP self-check and data updater in `api/`, plus a Helm chart in `api/chart/`.
-API checks require Rust and Node but no JavaScript dependencies, database or cloud
-account. See the [API guide](api/README.md) for configuration and containers.
+API checks require Rust and Node but no JavaScript dependencies or cloud account.
+Visitor integration checks additionally require a disposable PostgreSQL database; CI supplies one.
+See the [API guide](api/README.md) for configuration and containers.
 
 ## Releases
 

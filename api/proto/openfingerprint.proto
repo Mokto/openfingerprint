@@ -64,6 +64,7 @@ message CheckResponse {
   // Only with `detail` and an `identification_id`: the identification section of
   // POST /v1/check with `detail: true`.
   IdentificationDetail identification = 21;
+  optional string visitor_id = 22;
 }
 
 // What the API found for an identification. As everywhere here, an unset field means
@@ -93,6 +94,15 @@ message IdentificationDetail {
   EvidenceCheck tampering = 12;
   EvidenceCheck spoofing = 13;
   BehaviorCheck behavior = 14;
+  optional string visitor_id = 15;
+  Reconciliation reconciliation = 16;
+}
+
+message Reconciliation {
+  optional string status = 1;
+  optional uint32 rule_version = 2;
+  optional string visitor_id = 3;
+  optional string method = 4;
 }
 
 message EvidenceSummary {
