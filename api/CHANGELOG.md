@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.23.0](https://github.com/Mokto/openfingerprint/compare/api-v0.22.0...api-v0.23.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** identification.fingerprint and evidence.identityGroups are no longer returned over REST, Connect or gRPC; the protobuf fields are reserved.
+* **api:** compact REST and all RPC check responses no longer return fingerprint. Use visitorId, or request detail:true and read identification.fingerprint. Protobuf field 1 and name fingerprint are reserved.
+
+### Features
+
+* add behavior evidence v2 and click-pattern observability metrics ([#125](https://github.com/Mokto/openfingerprint/issues/125)) ([f36ba75](https://github.com/Mokto/openfingerprint/commit/f36ba75f1730f18cb2ea71d34bcee3c810ea0df1))
+* **api:** add customer visitor scopes for separate visitor IDs per customer ([#133](https://github.com/Mokto/openfingerprint/issues/133)) ([140c5e0](https://github.com/Mokto/openfingerprint/commit/140c5e0f4ff19fb08c6f5af0931563cad5924dba))
+* **api:** add durable PostgreSQL visitor reconciliation ([#129](https://github.com/Mokto/openfingerprint/issues/129)) ([e2b41cb](https://github.com/Mokto/openfingerprint/commit/e2b41cb1c860b5977e72f4a1a6b5042e074a57c2))
+* **api:** add suspiciousClickPattern context flag for repeated mouse clicks ([#128](https://github.com/Mokto/openfingerprint/issues/128)) ([00e5f70](https://github.com/Mokto/openfingerprint/commit/00e5f7081610bcc34237f65d64e7817ff61ce47b))
+* **api:** remove fingerprint and identity groups from detailed responses ([#132](https://github.com/Mokto/openfingerprint/issues/132)) ([baefb5b](https://github.com/Mokto/openfingerprint/commit/baefb5b0c879a8833972985242085c6c4b48718f))
+* **api:** remove fingerprint from default check responses ([#130](https://github.com/Mokto/openfingerprint/issues/130)) ([8e23b5c](https://github.com/Mokto/openfingerprint/commit/8e23b5c97d0d388468878637df61218e4d45ce0c))
+
 ## [0.22.0](https://github.com/Mokto/openfingerprint/compare/api-v0.21.0...api-v0.22.0) (2026-11-12)
 
 
