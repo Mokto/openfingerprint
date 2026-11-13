@@ -1,3 +1,4 @@
+{{- if and (not .Values.postgres.enabled) (or .Values.postgres.visitorScope .Values.postgres.requireVisitorScope) }}{{ fail "visitor scopes require postgres.enabled=true" }}{{ end }}
 {{- if and (not (index .Values "redis-ha").enabled) (not .Values.existingSecret) }}{{ fail "existingSecret must name the Secret holding OPENFINGERPRINT_REDIS_URL when redis-ha.enabled=false" }}{{ end }}
 {{- if or (not (kindIs "slice" .Values.identify.origins)) (empty .Values.identify.origins) }}{{ fail "identify.origins must list the page origins allowed to post to /v1/identify, or [\"*\"]" }}{{ end }}
 {{- if or (not (kindIs "slice" .Values.identify.certificates)) (empty .Values.identify.certificates) }}{{ fail "identify.certificates must list the TLS Secrets of the identify hostnames" }}{{ end }}

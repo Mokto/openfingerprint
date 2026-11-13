@@ -125,7 +125,9 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_POSTGRES_URL` | Optional dedicated PostgreSQL database connection string for visitor reconciliation. Without it, checks return verdicts but no browser identity. TLS is required by default, with certificate and hostname verification; only explicit `sslmode=disable` permits plaintext for trusted local tests. Credentials belong in a Secret. |
 | `OPENFINGERPRINT_POSTGRES_PASSWORD` | Optional password override for a URL without credentials. |
 | `OPENFINGERPRINT_POSTGRES_CA` | Optional PEM file adding a private PostgreSQL CA to the system roots. No insecure certificate-verification mode exists. |
-| `OPENFINGERPRINT_VISITOR_NAMESPACE` | Required with PostgreSQL: 1–64 ASCII letters, digits, underscores or hyphens. Stable, operator-controlled isolation boundary. Do not change it during rule upgrades. |
+| `OPENFINGERPRINT_VISITOR_NAMESPACE` | Required with PostgreSQL: 1–64 ASCII letters, digits, underscores or hyphens. Stable deployment boundary, stamped on identifications. Do not change it during rule upgrades. |
+| `OPENFINGERPRINT_VISITOR_SCOPE` | Requires PostgreSQL. Optional stable default customer scope for checks without `visitorScope`: 1–128 ASCII letters, digits, underscores or hyphens. Unset preserves the existing unscoped partition and its IDs. Changing it starts a separate identity partition. |
+| `OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE` | `true` requires an explicit `visitorScope` on every identification check, rejecting a missing scope with HTTP 400 / RPC `INVALID_ARGUMENT`. Default `false`. Cannot be combined with a default scope. Use this for shared hosted deployments with PostgreSQL. |
 | `OPENFINGERPRINT_DOMAIN_DATA` | Optional read-only snapshot path; otherwise uses the bundled snapshot. Missing/invalid overrides yield unknown domain facts without disabling browser verification. |
 | `OPENFINGERPRINT_DOMAIN_DATA_RELOAD_SECONDS` | Seconds between checks of the override file, 1–86400, default 60. A changed file that fails to read or parse is rejected and the last valid snapshot stays until its sources expire. |
 | `OPENFINGERPRINT_COUNTRY_DATA` | Optional read-only DB-IP Country Lite MMDB path. Without it, IP checks return `unknown/not_configured`. Missing/invalid files yield unknown country results without disabling other checks. |
@@ -138,8 +140,9 @@ build arguments, command-line arguments or logs.
 
 ## Security
 
-The internal listener has no authentication, no keys and no tenants. Whoever can reach
-it can use it, and each check makes DNS, RDAP and WHOIS requests from your server's
+The internal listener has no authentication or keys. `visitorScope` partitions identity
+data but does not authenticate or authorize a tenant. Whoever can reach the listener
+can select any scope, and domain checks can make DNS, RDAP and WHOIS requests from your server's
 addresses. Deploy it so that only your backend can connect:
 
 - Keep its Service private: no Ingress, no public load balancer. With the
@@ -212,6 +215,7 @@ The JSON object accepts only these fields:
 | Field | Shape |
 | --- | --- |
 | `identificationId` | Optional ID from `/v1/identify`, which your page passes to your backend. |
+| `visitorScope` | Optional stable customer/account scope selected by your trusted backend: 1–128 ASCII letters, digits, underscores or hyphens. Requires `identificationId`. Does not identify the browser or authorize access. See [Customer scopes](#customer-scopes). |
 | `domain` | Optional ASCII hostname, not a URL or complete email address. |
 | `email` | Optional full email address. Its domain gets the `domain` checks, so it cannot be combined with `domain`. |
 | `ip` | Optional visitor IPv4/IPv6 literal supplied by your trusted backend. |
@@ -482,8 +486,8 @@ not that every check succeeded: inspect each requested section. Valid sections
 survive failures in other sections; there is no combined clean/fraud verdict.
 
 Malformed JSON, non-object envelopes, empty/all-null requests and unknown top-level
-fields, and `domain` together with `email`, return HTTP 400. Account metadata and raw
-browser context are not additional inputs. All request bodies are limited to
+fields, and `domain` together with `email`, return HTTP 400. Apart from the explicit
+`visitorScope`, account metadata and raw browser context are not additional inputs. All request bodies are limited to
 64 KiB, including nested evidence, before evaluation.
 
 #### Automation indicators
@@ -874,7 +878,7 @@ The supported masks are the empty mask and the SDK's Safari 17+ mask
 mask is exact-only; eligibility is based on the evidence policy, not a second
 user-agent classifier.
 
-1. An exact full SHA-256 match in the same namespace, canonical origin and schema
+1. An exact full SHA-256 match in the same deployment/customer partition, canonical origin and schema
    returns its existing visitor.
 2. Migration 002 adds `locale-v1`: all six rendering components and every hint except
    `locale` must equal an immutable reference profile. All four complete identity
@@ -900,14 +904,59 @@ Automation, tampering, spoofing and behavior verdicts, network inputs, headers a
 JA4 never participate in matching. The SDK gains no probes, cache, cookies or stored
 identity; `identify()` still returns only `{ identificationId }`.
 
+#### Customer scopes
+
+Your trusted backend can select a customer/account partition on each check:
+
+```json
+{"identificationId":"<ID from /v1/identify>","visitorScope":"customer-account-id"}
+```
+
+For shared hosting, set `OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE=true` and inject the
+scope from the authenticated customer account. Reject or overwrite a caller-supplied
+scope; never trust a browser, API-key owner or request body to choose another customer's
+partition. Use the stable customer/organization ID, not an end user's ID or API key.
+
+The scope can be an opaque account ID or an optional hex/base64url
+`HMAC-SHA256(platformSecret, "openfingerprint:scope:v1:" + accountId)` calculated by the
+trusted backend. Send only the HMAC result; keep the secret server-side and stable.
+The API treats it as an opaque scope, not a signature it verifies. Changing the scope
+or HMAC secret selects a different partition.
+
+Every exact match, candidate index, reference profile, exact alias, frozen decision
+and reconciliation lock uses the partition. Visitor IDs are independently random
+128-bit values, not transformations of a global visitor ID. Knowing one customer's ID
+does not provide a conversion to another customer's. Scopes are not returned or logged.
+
+A request scope overrides `OPENFINGERPRINT_VISITOR_SCOPE`. Without either, existing
+unscoped identities remain unchanged. A configured default is useful for single-customer
+self-hosting; required-scope mode forbids a default to avoid accidental shared fallback.
+Startup rejects configured scoping without PostgreSQL rather than silently disabling it.
+New scoped partitions never adopt old unscoped IDs or aliases. Existing data is retained;
+switching existing callers to scopes intentionally starts new visitor identities.
+Domain/email/IP-only checks do not need a scope. A supplied malformed scope is rejected
+even without PostgreSQL; a valid scope cannot produce visitor IDs without PostgreSQL.
+
+No schema migration is needed. Existing indexed `namespace` keys store
+`<deployment>:scope:v1:<lowercase SHA-256 of scope>` for scoped data; no raw account
+ID or scope is retained. Deployment namespaces cannot contain colons, so these keys
+cannot collide with a legacy unscoped namespace. Hashing is not secrecy for guessable
+account IDs; use the optional HMAC if those IDs should not reach this service.
+SQL/rule migration history remains deployment-wide.
+
 #### Isolation, retention and concurrency
 
-Set a stable deployment namespace and use one per independently authorized customer.
-New identifications are stamped with that namespace by the server; legacy observations
-without one and records from another namespace cannot acquire visitors. Exact canonical
-origins are separate site partitions: subdomains are not joined. Origin is
-browser-supplied and forgeable, **not authentication**. Shared hosting needs a trusted
-tenant/deployment boundary; this API still has no authentication or tenant request field.
+Set a stable deployment namespace. New identifications are stamped with it by the
+server; legacy observations without one and records from another deployment cannot
+acquire visitors. Customer scopes subdivide that deployment. Exact canonical origins
+remain separate site partitions: subdomains are not joined. Origin is browser-supplied
+and forgeable, **not authentication**. The public identify listener and SDK do not
+accept customer scopes; the trusted backend selects one when checking the observation.
+
+The scope does not prove who owns an `identificationId` or restrict who may look it up.
+Protect these short-lived references and enforce customer authorization in the gateway.
+The internal listener must remain private; required-scope mode is not authentication.
+`replayed` remains an observation-wide lookup signal, not a per-customer visitor key.
 
 PostgreSQL retains visitor references, original component/hint and group hashes,
 exclusion/schema metadata, exact aliases and migration history until explicit deletion.
@@ -925,7 +974,7 @@ A transaction takes a shared migration lock and deterministic identification/sig
 locks before reading candidates or writing visitors, aliases and decisions together.
 Concurrent API replicas, including distinct identifications with equivalent qualifying
 evidence, converge on one visitor. Decisions are immutable for the life of an
-identification, including insufficient and ambiguous results. Failed transactions roll
+identification within its customer partition, including insufficient and ambiguous results. Failed transactions roll
 back. A lost response is retried by reading the committed decision; database/Redis
 failures remain unknown instead of generating replacement IDs.
 
@@ -941,11 +990,15 @@ of the following transaction against this dedicated database:
 
 ```sql
 BEGIN;
-DELETE FROM of_resolutions WHERE namespace = 'your_namespace';
-DELETE FROM of_visitors WHERE namespace = 'your_namespace';
+DELETE FROM of_resolutions
+WHERE namespace = 'your_namespace' OR starts_with(namespace, 'your_namespace:scope:v1:');
+DELETE FROM of_visitors
+WHERE namespace = 'your_namespace' OR starts_with(namespace, 'your_namespace:scope:v1:');
 COMMIT;
 ```
 
+This removes both legacy and scoped data for the deployment. For one customer only,
+compute its exact partition key as described above and delete by equality instead.
 Visitor deletion cascades to exact aliases and rule indexes. Coordinate deletion with
 writers and backup retention; ongoing traffic can create new identities. There is no
 public deletion or account-linking endpoint.
@@ -991,7 +1044,8 @@ node api/test-visitors.mjs
 
 Without that variable the runner explicitly reports a skip; CI supplies PostgreSQL.
 Tests cover exact repeats, locale changes, partial groups, incomplete evidence, site/
-namespace isolation, expired observations with persistent identities, concurrent replicas,
+namespace/customer-scope isolation, scoped defaults and required scopes, expired
+observations with persistent identities, concurrent replicas,
 frozen decisions, rule migration ambiguity, rollback/failure and REST/protobuf parity.
 Independently assigned **synthetic** browser labels exercise both expected false splits
 and unavoidable indistinguishable-evidence false merges; they are not real-device
@@ -1018,7 +1072,8 @@ buf curl --reflect -d '{"domain":"gmail.com"}' \
 ```
 
 [`proto/openfingerprint.proto`](proto/openfingerprint.proto) is the contract.
-`CheckRequest` has `identification_id`, `domain`, `email`, `ip` and optional `detail`
+`CheckRequest` has `identification_id`, optional `visitor_scope` (wire number 8),
+`domain`, `email`, `ip` and optional `detail`
 (default false). `CheckResponse` always keeps the compact verdict fields. With
 `detail: true` it also includes a typed `identification` message, evaluated once by the
 same rules as REST. No identification requested means no identification message.

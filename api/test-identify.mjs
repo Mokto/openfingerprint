@@ -301,7 +301,12 @@ try {
 		[{ OPENFINGERPRINT_IDENTIFY_LIMIT_PER_MINUTE: '0' }, 'OPENFINGERPRINT_IDENTIFY_LIMIT_PER_MINUTE must be'],
 		[{ OPENFINGERPRINT_IDENTIFY_ORIGINS: 'app.example.test' }, 'OPENFINGERPRINT_IDENTIFY_ORIGINS must be'],
 		[{ OPENFINGERPRINT_IDENTIFY_PROXY_PROTOCOL: 'yes' }, 'OPENFINGERPRINT_IDENTIFY_PROXY_PROTOCOL must be'],
-		[{ OPENFINGERPRINT_IDENTIFY_CERTS: empty }, 'No usable tls.crt and tls.key']
+		[{ OPENFINGERPRINT_IDENTIFY_CERTS: empty }, 'No usable tls.crt and tls.key'],
+        [{ OPENFINGERPRINT_POSTGRES_URL: undefined, OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE: 'true' }, 'Visitor scopes require OPENFINGERPRINT_POSTGRES_URL'],
+        [{ OPENFINGERPRINT_POSTGRES_URL: undefined, OPENFINGERPRINT_VISITOR_SCOPE: 'customer-a' }, 'Visitor scopes require OPENFINGERPRINT_POSTGRES_URL'],
+        [{ OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE: 'yes' }, 'Invalid OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE'],
+        [{ OPENFINGERPRINT_POSTGRES_URL: 'host=127.0.0.1 port=9 user=test sslmode=disable', OPENFINGERPRINT_VISITOR_NAMESPACE: 'study', OPENFINGERPRINT_VISITOR_SCOPE: 'customer-a', OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE: 'true' }, 'Invalid visitor scope configuration'],
+        [{ OPENFINGERPRINT_POSTGRES_URL: 'host=127.0.0.1 port=9 user=test sslmode=disable', OPENFINGERPRINT_VISITOR_NAMESPACE: 'study', OPENFINGERPRINT_VISITOR_SCOPE: 'customer/other' }, 'Invalid visitor scope configuration']
 	]) {
 		const env = environment(extra);
 		for (const [k, v] of Object.entries(extra)) if (v === undefined) delete env[k];

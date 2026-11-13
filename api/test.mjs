@@ -615,6 +615,15 @@ try {
     assert.deepEqual(withoutAge(await viaConnect.json()), { replayed: false, automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'] });
     assert.equal((await connectCheck({ ip: '8.8.8.8' })).status, 200);
     assert.equal((await connectCheck({})).status, 400);
+    const scopedId = await automated();
+    const scoped = await connectCheck({ identificationId: scopedId, visitorScope: 'customer-a' });
+    assert.equal(scoped.status, 200);
+    assert(!JSON.stringify(await scoped.json()).includes('customer-a'));
+    assert.equal((await grpcCall({ 6: scopedId, 8: 'customer-a' })).status, 0);
+    for (const visitorScope of ['', 'a'.repeat(129), 'customer/other']) {
+        assert.equal((await connectCheck({ identificationId: scopedId, visitorScope })).status, 400);
+        assert.equal((await grpcCall({ 6: scopedId, 8: visitorScope })).status, 3);
+    }
 
     phase = 'RPC identification detail matches REST without changing compact fields';
     const comparableDetail = (value) => plain(value) ? Object.fromEntries(Object.entries(value)

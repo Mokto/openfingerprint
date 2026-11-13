@@ -1,4 +1,15 @@
 {{- define "of.postgresEnv" -}}
+{{- if not (kindIs "bool" .Values.postgres.requireVisitorScope) }}{{ fail "postgres.requireVisitorScope must be a boolean" }}{{ end -}}
+{{- if or (not (kindIs "string" .Values.postgres.visitorScope)) (and .Values.postgres.visitorScope (not (regexMatch "^[A-Za-z0-9_-]{1,128}$" .Values.postgres.visitorScope))) }}{{ fail "postgres.visitorScope must be empty or 1-128 ASCII letters, digits, underscores or hyphens" }}{{ end -}}
+{{- if and .Values.postgres.requireVisitorScope .Values.postgres.visitorScope }}{{ fail "postgres.visitorScope cannot be set with postgres.requireVisitorScope" }}{{ end -}}
+{{- with .Values.postgres.visitorScope }}
+- name: OPENFINGERPRINT_VISITOR_SCOPE
+  value: {{ . | quote }}
+{{- end }}
+{{- if .Values.postgres.requireVisitorScope }}
+- name: OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE
+  value: "true"
+{{- end }}
 - name: OPENFINGERPRINT_VISITOR_NAMESPACE
   value: {{ required "postgres.namespace is required" .Values.postgres.namespace | quote }}
 - name: OPENFINGERPRINT_POSTGRES_URL

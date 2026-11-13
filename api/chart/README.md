@@ -158,6 +158,19 @@ networkPolicy:
           cnpg.io/cluster: shared-postgres
 ```
 
+For a single customer, `postgres.namespace` already provides a stable deployment
+partition. Optionally set `postgres.visitorScope: my_customer` as a stable default for
+checks without `visitorScope`. Do not generate a new scope during upgrades: changing
+it starts new visitor identities and retains the old data separately.
+
+Scope settings require `postgres.enabled: true`; rendering fails otherwise.
+For shared hosting, set `postgres.requireVisitorScope: true` and leave
+`postgres.visitorScope` empty. Every identification check must then supply a scope
+derived from the authenticated customer/organization by your backend. The API does
+not authenticate that scope. See [customer scopes](../README.md#customer-scopes) for
+the request contract, optional backend HMAC, authorization boundary and migration
+behavior. No database schema migration is needed for scoping.
+
 Also configure the existing required API/identify peers. With policies enabled,
 PostgreSQL peers are required; `networkPolicy.postgresPort` defaults to 5432.
 A separate policy permits only the API and migration pods to reach those peers

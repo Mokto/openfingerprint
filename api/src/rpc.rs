@@ -50,6 +50,7 @@ impl OpenFingerprint for Check {
         let text = |s: Option<&str>| s.map(|s| Value::String(s.to_owned()));
         let input = Input {
             identification_id: text(request.identification_id),
+            visitor_scope: text(request.visitor_scope),
             domain: text(request.domain),
             email: text(request.email),
             ip: text(request.ip),
@@ -199,6 +200,7 @@ mod tests {
 
     fn input(id: Option<Value>, detail: Option<bool>) -> Input {
         Input {
+            visitor_scope: None,
             identification_id: id,
             domain: None,
             email: None,
@@ -535,6 +537,59 @@ mod tests {
             detail.reconciliation.as_option().unwrap().status.as_deref(),
             Some("insufficient_evidence")
         );
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL"]
+    async fn customer_visitor_scopes_match_rest_and_rpc_and_can_be_required() {
+        let db = crate::visitor::tests::Database::new().await;
+        let store = crate::visitor::Store::new(
+            db.config.clone(),
+            "study".into(),
+            rustls::RootCertStore::empty(),
+            None,
+            true,
+        )
+        .unwrap();
+        store.migrate().await.unwrap();
+        let (addr, contents) = crate::cache::tests::fake_redis(None).await;
+        let mut state = crate::check::tests::state_with_redis(&addr);
+        state.visitors = Some(store);
+        let id = crate::identify::new_id().unwrap();
+        state
+            .identifications
+            .store(&id, &crate::visitor::tests::record())
+            .await
+            .unwrap();
+        let before = contents.lock().unwrap().clone();
+        assert!(
+            Box::pin(respond(&state, input(Some(id.clone().into()), None)))
+                .await
+                .is_err()
+        );
+        assert_eq!(*contents.lock().unwrap(), before);
+        let mut visitors = Vec::new();
+        for scope in ["customer-a", "customer-b"] {
+            let request = || {
+                serde_json::from_value(serde_json::json!({
+                    "identificationId": id, "visitorScope": scope, "detail": true
+                }))
+                .unwrap()
+            };
+            let rest = Box::pin(crate::check::evaluate(&state, request()))
+                .await
+                .unwrap();
+            let rpc = Box::pin(respond(&state, request())).await.unwrap();
+            let visitor = rpc.visitor_id.unwrap();
+            assert_eq!(rest["identification"]["visitorId"], visitor);
+            assert_eq!(
+                rpc.identification.as_option().unwrap().visitor_id.as_ref(),
+                Some(&visitor)
+            );
+            visitors.push(visitor);
+        }
+        assert_ne!(visitors[0], visitors[1]);
         db.cleanup().await;
     }
 

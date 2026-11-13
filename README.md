@@ -25,7 +25,9 @@ your backend (see the [security notes](api/README.md#security)); only the identi
 listener faces the Internet. Redis holds cached registry answers and hour-long
 identifications. Optional PostgreSQL-backed [visitor reconciliation](api/README.md#visitor-reconciliation)
 retains server-issued visitor IDs, exact fingerprint aliases and reference hashes until
-explicit deletion. These are pseudonymous browser groupings, not person or physical-device identities. Open
+explicit deletion. A trusted backend can select a per-customer `visitorScope` to keep
+matching and visitor IDs separate within a shared deployment. These are pseudonymous
+browser groupings, not person or physical-device identities. Open
 domain snapshots provide independent disposable, free-subdomain, public-mailbox,
 email-relay and scoped referrer-spam evidence, including recently monitored provider
 domains, provenance, expiry and exact reviewed disputes, plus typo suggestions for

@@ -47,6 +47,8 @@ impl Database {
             self.config.clone(),
             namespace.into(),
             rustls::RootCertStore::empty(),
+            None,
+            false,
         )
         .unwrap()
     }
@@ -195,35 +197,154 @@ fn completeness_and_exclusions_are_not_group_count_heuristics() {
 }
 
 #[tokio::test]
+async fn scope_configuration_is_validated_without_a_database() {
+    let make = |default_scope, require_scope| {
+        Store::new(
+            Config::new(),
+            "study".into(),
+            rustls::RootCertStore::empty(),
+            default_scope,
+            require_scope,
+        )
+    };
+    for scope in [
+        "",
+        "account/customer",
+        "customer space",
+        "é",
+        &"a".repeat(129),
+    ] {
+        assert!(!valid_scope(scope));
+        assert!(make(Some(scope.into()), false).is_err());
+    }
+    for scope in ["account-1", "account_2", &"a".repeat(128)] {
+        assert!(valid_scope(scope));
+    }
+    assert!(make(Some("account-1".into()), true).is_err());
+    let required = make(None, true).unwrap();
+    assert!(!required.valid_scope(None));
+    assert!(required.valid_scope(Some("account-1")));
+    assert_eq!(
+        required.resolve(None, "id", &record()).await.status,
+        "invalid_scope"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn customer_scopes_isolate_exact_aliases_candidates_and_frozen_decisions() {
+    let db = Database::new().await;
+    let store = db.store("study");
+    store.migrate().await.unwrap();
+    let observation = record();
+    let legacy = store
+        .resolve(None, "shared-identification", &observation)
+        .await;
+    let a = store
+        .resolve(Some("customer-a"), "shared-identification", &observation)
+        .await;
+    let b = store
+        .resolve(Some("customer-b"), "shared-identification", &observation)
+        .await;
+    assert_eq!(a.status, "resolved");
+    assert_eq!(b.status, "resolved");
+    assert_ne!(a.visitor_id, b.visitor_id);
+    assert_ne!(a.visitor_id, legacy.visitor_id);
+    assert_ne!(b.visitor_id, legacy.visitor_id);
+    assert_eq!(
+        store
+            .resolve(None, "shared-identification", &observation)
+            .await,
+        legacy
+    );
+    for (scope, expected) in [("customer-a", &a), ("customer-b", &b)] {
+        assert_eq!(
+            store
+                .resolve(Some(scope), "shared-identification", &observation)
+                .await,
+            *expected
+        );
+        let repeat = store.resolve(Some(scope), "repeat", &observation).await;
+        assert_eq!(repeat.visitor_id, expected.visitor_id);
+        assert_eq!(repeat.method.as_deref(), Some("exact"));
+    }
+    let mut locale = record();
+    change(&mut locale, "hints", "locale", "travel");
+    let isolated = store.resolve(Some("customer-c"), "locale", &locale).await;
+    assert_eq!(isolated.method.as_deref(), Some("new"));
+    assert_ne!(isolated.visitor_id, a.visitor_id);
+    assert_ne!(isolated.visitor_id, b.visitor_id);
+    for (scope, expected) in [("customer-a", &a), ("customer-b", &b)] {
+        let matched = store.resolve(Some(scope), "locale", &locale).await;
+        assert_eq!(matched.method.as_deref(), Some("locale-v1"));
+        assert_eq!(matched.visitor_id, expected.visitor_id);
+        let alias = store.resolve(Some(scope), "locale-alias", &locale).await;
+        assert_eq!(alias.method.as_deref(), Some("exact"));
+        assert_eq!(alias.visitor_id, expected.visitor_id);
+    }
+    let mut restarted = db.store("study");
+    restarted.default_scope = Some("customer-a".into());
+    assert_eq!(
+        restarted
+            .resolve(None, "shared-identification", &observation)
+            .await,
+        a
+    );
+    let other_site = {
+        let mut observation = record();
+        observation.origin = "https://other.example.test".into();
+        observation
+    };
+    assert_ne!(
+        store
+            .resolve(Some("customer-a"), "other-site", &other_site)
+            .await
+            .visitor_id,
+        a.visitor_id
+    );
+    let client = store.pool.get().await.unwrap();
+    let partitions: i64 = client
+        .query_one("SELECT count(DISTINCT namespace) FROM of_visitors", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(partitions, 4);
+    db.cleanup().await;
+}
+
+#[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
 async fn exact_locale_partial_groups_isolation_and_persistent_aliases() {
     let db = Database::new().await;
     let store = db.store("study");
     store.migrate().await.unwrap();
     let mut observation = record();
-    let first = store.resolve("first", &observation).await;
+    let first = store.resolve(None, "first", &observation).await;
     assert_eq!(first.status, "resolved");
     assert_eq!(first.method.as_deref(), Some("new"));
-    assert_eq!(store.resolve("first", &observation).await, first);
+    assert_eq!(store.resolve(None, "first", &observation).await, first);
     assert_eq!(
-        store.resolve("repeat", &observation).await.visitor_id,
+        store.resolve(None, "repeat", &observation).await.visitor_id,
         first.visitor_id
     );
     change(&mut observation, "hints", "locale", "travelling");
-    let locale = store.resolve("locale", &observation).await;
+    let locale = store.resolve(None, "locale", &observation).await;
     assert_eq!(locale.visitor_id, first.visitor_id);
     assert_eq!(locale.method.as_deref(), Some(LOCALE_RULE));
     let restarted = db.store("study");
     assert_eq!(
         restarted
-            .resolve("locale-exact", &observation)
+            .resolve(None, "locale-exact", &observation)
             .await
             .method
             .as_deref(),
         Some("exact")
     );
     assert_eq!(
-        restarted.resolve("old-profile", &record()).await.visitor_id,
+        restarted
+            .resolve(None, "old-profile", &record())
+            .await
+            .visitor_id,
         first.visitor_id
     );
 
@@ -234,26 +355,32 @@ async fn exact_locale_partial_groups_isolation_and_persistent_aliases() {
     ] {
         let mut other = record();
         change(&mut other, section, name, "different browser evidence");
-        let separate = store.resolve(name, &other).await;
+        let separate = store.resolve(None, name, &other).await;
         assert_eq!(separate.method.as_deref(), Some("new"));
         assert_ne!(separate.visitor_id, first.visitor_id);
     }
     let mut other_site = record();
     other_site.origin = "https://other.example.test".into();
     assert_ne!(
-        store.resolve("other-site", &other_site).await.visitor_id,
+        store
+            .resolve(None, "other-site", &other_site)
+            .await
+            .visitor_id,
         first.visitor_id
     );
     let other_namespace = db.store("other");
     assert_eq!(
-        other_namespace.resolve("same-id", &record()).await.status,
+        other_namespace
+            .resolve(None, "same-id", &record())
+            .await
+            .status,
         "namespace_mismatch"
     );
     let mut other_record = record();
     other_record.namespace = Some("other".into());
     assert_ne!(
         other_namespace
-            .resolve("first", &other_record)
+            .resolve(None, "first", &other_record)
             .await
             .visitor_id,
         first.visitor_id
@@ -261,7 +388,7 @@ async fn exact_locale_partial_groups_isolation_and_persistent_aliases() {
     let mut legacy = record();
     legacy.namespace = None;
     assert_eq!(
-        store.resolve("legacy", &legacy).await.status,
+        store.resolve(None, "legacy", &legacy).await.status,
         "namespace_mismatch"
     );
 
@@ -283,12 +410,15 @@ async fn exact_locale_partial_groups_isolation_and_persistent_aliases() {
     drop(client);
     store.prune().await.unwrap();
     assert_eq!(
-        store.resolve("years-later", &record()).await.visitor_id,
+        store
+            .resolve(None, "years-later", &record())
+            .await
+            .visitor_id,
         first.visitor_id
     );
     let mut expired = record();
     expired.created_at_ms -= (crate::identify::TTL_SECONDS + 1) * 1000;
-    let expired = store.resolve("expired", &expired).await;
+    let expired = store.resolve(None, "expired", &expired).await;
     assert_eq!(expired.status, "expired_identification");
     assert!(expired.visitor_id.is_none());
     db.cleanup().await;
@@ -301,7 +431,7 @@ async fn migrations_preserve_ids_frozen_decisions_and_ambiguous_roots() {
     let store = db.store("study");
     store.migrate_to(1).await.unwrap();
     let baseline = record();
-    let first = store.resolve("before-migration", &baseline).await;
+    let first = store.resolve(None, "before-migration", &baseline).await;
     let mut second = record();
     change(
         &mut second,
@@ -309,22 +439,31 @@ async fn migrations_preserve_ids_frozen_decisions_and_ambiguous_roots() {
         "locale",
         "second independently enrolled browser",
     );
-    let separate = store.resolve("separate", &second).await;
+    let separate = store.resolve(None, "separate", &second).await;
     assert_ne!(first.visitor_id, separate.visitor_id);
     store.migrate().await.unwrap();
     store.migrate().await.unwrap();
-    assert_eq!(store.resolve("before-migration", &baseline).await, first);
     assert_eq!(
-        store.resolve("after-exact", &baseline).await.visitor_id,
+        store.resolve(None, "before-migration", &baseline).await,
+        first
+    );
+    assert_eq!(
+        store
+            .resolve(None, "after-exact", &baseline)
+            .await
+            .visitor_id,
         first.visitor_id
     );
     assert_eq!(
-        store.resolve("second-exact", &second).await.visitor_id,
+        store
+            .resolve(None, "second-exact", &second)
+            .await
+            .visitor_id,
         separate.visitor_id
     );
     let mut third = record();
     change(&mut third, "hints", "locale", "unseen locale");
-    let ambiguous = store.resolve("ambiguous", &third).await;
+    let ambiguous = store.resolve(None, "ambiguous", &third).await;
     assert_eq!(ambiguous.status, "ambiguous");
     assert!(ambiguous.visitor_id.is_none());
     let client = store.pool.get().await.unwrap();
@@ -335,9 +474,12 @@ async fn migrations_preserve_ids_frozen_decisions_and_ambiguous_roots() {
         )
         .await
         .unwrap();
-    assert_eq!(store.resolve("ambiguous", &third).await, ambiguous);
+    assert_eq!(store.resolve(None, "ambiguous", &third).await, ambiguous);
     assert_eq!(
-        store.resolve("new-identification", &third).await.visitor_id,
+        store
+            .resolve(None, "new-identification", &third)
+            .await
+            .visitor_id,
         first.visitor_id
     );
     client
@@ -352,9 +494,12 @@ async fn migrations_preserve_ids_frozen_decisions_and_ambiguous_roots() {
         .execute("INSERT INTO of_migrations VALUES (3, 'future')", &[])
         .await
         .unwrap();
-    assert_eq!(store.resolve("before-migration", &baseline).await, first);
     assert_eq!(
-        store.resolve("unsupported", &baseline).await.status,
+        store.resolve(None, "before-migration", &baseline).await,
+        first
+    );
+    assert_eq!(
+        store.resolve(None, "unsupported", &baseline).await.status,
         "unavailable"
     );
     db.cleanup().await;
@@ -376,7 +521,7 @@ async fn saturated_rule_indexes_abstain_and_inconsistent_references_are_unavaila
         );
         assert_eq!(
             store
-                .resolve(&format!("enrolled-{index}"), &observation)
+                .resolve(None, &format!("enrolled-{index}"), &observation)
                 .await
                 .status,
             "resolved"
@@ -384,12 +529,12 @@ async fn saturated_rule_indexes_abstain_and_inconsistent_references_are_unavaila
     }
     store.migrate().await.unwrap();
     assert_eq!(
-        store.resolve("overflow", &record()).await.status,
+        store.resolve(None, "overflow", &record()).await.status,
         "ambiguous"
     );
     let client = store.pool.get().await.unwrap();
     client.batch_execute("DELETE FROM of_visitors WHERE visitor_id NOT IN (SELECT visitor_id FROM of_visitors ORDER BY visitor_id LIMIT 1); UPDATE of_visitors SET profile=jsonb_set(profile, '{hints,browser}', to_jsonb(repeat('a', 64)))").await.unwrap();
-    let unavailable = store.resolve("corrupt-reference", &record()).await;
+    let unavailable = store.resolve(None, "corrupt-reference", &record()).await;
     assert_eq!(unavailable.status, "unavailable");
     assert!(unavailable.visitor_id.is_none());
     db.cleanup().await;
@@ -412,7 +557,7 @@ async fn concurrent_replicas_and_lost_response_retries_converge() {
                 &format!("locale-{index}"),
             );
             let id = format!("observation-{index}");
-            let decision = replica.resolve(&id, &observation).await;
+            let decision = replica.resolve(None, &id, &observation).await;
             (id, observation, decision)
         });
     }
@@ -423,7 +568,7 @@ async fn concurrent_replicas_and_lost_response_retries_converge() {
     let store = db.store("study");
     let mut identities = std::collections::HashSet::new();
     for (id, observation, decision) in decisions {
-        let retried = store.resolve(&id, &observation).await;
+        let retried = store.resolve(None, &id, &observation).await;
         assert_eq!(retried.status, "resolved");
         if decision.status == "unavailable" {
             assert_eq!(decision, Decision::unknown("unavailable"));
@@ -435,11 +580,14 @@ async fn concurrent_replicas_and_lost_response_retries_converge() {
     }
     assert_eq!(identities.len(), 1);
     let baseline = record();
-    let lost_reply = store.resolve("lost-reply", &baseline).await;
+    let lost_reply = store.resolve(None, "lost-reply", &baseline).await;
     assert_eq!(lost_reply.status, "resolved");
     drop(store);
     let replica = db.store("study");
-    assert_eq!(replica.resolve("lost-reply", &baseline).await, lost_reply);
+    assert_eq!(
+        replica.resolve(None, "lost-reply", &baseline).await,
+        lost_reply
+    );
     let client = replica.pool.get().await.unwrap();
     let count: i64 = client
         .query_one("SELECT count(*) FROM of_visitors", &[])
@@ -458,10 +606,13 @@ async fn missing_evidence_database_failure_timeout_and_rollback_stay_unknown() {
     store.migrate().await.unwrap();
     let mut missing = record();
     missing.evidence = crate::check::tests::payload();
-    let insufficient = store.resolve("insufficient", &missing).await;
+    let insufficient = store.resolve(None, "insufficient", &missing).await;
     assert_eq!(insufficient.status, "insufficient_evidence");
     missing.evidence = record().evidence;
-    assert_eq!(store.resolve("insufficient", &missing).await, insufficient);
+    assert_eq!(
+        store.resolve(None, "insufficient", &missing).await,
+        insufficient
+    );
 
     let mut blocked_client = store.pool.get().await.unwrap();
     let blocker = blocked_client.transaction().await.unwrap();
@@ -469,13 +620,13 @@ async fn missing_evidence_database_failure_timeout_and_rollback_stay_unknown() {
         .execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK])
         .await
         .unwrap();
-    let timeout = store.resolve("timeout", &record()).await;
+    let timeout = store.resolve(None, "timeout", &record()).await;
     assert_eq!(timeout.status, "unavailable");
     assert!(timeout.visitor_id.is_none());
     blocker.rollback().await.unwrap();
-    let recovered = store.resolve("timeout", &record()).await;
+    let recovered = store.resolve(None, "timeout", &record()).await;
     assert_eq!(recovered.status, "resolved");
-    assert_eq!(store.resolve("timeout", &record()).await, recovered);
+    assert_eq!(store.resolve(None, "timeout", &record()).await, recovered);
 
     let client = store.pool.get().await.unwrap();
     client.batch_execute("CREATE FUNCTION reject_resolution() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test failure'; END $$; CREATE TRIGGER reject_resolution BEFORE INSERT ON of_resolutions FOR EACH ROW EXECUTE FUNCTION reject_resolution()").await.unwrap();
@@ -487,7 +638,7 @@ async fn missing_evidence_database_failure_timeout_and_rollback_stay_unknown() {
         "transaction rollback",
     );
     assert_eq!(
-        store.resolve("rollback", &rolled_back).await.status,
+        store.resolve(None, "rollback", &rolled_back).await.status,
         "unavailable"
     );
     let count: i64 = client
@@ -506,7 +657,7 @@ async fn missing_evidence_database_failure_timeout_and_rollback_stay_unknown() {
         .await
         .unwrap();
     assert_eq!(
-        store.resolve("rollback", &rolled_back).await.status,
+        store.resolve(None, "rollback", &rolled_back).await.status,
         "resolved"
     );
     drop(client);
@@ -514,14 +665,25 @@ async fn missing_evidence_database_failure_timeout_and_rollback_stay_unknown() {
     let dead: Config = "host=127.0.0.1 port=1 user=unavailable dbname=unused sslmode=disable"
         .parse()
         .unwrap();
-    let down = Store::new(dead, "study".into(), rustls::RootCertStore::empty()).unwrap();
-    assert_eq!(down.resolve("down", &record()).await.status, "unavailable");
+    let down = Store::new(
+        dead,
+        "study".into(),
+        rustls::RootCertStore::empty(),
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        down.resolve(None, "down", &record()).await.status,
+        "unavailable"
+    );
     let (redis, contents) = crate::cache::tests::fake_redis(None).await;
     let mut state = crate::check::tests::state_with_redis(&redis);
     state.visitors = Some(db.store("study"));
     let id = crate::identify::new_id().unwrap();
     state.identifications.store(&id, &record()).await.unwrap();
     let input = || crate::check::CheckRequest {
+        visitor_scope: None,
         identification_id: Some(id.clone().into()),
         domain: None,
         email: None,
@@ -587,7 +749,9 @@ async fn independently_labelled_synthetic_cases_expose_splits_and_indistinguisha
     ];
     let mut resolved = Vec::new();
     for (index, (label, observation)) in cases.iter().enumerate() {
-        let decision = store.resolve(&format!("case-{index}"), observation).await;
+        let decision = store
+            .resolve(None, &format!("case-{index}"), observation)
+            .await;
         resolved.push((*label, decision.visitor_id.unwrap()));
     }
     let mut false_merges = 0;

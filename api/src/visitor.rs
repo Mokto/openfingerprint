@@ -52,12 +52,28 @@ impl Decision {
 pub struct Store {
     pool: Pool,
     namespace: String,
+    default_scope: Option<String>,
+    require_scope: bool,
 }
 
 impl Store {
     pub fn from_env() -> Result<Option<Self>, &'static str> {
+        let default_scope = match std::env::var("OPENFINGERPRINT_VISITOR_SCOPE") {
+            Ok(scope) => Some(scope),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(_) => return Err("Invalid OPENFINGERPRINT_VISITOR_SCOPE"),
+        };
+        let require_scope = match std::env::var("OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE").as_deref()
+        {
+            Ok("true") => true,
+            Ok("false") | Err(std::env::VarError::NotPresent) => false,
+            _ => return Err("Invalid OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE"),
+        };
         let url = match std::env::var("OPENFINGERPRINT_POSTGRES_URL") {
             Ok(url) => url,
+            Err(std::env::VarError::NotPresent) if default_scope.is_some() || require_scope => {
+                return Err("Visitor scopes require OPENFINGERPRINT_POSTGRES_URL");
+            }
             Err(std::env::VarError::NotPresent) => return Ok(None),
             Err(_) => return Err("Invalid OPENFINGERPRINT_POSTGRES_URL"),
         };
@@ -91,14 +107,23 @@ impl Store {
                     .map_err(|_| "Invalid PostgreSQL CA")?;
             }
         }
-        Self::new(config, namespace, roots).map(Some)
+        Self::new(config, namespace, roots, default_scope, require_scope).map(Some)
     }
 
-    fn new(
+    pub(crate) fn new(
         config: Config,
         namespace: String,
         roots: rustls::RootCertStore,
+        default_scope: Option<String>,
+        require_scope: bool,
     ) -> Result<Self, &'static str> {
+        if default_scope
+            .as_deref()
+            .is_some_and(|scope| !valid_scope(scope))
+            || (require_scope && default_scope.is_some())
+        {
+            return Err("Invalid visitor scope configuration");
+        }
         if namespace.is_empty()
             || namespace.len() > 64
             || !namespace
@@ -114,7 +139,12 @@ impl Store {
             .max_size(8)
             .build()
             .map_err(|_| "Invalid PostgreSQL pool")?;
-        Ok(Self { pool, namespace })
+        Ok(Self {
+            pool,
+            namespace,
+            default_scope,
+            require_scope,
+        })
     }
 
     pub fn namespace(&self) -> &str {
@@ -178,7 +208,29 @@ impl Store {
         Ok(())
     }
 
-    pub async fn resolve(&self, id: &str, record: &crate::identify::Record) -> Decision {
+    pub(crate) fn valid_scope(&self, scope: Option<&str>) -> bool {
+        scope.is_none_or(valid_scope) && (!self.require_scope || scope.is_some())
+    }
+
+    pub async fn resolve(
+        &self,
+        scope: Option<&str>,
+        id: &str,
+        record: &crate::identify::Record,
+    ) -> Decision {
+        if !self.valid_scope(scope) {
+            return Decision::unknown("invalid_scope");
+        }
+        let namespace = scope.or(self.default_scope.as_deref()).map_or_else(
+            || self.namespace.clone(),
+            |scope| {
+                format!(
+                    "{}:scope:v1:{}",
+                    self.namespace,
+                    crate::check::sha256(scope)
+                )
+            },
+        );
         if record.namespace.as_deref() != Some(self.namespace()) {
             return Decision::unknown("namespace_mismatch");
         }
@@ -194,7 +246,7 @@ impl Store {
         let profile = crate::check::visitor_profile(record.evidence.clone());
         match tokio::time::timeout(
             TIMEOUT,
-            self.resolve_inner(id, &site, expires, profile.as_ref()),
+            self.resolve_inner(&namespace, id, &site, expires, profile.as_ref()),
         )
         .await
         {
@@ -205,6 +257,7 @@ impl Store {
 
     async fn resolve_inner(
         &self,
+        namespace: &str,
         id: &str,
         site: &str,
         expires: i64,
@@ -222,16 +275,11 @@ impl Store {
             .await
             .map_err(|_| ())?;
         let id_hash = crate::check::sha256(id);
-        let mut locks = vec![lock_key(&self.namespace, site, "identification", &id_hash)];
+        let mut locks = vec![lock_key(namespace, site, "identification", &id_hash)];
         if let Some(profile) = profile {
-            locks.push(lock_key(
-                &self.namespace,
-                site,
-                "exact",
-                &profile.fingerprint,
-            ));
+            locks.push(lock_key(namespace, site, "exact", &profile.fingerprint));
             if let Some(signature) = &profile.locale_signature {
-                locks.push(lock_key(&self.namespace, site, LOCALE_RULE, signature));
+                locks.push(lock_key(namespace, site, LOCALE_RULE, signature));
             }
         }
         locks.sort_unstable();
@@ -254,7 +302,7 @@ impl Store {
             return Ok(Decision::unknown("expired_identification"));
         }
         if let Some(row) = transaction.query_opt("SELECT decision FROM of_resolutions WHERE namespace=$1 AND site=$2 AND identification_hash=$3 AND expires_at > clock_timestamp()",
-            &[&self.namespace, &site, &id_hash]).await.map_err(|_| ())? {
+            &[&namespace, &site, &id_hash]).await.map_err(|_| ())? {
             return serde_json::from_value(row.get(0)).map_err(|_| ());
         }
         let version: i32 = transaction
@@ -268,20 +316,18 @@ impl Store {
         let mut decision = Decision::unknown("insufficient_evidence");
         decision.rule_version = version as u32;
         if let Some(profile) = profile {
-            decision = self
-                .match_profile(&transaction, site, profile, version)
-                .await?;
+            decision = Self::match_profile(&transaction, namespace, site, profile, version).await?;
         }
         let value = serde_json::to_value(&decision).map_err(|_| ())?;
         transaction.execute("INSERT INTO of_resolutions (namespace, site, identification_hash, decision, expires_at) VALUES ($1, $2, $3, $4, LEAST(to_timestamp($5::double precision / 1000), now() + interval '1 hour'))",
-            &[&self.namespace, &site, &id_hash, &value, &(expires as f64)]).await.map_err(|_| ())?;
+            &[&namespace, &site, &id_hash, &value, &(expires as f64)]).await.map_err(|_| ())?;
         transaction.commit().await.map_err(|_| ())?;
         Ok(decision)
     }
 
     async fn match_profile(
-        &self,
         transaction: &Transaction<'_>,
+        namespace: &str,
         site: &str,
         profile: &Profile,
         version: i32,
@@ -289,11 +335,11 @@ impl Store {
         let mut visitor = None;
         let mut method = "exact";
         if let Some(row) = transaction.query_opt("SELECT visitor_id FROM of_fingerprints WHERE namespace=$1 AND site=$2 AND schema_version=$3 AND fingerprint=$4",
-            &[&self.namespace, &site, &profile.schema_version, &profile.fingerprint]).await.map_err(|_| ())? {
+            &[&namespace, &site, &profile.schema_version, &profile.fingerprint]).await.map_err(|_| ())? {
             visitor = Some(row.get::<_, String>(0));
         } else if version >= 2 && let Some(signature) = &profile.locale_signature {
             let candidates = transaction.query("SELECT visitor_id FROM of_rule_indexes WHERE namespace=$1 AND site=$2 AND rule=$3 AND signature=$4 ORDER BY visitor_id LIMIT $5",
-                &[&self.namespace, &site, &LOCALE_RULE, signature, &((CANDIDATE_LIMIT + 1) as i64)]).await.map_err(|_| ())?;
+                &[&namespace, &site, &LOCALE_RULE, signature, &((CANDIDATE_LIMIT + 1) as i64)]).await.map_err(|_| ())?;
             if candidates.len() > 1 {
                 let mut decision = Decision::unknown("ambiguous");
                 decision.rule_version = version as u32;
@@ -302,7 +348,7 @@ impl Store {
             if let Some(candidate) = candidates.first() {
                 let candidate_id: String = candidate.get(0);
                 let row = transaction.query_one("SELECT profile FROM of_visitors WHERE namespace=$1 AND site=$2 AND visitor_id=$3",
-                    &[&self.namespace, &site, &candidate_id]).await.map_err(|_| ())?;
+                    &[&namespace, &site, &candidate_id]).await.map_err(|_| ())?;
                 let reference: Profile = serde_json::from_value(row.get(0)).map_err(|_| ())?;
                 if reference.schema_version != profile.schema_version
                     || reference.excluded != profile.excluded
@@ -324,18 +370,18 @@ impl Store {
                 let visitor = crate::identify::new_id().ok_or(())?;
                 let value = serde_json::to_value(profile).map_err(|_| ())?;
                 transaction.execute("INSERT INTO of_visitors (namespace, site, visitor_id, profile) VALUES ($1, $2, $3, $4)",
-                    &[&self.namespace, &site, &visitor, &value]).await.map_err(|_| ())?;
+                    &[&namespace, &site, &visitor, &value]).await.map_err(|_| ())?;
                 if version >= 2
                     && let Some(signature) = &profile.locale_signature
                 {
                     transaction.execute("INSERT INTO of_rule_indexes (namespace, site, rule, signature, visitor_id) VALUES ($1, $2, $3, $4, $5)",
-                        &[&self.namespace, &site, &LOCALE_RULE, signature, &visitor]).await.map_err(|_| ())?;
+                        &[&namespace, &site, &LOCALE_RULE, signature, &visitor]).await.map_err(|_| ())?;
                 }
                 visitor
             }
         };
         transaction.execute("INSERT INTO of_fingerprints (namespace, site, schema_version, fingerprint, visitor_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
-            &[&self.namespace, &site, &profile.schema_version, &profile.fingerprint, &visitor]).await.map_err(|_| ())?;
+            &[&namespace, &site, &profile.schema_version, &profile.fingerprint, &visitor]).await.map_err(|_| ())?;
         Ok(Decision {
             status: "resolved".into(),
             rule_version: version as u32,
@@ -351,6 +397,14 @@ impl Store {
                 .await.map_err(|_| ())
         }).await.map_err(|_| ())?
     }
+}
+
+pub(crate) fn valid_scope(scope: &str) -> bool {
+    !scope.is_empty()
+        && scope.len() <= 128
+        && scope
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 fn lock_key(namespace: &str, site: &str, kind: &str, value: &str) -> i64 {
