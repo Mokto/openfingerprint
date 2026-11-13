@@ -100,9 +100,11 @@ publishing checks the tag against `sdk/package.json`, builds and tests the SDK,
 verifies package contents and uses npm trusted publishing with provenance.
 API publishing builds and smoke-tests Linux AMD64/ARM64 API and domain-updater
 images, then publishes the Helm chart pinned to their digests. When the
-`DISPATCH_TARGET`/`DISPATCH_TOKEN` and `DISPATCH_TARGET_K3S`/`DISPATCH_TOKEN_K3S` secret
-pairs are set, it then dispatches a deployment workflow for each pair; it never migrates callers. An SDK release does not release the API,
-and an API release does not release the SDK.
+`DISPATCH_TARGET_K3S`/`DISPATCH_TOKEN_K3S` secrets are set, it then dispatches the K3S
+deployment workflow. API releases no longer dispatch deployments to the Ocean cluster;
+the unsuffixed `DISPATCH_TARGET`/`DISPATCH_TOKEN` secrets are unused. Publishing never
+migrates callers. An SDK release does not release the API, and an API release does
+not release the SDK.
 
 `pnpm check` includes a release-wiring regression check. The shared workflow and
 release configuration remain at the repository root.

@@ -10,6 +10,11 @@ const sdk = await json('sdk/package.json');
 const api = await read('api/Cargo.toml');
 const workflow = await read('.github/workflows/release-please.yml');
 const publish = await read('.github/workflows/sdk-publish.yml');
+const apiPublish = await read('.github/workflows/api-image.yml');
+
+assert(!/secrets\.DISPATCH_(TARGET|TOKEN)\s*}}/.test(apiPublish));
+assert(apiPublish.includes('secrets.DISPATCH_TARGET_K3S }}'));
+assert(apiPublish.includes('secrets.DISPATCH_TOKEN_K3S }}'));
 
 assert.equal(root.private, true);
 assert.equal(sdk.name, '@openfingerprint/sdk');
