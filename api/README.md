@@ -709,7 +709,10 @@ match is `{"providers":["AWS"],"scope":"published_cloud_range"}`; an ASN match
 is `{"number":15169,"organization":"Google LLC"}` (illustrative values).
 `ip.network.status: "ok"` means at least one network fact is known, not that the
 visitor is safe; it does not change `ip.status` or the country estimate.
-A `vpn` match is `{"scope":"listed_vpn_range"}`, a `datacenter` match is
+A `vpn` match is `{"scope":"listed_vpn_range"}` for a listed network or
+`{"scope":"listed_vpn_server"}` for an exact address in the provider-server lists.
+The latter is VPN infrastructure association, not a verified browsing exit or
+provider identity. A `datacenter` match is
 `{"scope":"listed_datacenter_range"}` and a `proxy` match is
 `{"protocols":["http","socks5"],"scope":"listed_open_proxy"}`. These objects are in the
 `detail: true` response; the default response and the RPC message carry `true` for a
@@ -718,7 +721,7 @@ No match yields null, never false or a residential/human verdict. Facts for a so
 that is not loaded report `not_configured`. Residential proxies and VPNs missing from the
 lists are not detected, and datacenter ranges include VPN ranges as the upstream defines them.
 
-VPN detection uses the public X4B lists below; no VPN accounts, profiles or live
+VPN detection uses the public lists below; no VPN accounts, profiles or live
 VPN connections are required. The existing network updater downloads the lists
 hourly in `--loop` mode or when scheduled hourly. Refreshing does not fill gaps
 in the upstream lists: unlisted PrivateVPN addresses or other missing providers
@@ -736,6 +739,7 @@ relabel old data as newly updated.
 | [Tor CollecTor exit lists](https://collector.torproject.org/recent/exit-lists/) | Recently measured exit addresses only, not relay listening addresses or proof of abuse. Each observation expires at 24 hours, even while its snapshot is fresh. Incomplete coverage, including IPv6; absence stays unknown. | [CC0](https://metrics.torproject.org/about.html) | 3 hours from the collected list timestamp. |
 | [Published cloud ranges](https://github.com/tobilg/public-cloud-provider-ip-ranges) | Source-labelled provider ranges, not a physical datacenter/device classifier. Includes shared/CDN infrastructure; not all hosting providers are covered. No organization-name or whole-ASN heuristics. | MIT; exact license pinned and retained in the manifest. | 7 days from the last commit changing the source data file. |
 | [X4BNet lists_vpn](https://github.com/X4BNet/lists_vpn) `output/vpn` | Netblocks of common VPN providers, built by the project from ASN data. A match shows the address belongs to a listed VPN network, not that this visitor is hiding anything. Incomplete; unlisted VPNs stay unknown. | MIT (the project's statement; its ASN input, IPLocate, is CC BY-SA 4.0 and is credited in the manifest). The license text is pinned and retained. | 7 days from the last commit changing the lists. |
+| [Joe12387 Open Source VPN IP Lists](https://github.com/Joe12387/open-source-vpn-ip-lists) | Exact IPv4/IPv6 addresses from ten provider-server lists: AirVPN, IVPN, Mullvad, NordVPN, OVPN, PIA, ProtonVPN, RiseupVPN, Surfshark and Windscribe. The upstream describes first-party provider data, including entry addresses: association is not proof of egress, and retired IPs may linger. No CIDR expansion or hosting inference. Does not include PrivateVPN (which is different from PIA). | CC0-1.0; exact license pinned and retained in the manifest. | 7 days from the earlier of the README's declared publication day (UTC midnight) and its commit time. |
 | X4BNet lists_vpn `output/datacenter` | Networks that are "not an eyeball network": VPN and datacenter/hosting ASNs, selected partly by name keywords. Overlaps `hosting` and `vpn`; shared or CDN space is included. | Same as above. | 7 days. |
 | [monosans/proxy-list](https://github.com/monosans/proxy-list) | Public HTTP, SOCKS4 and SOCKS5 proxy addresses that the upstream tested as working. Only the listening address is matched, without port. A proxy can exit through another address, and these lists change by the hour. | MIT; exact license pinned and retained in the manifest. | 6 hours from the last commit changing the list. |
 | [DB-IP ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) | Monthly IPv4/IPv6 ASN number and organization, with reduced coverage/accuracy. ASN is not visitor identity, geolocation or hosting proof. | CC BY 4.0. | 45 days from the earlier of the release month and actual MMDB build time. |
@@ -787,7 +791,15 @@ duplicate addresses keep their latest observation. Positive Tor facts carry
 snapshot expiry. The API rechecks both limits on each lookup and retains no checked
 address.
 
-Upgrade API readers before the network updater. Old bare-address Tor entries
+Upgrade API readers before the network updater. The optional `vpn_servers`
+snapshot source requires the new reader; older readers reject that field and
+retain their last-good manifest. Its refresh and expiry are independent of X4B;
+one source failing never renews the other's timestamps. Existing X4B matches
+keep their original scope/provenance, with server-list matches used as a fallback.
+A failed provider-list download rejects the entire server-list refresh instead
+of publishing partial data as a newly refreshed complete list.
+
+Old bare-address Tor entries
 remain readable alongside other sources, but their matches are unknown with
 `observation_time_unavailable` until a refresh supplies timestamps. Already-stored
 Tor matches without a per-fact expiry likewise become unknown when consumed;

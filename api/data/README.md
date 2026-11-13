@@ -155,6 +155,16 @@ link where the data is used, for example
 through downstream consumers, and do not redistribute the ranges (`network.json`) without
 meeting ShareAlike. See the [attribution note](../README.md#local-network-intelligence).
 
+The independent `vpn_servers` source adds ten exact-address provider lists from
+[Joe12387/open-source-vpn-ip-lists](https://github.com/Joe12387/open-source-vpn-ip-lists)
+under CC0-1.0. The updater pins the license hash, retains its text and bounds
+freshness by the snapshot's declared publication day and immutable README commit.
+The [license fixture](vpn-servers-license.txt) is retained for offline checks;
+no IP inventory is bundled. These are provider-associated server addresses,
+including ingress servers, not independently measured exit IPs. Neither PrivateVPN
+nor a guarantee of complete coverage is included. See the
+[network evidence contract](../README.md#local-network-intelligence).
+
 ## IP country data
 
 [DB-IP Country Lite](https://db-ip.com/db/download/ip-to-country-lite) provides

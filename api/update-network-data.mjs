@@ -108,6 +108,39 @@ async function x4bRanges(fetchBytes, now, id, directory) {
 }
 export const vpn = (fetchBytes, now) => x4bRanges(fetchBytes, now, 'vpn_ranges', 'vpn');
 export const datacenter = (fetchBytes, now) => x4bRanges(fetchBytes, now, 'datacenter_ranges', 'datacenter');
+const serverRepo = 'Joe12387/open-source-vpn-ip-lists';
+const serverLicenseHash = 'a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499';
+export async function vpnServers(fetchBytes, now) {
+    const commits = JSON.parse(String(await fetchBytes(`https://api.github.com/repos/${serverRepo}/commits?path=README.md&per_page=1`)));
+    const commit = commits[0];
+    assert(/^[a-f0-9]{40}$/.test(commit?.sha), 'Invalid VPN server revision');
+    const base = `https://raw.githubusercontent.com/${serverRepo}/${commit.sha}/`;
+    const license = String(await fetchBytes(base + 'LICENSE'));
+    assert(sha(license) === serverLicenseHash, 'VPN server license changed: review required');
+    const readme = String(await fetchBytes(base + 'README.md'));
+    const date = /\*\*Last updated:\*\* (\d{4}-\d{2}-\d{2})/.exec(readme)?.[1];
+    assert(date, 'Missing VPN server publication date');
+    const published = epoch(date + 'T00:00:00Z');
+    const committed = epoch(commit.commit.committer.date);
+    assert(published <= now && committed <= now, 'Future VPN server snapshot');
+    const source = metadata('vpn_servers', 'CC0-1.0', `https://github.com/${serverRepo}/blob/${commit.sha}/LICENSE`,
+        'Joe12387, Open Source VPN IP Lists (provider-published server addresses; not verified egress)',
+        `https://github.com/${serverRepo}/tree/${commit.sha}`, commit.sha, Math.min(published, committed), now, 7 * day);
+    const entries = new Set();
+    for (const provider of ['airvpn', 'ivpn', 'mullvad', 'nordvpn', 'ovpn', 'pia', 'protonvpn', 'riseupvpn', 'surfshark', 'windscribe']) {
+        let count = 0;
+        for (const line of String(await fetchBytes(base + provider + '.txt')).split('\n')) {
+            const ip = line.trim();
+            if (!ip) continue;
+            const family = isIP(ip);
+            assert(family, 'Invalid VPN server IP');
+            entries.add(`${ip}/${family === 4 ? 32 : 128}`);
+            assert(++count <= 100000 && entries.size <= 100000, 'VPN server count exceeds limit');
+        }
+        assert(count > 0, 'Empty VPN provider list');
+    }
+    return { metadata: { ...source, license_text: license }, entries: [...entries].sort().map(network => ({ network })) };
+}
 const proxyRepo = 'monosans/proxy-list';
 const proxyLicenseHash = 'f0214b6cf7a99766c90f7007fbddcc8df43df7ab6299c40c84c3ae10458d58ca';
 export async function proxy(fetchBytes, now) {
@@ -193,7 +226,7 @@ export async function update(output, { fetchBytes = download, now = Math.floor(D
         try { await check(output, signal); baselineValid = true; } catch {}
         const failures = [];
         let refreshed = 0;
-        for (const [id, load] of [['tor', tor], ['hosting', hosting], ['vpn', vpn], ['datacenter', datacenter], ['proxy', proxy], ['asn', (fetch, time) => asn(fetch, time, dirname(output))]]) {
+        for (const [id, load] of [['tor', tor], ['hosting', hosting], ['vpn', vpn], ['datacenter', datacenter], ['proxy', proxy], ['asn', (fetch, time) => asn(fetch, time, dirname(output))], ['vpn_servers', vpnServers]]) {
             signal?.throwIfAborted();
             try {
                 if (id === 'asn' && baselineValid && result.asn && result.asn.fetched_at_unix <= now && now - result.asn.fetched_at_unix < day && result.asn.expires_at_unix > now) continue;
@@ -215,7 +248,7 @@ export async function update(output, { fetchBytes = download, now = Math.floor(D
         await check(temporary, signal);
         signal?.throwIfAborted();
         await rename(temporary, output);
-        return { failures, sources: ['tor', 'hosting', 'vpn', 'datacenter', 'proxy', 'asn'].filter(id => result[id]) };
+        return { failures, sources: ['tor', 'hosting', 'vpn', 'datacenter', 'proxy', 'asn', 'vpn_servers'].filter(id => result[id]) };
     } finally {
         // Never unlink the lock file: another writer may already be locking the same inode.
         if (lock.exitCode === null && lock.signalCode === null) {
