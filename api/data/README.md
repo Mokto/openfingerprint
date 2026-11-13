@@ -164,14 +164,17 @@ no IP inventory is bundled. These are provider-associated server addresses,
 including ingress servers, not independently measured exit IPs. These ten lists
 do not include PrivateVPN and do not guarantee complete coverage.
 
-The separate `privatevpn_servers` source reads
-[Gluetun's PrivateVPN server data](https://github.com/qdm12/gluetun-servers/blob/main/pkg/servers/privatevpn.json)
-under MIT. The updater pins and retains the license at the immutable data-file
+The separate `privatevpn_servers`, `cyberghost_servers`, `expressvpn_servers`,
+`purevpn_servers`, `vpnunlimited_servers` and `privado_servers` sources read
+[Gluetun's provider-server data](https://github.com/qdm12/gluetun-servers/tree/main/pkg/servers)
+under MIT, with separately pinned schema versions. The updater pins and retains the license at the immutable data-file
 revision. Its 45-day expiry is bounded by both the embedded collection timestamp
 and the file commit, not local downloads; upstream refreshes monthly. Only exact
 public addresses are accepted. These are DNS-resolved connection endpoints, not
-verified browsing exits. Gluetun, Joe12387 and X4B retain independent provenance
-and expiry; no VPN accounts, profiles or live sessions are needed. See the
+verified browsing exits. Each Gluetun provider, Joe12387 and X4B retain independent
+provenance and expiry; no VPN accounts, profiles or live sessions are needed.
+IPVanish and VyprVPN remain excluded because their inventories were stale at
+review; discovery of another upstream file does not automatically enable it. See the
 [network evidence contract](../README.md#local-network-intelligence).
 
 ## IP country data

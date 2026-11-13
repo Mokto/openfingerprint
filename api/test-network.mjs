@@ -5,7 +5,7 @@ import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } fr
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tor, hosting, vpn, vpnServers, privatevpnServers, datacenter, proxy, update, validate, loop, prune } from './update-network-data.mjs';
+import { tor, hosting, vpn, vpnServers, privatevpnServers, gluetunServers, datacenter, proxy, update, validate, loop, prune } from './update-network-data.mjs';
 import { identifyEnvironment } from './test-certs.mjs';
 
 const directory = await mkdtemp(resolve(tmpdir(), 'openfingerprint-network-check-'));
@@ -159,7 +159,44 @@ try {
     ]) await assert.rejects(privatevpnServers(privatevpnFetch(bad), now));
     await assert.rejects(privatevpnServers(privatevpnFetch(privatevpnData, new Date((now + 60) * 1000).toISOString().replace('.000Z', 'Z')), now), /timestamp/);
     await assert.rejects(privatevpnServers(async url => url.endsWith('/LICENSE') ? Buffer.from('changed license') : privatevpnFetch()(url), now), /license changed/);
-    const loaded = await update(path, { fetchBytes: async url => url.includes('Joe12387/') ? serverFetch()(url) : url.includes('qdm12/gluetun-servers/') ? privatevpnFetch()(url) : fetchBytes(url), now });
+    const extraProviders = [['cyberghost', 5], ['expressvpn', 2], ['purevpn', 3], ['vpnunlimited', 1, 'vpn unlimited'], ['privado', 6]];
+    const gluetunData = Object.fromEntries(extraProviders.map(([provider, version, file = provider], index) => [file, { ...privatevpnData, version, servers: [{ vpn: 'openvpn', ips: [`1.1.1.${10 + index}`, `2001:4860:4860::${10 + index}`, `1.1.1.${10 + index}`] }] }]));
+    const gluetunFetch = async url => {
+        if (url.includes('/commits?')) return fetchBytes(url);
+        if (url.endsWith('/LICENSE')) return Buffer.from(privatevpnLicense);
+        const file = decodeURIComponent(url.split('/').at(-1)).replace(/\.json$/, '');
+        if (gluetunData[file]) return Buffer.from(JSON.stringify(gluetunData[file]));
+        return privatevpnFetch()(url);
+    };
+    for (const [provider, version, file = provider] of extraProviders) {
+        const requested = [];
+        const source = await gluetunServers(async url => { requested.push(url); return gluetunFetch(url); }, now, provider);
+        assert.equal(new URL(requested[0]).searchParams.get('path'), `pkg/servers/${file}.json`);
+        assert.equal(requested[2], `https://raw.githubusercontent.com/qdm12/gluetun-servers/${'a'.repeat(40)}/pkg/servers/${encodeURIComponent(file)}.json`);
+        assert.equal(source.metadata.id, provider + '_servers');
+        assert.equal(source.metadata.updated_at_unix, privatevpnData.timestamp);
+        assert.equal(source.metadata.expires_at_unix, privatevpnData.timestamp + 45 * 86400);
+        assert.equal(source.entries.length, 2);
+        for (const bad of [{ ...gluetunData[file], version: version + 10 }, { ...gluetunData[file], timestamp: now + 1 }, { ...gluetunData[file], timestamp: now - 45 * 86400 }]) {
+            await assert.rejects(gluetunServers(async url => url.endsWith('.json') ? Buffer.from(JSON.stringify(bad)) : gluetunFetch(url), now, provider));
+        }
+        snapshot[provider + '_servers'] = source;
+    }
+    for (const provider of ['ipvanish', 'vyprvpn', '__proto__', '../privatevpn']) await assert.rejects(gluetunServers(async () => assert.fail('Unsupported provider must not fetch'), now, provider), /Unsupported/);
+    const allFetch = async url => url.includes('Joe12387/') ? serverFetch()(url) : url.includes('qdm12/gluetun-servers/') ? gluetunFetch(url) : fetchBytes(url);
+    const loaded = await update(path, { fetchBytes: allFetch, now });
+    for (const [provider] of extraProviders) assert(loaded.sources.includes(provider + '_servers') && !loaded.failures.includes(provider + '_servers'));
+    const cyberghostRetained = JSON.parse(await readFile(path)).cyberghost_servers;
+    const isolated = await update(path, { now: now + 60, fetchBytes: async url => {
+        if (url.includes('cyberghost')) throw new Error('provider unavailable');
+        return allFetch(url);
+    } });
+    assert(isolated.failures.includes('cyberghost_servers'));
+    assert(!isolated.failures.includes('expressvpn_servers'));
+    const independent = JSON.parse(await readFile(path));
+    assert.deepEqual(independent.cyberghost_servers, cyberghostRetained);
+    assert.equal(independent.expressvpn_servers.metadata.fetched_at_unix, now + 60);
+    assert.equal(independent.expressvpn_servers.metadata.updated_at_unix, privatevpnData.timestamp);
     assert(loaded.sources.includes('privatevpn_servers') && !loaded.failures.includes('privatevpn_servers'));
     const privatevpnRetained = JSON.parse(await readFile(path)).privatevpn_servers;
     assert(loaded.sources.includes('vpn_servers') && !loaded.failures.includes('vpn_servers'));
@@ -173,7 +210,7 @@ try {
     assert.deepEqual(JSON.parse(await readFile(path)).vpn_servers, retained);
     assert.deepEqual(JSON.parse(await readFile(path)).privatevpn_servers, privatevpnRetained);
     const result = await update(path, { fetchBytes, now });
-    assert.deepEqual(result.failures, ['hosting', 'vpn', 'datacenter', 'proxy', 'asn', 'vpn_servers', 'privatevpn_servers']);
+    assert.deepEqual(result.failures, ['hosting', 'vpn', 'datacenter', 'proxy', 'asn', 'vpn_servers', 'privatevpn_servers', ...extraProviders.map(([provider]) => provider + '_servers')]);
     assert.deepEqual(JSON.parse(await readFile(path)).vpn_servers, retained);
     const refreshed = JSON.parse(await readFile(path));
     assert.equal(refreshed.hosting.metadata.expires_at_unix, snapshot.hosting.metadata.expires_at_unix);
@@ -282,6 +319,17 @@ try {
     assert.deepEqual((await check(direct, '2606:4700:4700::1')).vpn.value, { scope: 'listed_vpn_range' });
     assert.equal((await check(direct, '8.8.8.8:80')).status, 'invalid_input');
     assert.equal((await check(direct, '192.168.1.1')).reason, 'non_global_ip');
+    for (const [index, [provider]] of extraProviders.entries()) {
+        const ip = `1.1.1.${10 + index}`;
+        const fact = (await check(direct, ip)).vpn;
+        assert.deepEqual(fact.value, { scope: 'listed_vpn_server' });
+        assert.equal(fact.source.id, provider + '_servers');
+        assert.equal((await check(direct, `::ffff:${ip}`)).vpn.source.id, provider + '_servers');
+        assert.equal((await check(direct, `2001:4860:4860::${10 + index}`)).vpn.source.id, provider + '_servers');
+        assert.equal((await (await post(direct, '/v1/check', { ip })).json()).vpn, true);
+        assert.equal((await (await post(direct, '/openfingerprint.v1.OpenFingerprint/Check', { ip }, { 'Connect-Protocol-Version': '1' })).json()).vpn, true);
+    }
+    assert.equal((await check(direct, '1.1.1.15')).vpn.value, null);
     const stale = structuredClone(snapshot);
     stale.tor.metadata.updated_at_unix = now - 20000;
     stale.tor.metadata.fetched_at_unix = now - 19000;
@@ -299,6 +347,7 @@ try {
     assert(text.includes('openfingerprint_network_data_source_fresh{source="tor_exit"} 1'));
     assert(text.includes('openfingerprint_network_data_source_fresh{source="vpn_servers"} 1'));
     assert(text.includes('openfingerprint_network_data_source_fresh{source="privatevpn_servers"} 1'));
+    for (const [provider] of extraProviders) assert(text.includes(`openfingerprint_network_data_source_fresh{source="${provider}_servers"} 1`));
     assert(!text.includes('8.8.8.8'));
     const series = name => Number(new RegExp(`^${name.replace(/[{}"]/g, '\\$&')} (\\d+)$`, 'm').exec(text)?.[1]);
     assert(series('openfingerprint_http_request_duration_seconds_count{route="check",status="2xx"}') >= 1);

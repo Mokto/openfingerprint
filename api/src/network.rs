@@ -115,9 +115,14 @@ struct Snapshot {
     proxy: Option<Source<Vec<ProxyEntry>>>,
     vpn_servers: Option<Source<Vec<Range>>>,
     privatevpn_servers: Option<Source<Vec<Range>>>,
+    cyberghost_servers: Option<Source<Vec<Range>>>,
+    expressvpn_servers: Option<Source<Vec<Range>>>,
+    purevpn_servers: Option<Source<Vec<Range>>>,
+    vpnunlimited_servers: Option<Source<Vec<Range>>>,
+    privado_servers: Option<Source<Vec<Range>>>,
 }
 
-const SOURCES: usize = 8;
+const SOURCES: usize = 13;
 const PROXY_LIFETIME: u64 = 6 * 3600;
 
 fn ranges(
@@ -155,6 +160,11 @@ pub struct Data {
     vpn: HashSet<IpNet>,
     vpn_servers: HashSet<IpNet>,
     privatevpn_servers: HashSet<IpNet>,
+    cyberghost_servers: HashSet<IpNet>,
+    expressvpn_servers: HashSet<IpNet>,
+    purevpn_servers: HashSet<IpNet>,
+    vpnunlimited_servers: HashSet<IpNet>,
+    privado_servers: HashSet<IpNet>,
     datacenter: HashSet<IpNet>,
     proxy: HashMap<IpAddr, BTreeSet<String>>,
     asn: Option<maxminddb::Reader<Vec<u8>>>,
@@ -163,12 +173,17 @@ pub struct Data {
 impl Data {
     fn unavailable(reason: &'static str) -> Self {
         Self {
-            metadata: [None, None, None, None, None, None, None, None],
+            metadata: std::array::from_fn(|_| None),
             tor: HashMap::new(),
             hosting: HashMap::new(),
             vpn: HashSet::new(),
             vpn_servers: HashSet::new(),
             privatevpn_servers: HashSet::new(),
+            cyberghost_servers: HashSet::new(),
+            expressvpn_servers: HashSet::new(),
+            purevpn_servers: HashSet::new(),
+            vpnunlimited_servers: HashSet::new(),
+            privado_servers: HashSet::new(),
             datacenter: HashSet::new(),
             proxy: HashMap::new(),
             asn: None,
@@ -188,7 +203,12 @@ impl Data {
                 && snapshot.datacenter.is_none()
                 && snapshot.proxy.is_none()
                 && snapshot.vpn_servers.is_none()
-                && snapshot.privatevpn_servers.is_none())
+                && snapshot.privatevpn_servers.is_none()
+                && snapshot.cyberghost_servers.is_none()
+                && snapshot.expressvpn_servers.is_none()
+                && snapshot.purevpn_servers.is_none()
+                && snapshot.vpnunlimited_servers.is_none()
+                && snapshot.privado_servers.is_none())
         {
             return Err(());
         }
@@ -351,6 +371,46 @@ impl Data {
                 45 * DAY,
                 &mut data.privatevpn_servers,
             ),
+            (
+                snapshot.cyberghost_servers,
+                "cyberghost_servers",
+                "MIT",
+                8,
+                45 * DAY,
+                &mut data.cyberghost_servers,
+            ),
+            (
+                snapshot.expressvpn_servers,
+                "expressvpn_servers",
+                "MIT",
+                9,
+                45 * DAY,
+                &mut data.expressvpn_servers,
+            ),
+            (
+                snapshot.purevpn_servers,
+                "purevpn_servers",
+                "MIT",
+                10,
+                45 * DAY,
+                &mut data.purevpn_servers,
+            ),
+            (
+                snapshot.vpnunlimited_servers,
+                "vpnunlimited_servers",
+                "MIT",
+                11,
+                45 * DAY,
+                &mut data.vpnunlimited_servers,
+            ),
+            (
+                snapshot.privado_servers,
+                "privado_servers",
+                "MIT",
+                12,
+                45 * DAY,
+                &mut data.privado_servers,
+            ),
         ] {
             let Some(mut source) = source else { continue };
             if source.entries.len() > 100000 {
@@ -450,7 +510,15 @@ impl Data {
             }
         };
         let mut vpn = self.fact(3, scoped(&self.vpn, "listed_vpn_range"), now, "not_listed");
-        for (index, set) in [(6, &self.vpn_servers), (7, &self.privatevpn_servers)] {
+        for (index, set) in [
+            (6, &self.vpn_servers),
+            (7, &self.privatevpn_servers),
+            (8, &self.cyberghost_servers),
+            (9, &self.expressvpn_servers),
+            (10, &self.purevpn_servers),
+            (11, &self.vpnunlimited_servers),
+            (12, &self.privado_servers),
+        ] {
             if !vpn["value"].is_null() {
                 break;
             }
@@ -566,6 +634,11 @@ impl Store {
             "open_proxies",
             "vpn_servers",
             "privatevpn_servers",
+            "cyberghost_servers",
+            "expressvpn_servers",
+            "purevpn_servers",
+            "vpnunlimited_servers",
+            "privado_servers",
         ]
         .iter()
         .enumerate()
@@ -917,6 +990,60 @@ mod tests {
             bad["privatevpn_servers"]["metadata"][key] = value;
             assert!(Data::load(path, &serde_json::to_vec(&bad).unwrap()).is_err());
         }
+    }
+    #[test]
+    fn additional_gluetun_providers_are_exact_independent_sources() {
+        let path = Path::new("/tmp/network.json");
+        let mut combined = snapshot();
+        for id in [
+            "cyberghost_servers",
+            "expressvpn_servers",
+            "purevpn_servers",
+            "vpnunlimited_servers",
+            "privado_servers",
+        ] {
+            let mut metadata = combined["vpn"]["metadata"].clone();
+            metadata["id"] = json!(id);
+            metadata["expires_at_unix"] = json!(1000 + 45 * DAY);
+            let mut input = json!({"version":1});
+            input[id] = json!({"metadata":metadata,"entries":[
+                {"network":"1.1.1.10/32"},{"network":"::ffff:1.1.1.10/128"},{"network":"2001:4860:4860::10/128"}]});
+            let data = Data::load(path, &serde_json::to_vec(&input).unwrap()).unwrap();
+            let c = |ip: &str, time| data.check_at(ip.parse().unwrap(), "peer", time);
+            for ip in ["1.1.1.10", "2001:4860:4860::10"] {
+                let hit = c(ip, 1000 + 30 * DAY);
+                assert_eq!(hit["vpn"]["value"], json!({"scope":"listed_vpn_server"}));
+                assert_eq!(hit["vpn"]["source"]["id"], id);
+                assert_eq!(c(ip, 999)["vpn"]["status"], "clock_skew");
+                assert_eq!(c(ip, 1000 + 45 * DAY)["vpn"]["status"], "stale_data");
+            }
+            assert!(c("1.1.1.11", 1500)["vpn"]["value"].is_null());
+            for network in ["1.1.1.0/24", "127.0.0.1/32", "2001:db8::1/128"] {
+                let mut bad = input.clone();
+                bad[id]["entries"][0]["network"] = json!(network);
+                assert!(Data::load(path, &serde_json::to_vec(&bad).unwrap()).is_err());
+            }
+            for (key, value) in [
+                ("license", json!("CC0-1.0")),
+                ("expires_at_unix", json!(1001 + 45 * DAY)),
+            ] {
+                let mut bad = input.clone();
+                bad[id]["metadata"][key] = value;
+                assert!(Data::load(path, &serde_json::to_vec(&bad).unwrap()).is_err());
+            }
+            combined[id] = input[id].clone();
+        }
+        let data = Data::load(path, &serde_json::to_vec(&combined).unwrap()).unwrap();
+        assert_eq!(
+            data.check_at("1.1.1.10".parse().unwrap(), "peer", 1500)["vpn"]["source"]["id"],
+            "cyberghost_servers"
+        );
+        combined["cyberghost_servers"]["metadata"]["expires_at_unix"] = json!(1500);
+        let data = Data::load(path, &serde_json::to_vec(&combined).unwrap()).unwrap();
+        assert_eq!(
+            data.check_at("1.1.1.10".parse().unwrap(), "peer", 1500)["vpn"]["source"]["id"],
+            "expressvpn_servers"
+        );
     }
     #[test]
     fn tor_observations_expire_individually_and_keep_the_latest_canonical_address() {

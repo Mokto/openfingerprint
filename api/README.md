@@ -740,7 +740,7 @@ relabel old data as newly updated.
 | [Published cloud ranges](https://github.com/tobilg/public-cloud-provider-ip-ranges) | Source-labelled provider ranges, not a physical datacenter/device classifier. Includes shared/CDN infrastructure; not all hosting providers are covered. No organization-name or whole-ASN heuristics. | MIT; exact license pinned and retained in the manifest. | 7 days from the last commit changing the source data file. |
 | [X4BNet lists_vpn](https://github.com/X4BNet/lists_vpn) `output/vpn` | Netblocks of common VPN providers, built by the project from ASN data. A match shows the address belongs to a listed VPN network, not that this visitor is hiding anything. Incomplete; unlisted VPNs stay unknown. | MIT (the project's statement; its ASN input, IPLocate, is CC BY-SA 4.0 and is credited in the manifest). The license text is pinned and retained. | 7 days from the last commit changing the lists. |
 | [Joe12387 Open Source VPN IP Lists](https://github.com/Joe12387/open-source-vpn-ip-lists) | Exact IPv4/IPv6 addresses from ten provider-server lists: AirVPN, IVPN, Mullvad, NordVPN, OVPN, PIA, ProtonVPN, RiseupVPN, Surfshark and Windscribe. The upstream describes first-party provider data, including entry addresses: association is not proof of egress, and retired IPs may linger. No CIDR expansion or hosting inference. Does not include PrivateVPN (which is different from PIA). | CC0-1.0; exact license pinned and retained in the manifest. | 7 days from the earlier of the README's declared publication day (UTC midnight) and its commit time. |
-| [Gluetun PrivateVPN servers](https://github.com/qdm12/gluetun-servers/blob/main/pkg/servers/privatevpn.json) | Exact addresses from PrivateVPN's published connection-server hostnames, resolved by Gluetun. Uses `listed_vpn_server`, not verified browsing exits; entry/exit addresses may differ and retired addresses may linger. No accounts, profiles, live VPN sessions or ASN expansion. | MIT; exact license pinned and retained in the manifest. | 45 days from the earlier of the embedded collection timestamp and the data-file commit time; upstream refreshes monthly. |
+| [Gluetun provider servers](https://github.com/qdm12/gluetun-servers/tree/main/pkg/servers) | Separate exact-address inventories for PrivateVPN, CyberGhost, ExpressVPN, PureVPN, VPN Unlimited and Privado, collected by Gluetun from provider connection-server data. Uses `listed_vpn_server`, not verified browsing exits; entry/exit addresses may differ and retired addresses may linger. No accounts, profiles, live VPN sessions or ASN expansion. | MIT; exact license pinned and retained in the manifest. | 45 days from the earlier of the embedded collection timestamp and the data-file commit time; upstream refreshes monthly. |
 | X4BNet lists_vpn `output/datacenter` | Networks that are "not an eyeball network": VPN and datacenter/hosting ASNs, selected partly by name keywords. Overlaps `hosting` and `vpn`; shared or CDN space is included. | Same X4B/IPLocate terms as the VPN ranges. | 7 days. |
 | [monosans/proxy-list](https://github.com/monosans/proxy-list) | Public HTTP, SOCKS4 and SOCKS5 proxy addresses that the upstream tested as working. Only the listening address is matched, without port. A proxy can exit through another address, and these lists change by the hour. | MIT; exact license pinned and retained in the manifest. | 6 hours from the last commit changing the list. |
 | [DB-IP ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) | Monthly IPv4/IPv6 ASN number and organization, with reduced coverage/accuracy. ASN is not visitor identity, geolocation or hosting proof. | CC BY 4.0. | 45 days from the earlier of the release month and actual MMDB build time. |
@@ -792,14 +792,18 @@ duplicate addresses keep their latest observation. Positive Tor facts carry
 snapshot expiry. The API rechecks both limits on each lookup and retains no checked
 address.
 
-Upgrade API readers before the network updater. The optional `vpn_servers` and
-`privatevpn_servers` snapshot sources require readers supporting those fields;
-older readers reject unknown fields and retain their last-good manifest. All
-three VPN sources refresh and expire independently: one source failing never
-renews another's timestamps. Existing X4B matches keep their original scope and
-provenance, followed by Joe12387 matches, then Gluetun PrivateVPN matches.
-A failed provider-list download rejects the entire server-list refresh instead
-of publishing partial data as a newly refreshed complete list.
+Upgrade API readers before the network updater. Optional host-list sources are
+`vpn_servers`, `privatevpn_servers`, `cyberghost_servers`, `expressvpn_servers`,
+`purevpn_servers`, `vpnunlimited_servers` and `privado_servers`. Readers must
+support the new fields before publishing them; older readers reject unknown
+fields and retain their last-good manifest. Each source refreshes and expires
+independently: one provider failing never renews another's timestamps or blocks
+a fresh match. Existing X4B matches keep their original scope and provenance,
+followed by Joe12387, PrivateVPN, CyberGhost, ExpressVPN, PureVPN, VPN Unlimited
+and Privado. The Joe12387 aggregate is refreshed only when all ten files succeed;
+each Gluetun provider is validated and published separately. Schema versions are
+pinned per provider, including VPN Unlimited's space-containing upstream filename.
+IPVanish and VyprVPN are not enabled: their inventories were stale when reviewed.
 
 Old bare-address Tor entries
 remain readable alongside other sources, but their matches are unknown with
