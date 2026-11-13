@@ -279,7 +279,6 @@ mod tests {
             assert_eq!(detail.ja4.as_deref(), Some(ja4));
             assert_eq!(detail.origin.as_deref(), Some("https://app.example.test"));
             assert_eq!(detail.schema_version, Some(1));
-            assert!(detail.fingerprint.is_some());
             assert!(
                 serde_json::to_value(&rpc)
                     .unwrap()
@@ -414,17 +413,10 @@ mod tests {
             assert_eq!(detail.status.as_deref(), Some("insufficient_signals"));
             assert_eq!(detail.ja4.as_deref(), ja4);
             assert_eq!(
-                (
-                    detail.tls_client.as_deref(),
-                    detail.fingerprint.as_deref(),
-                    detail.schema_version
-                ),
-                (None, None, None)
+                (detail.tls_client.as_deref(), detail.schema_version),
+                (None, None)
             );
             assert!(detail.tampering.is_unset() && detail.behavior.is_unset());
-            let groups = &detail.evidence.as_option().unwrap().identity_groups;
-            assert_eq!(groups.len(), 1);
-            assert_eq!(groups["rendering"].len(), 64);
             let automation = detail.automation.as_option().unwrap();
             assert_eq!(automation.status.as_deref(), Some("unknown"));
             assert!(automation.indicators.is_empty());
@@ -510,6 +502,13 @@ mod tests {
         state.identifications.store(&id, &record).await.unwrap();
         let rpc = Box::pin(parity(&state, &id)).await;
         let visitor = rpc.visitor_id.clone().unwrap();
+        let json = serde_json::to_value(&rpc).unwrap();
+        assert!(json["identification"].get("fingerprint").is_none());
+        assert!(
+            json["identification"]["evidence"]
+                .get("identityGroups")
+                .is_none()
+        );
         let detail = rpc.identification.as_option().unwrap();
         assert_eq!(detail.visitor_id.as_ref(), Some(&visitor));
         assert_eq!(

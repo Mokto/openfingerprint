@@ -252,8 +252,8 @@ known false positives/evasions.
 Besides the verdicts, `/v1/check` returns `replayed` (this identification was looked up
 before) and `ageMs` (time since the listener stored it, by the API's clock). An
 identification lives for an hour. Your backend can also compare the connection's IP
-address with what it expects, rate-limit by IP and fingerprint, and treat the same
-fingerprint across many new accounts as a signal. See the
+address with what it expects and rate-limit by IP or, when visitor reconciliation is
+configured, `visitorId`. Checks do not return profile hashes, even with detail. See the
 [API guide](../api/README.md) for the full response.
 
 ### Cooperative batching

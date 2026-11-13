@@ -122,8 +122,9 @@ identifications.
 
 Visitor IDs and exact aliases have **no automatic expiry**. See
 [matching, retention, isolation and migrations](../README.md#visitor-reconciliation)
-before enabling this storage. Defaults leave reconciliation off and preserve existing
-fingerprint-only responses. The SDK and current fingerprint hashes are unchanged.
+before enabling this storage. Defaults leave reconciliation off: checks return verdicts
+but no browser identity. Profile hashes are never returned, even with detail. The SDK
+and internal fingerprint hashes are unchanged.
 
 Use a new `openfingerprint` database and dedicated owner/application role on your
 existing PostgreSQL cluster. Do not use another application's database or a superuser.

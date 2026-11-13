@@ -532,7 +532,12 @@ async fn missing_evidence_database_failure_timeout_and_rollback_stay_unknown() {
         .await
         .unwrap();
     assert!(known["identification"]["visitorId"].is_string());
-    assert!(known["identification"]["fingerprint"].is_string());
+    assert!(known["identification"].get("fingerprint").is_none());
+    assert!(
+        known["identification"]["evidence"]
+            .get("identityGroups")
+            .is_none()
+    );
     let mut compact = known.clone();
     crate::check::compact(&mut compact);
     assert_eq!(compact["visitorId"], known["identification"]["visitorId"]);

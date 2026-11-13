@@ -79,7 +79,8 @@ message IdentificationDetail {
   optional string reason = 2;
   // The SDK's fingerprint schema. Unset without a full ID.
   optional uint32 schema_version = 3;
-  optional string fingerprint = 4;
+  reserved 4;
+  reserved "fingerprint";
   // Unset unless the evidence was valid.
   EvidenceSummary evidence = 5;
   optional bool replayed = 6;
@@ -108,8 +109,8 @@ message Reconciliation {
 }
 
 message EvidenceSummary {
-  // A hash per complete group of identity probes: fonts, hardware, rendering, software.
-  map<string, string> identity_groups = 1;
+  reserved 1;
+  reserved "identity_groups";
   optional uint32 included_components = 2;
   optional uint32 included_hints = 3;
   optional uint32 unavailable_probes = 4;

@@ -199,7 +199,6 @@ impl Evidence {
                 "insufficient_signals"
             },
             schema_version: available.then_some(self.version),
-            fingerprint: self.fingerprint.as_deref().map(short_id),
         })
     }
 
@@ -330,7 +329,6 @@ pub(crate) fn visitor_profile(value: serde_json::Value) -> Option<crate::visitor
 struct Verified {
     status: &'static str,
     schema_version: Option<u16>,
-    fingerprint: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -417,30 +415,10 @@ impl IdentificationCheck {
 #[derive(Serialize)]
 #[serde(rename_all(serialize = "camelCase"))]
 struct EvidenceCounts {
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    identity_groups: BTreeMap<&'static str, String>,
     included_components: usize,
     included_hints: usize,
     unavailable_probes: usize,
     excluded_probes: usize,
-}
-
-/// First 126 bits of the full SHA-256 as 21 base64url characters (NanoID-sized).
-fn short_id(hex: &str) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let (mut acc, mut bits, mut out) = (0u32, 0, String::new());
-    for pair in hex.as_bytes()[..32].chunks(2) {
-        let byte = u8::from_str_radix(std::str::from_utf8(pair).unwrap_or("0"), 16).unwrap_or(0);
-        acc = (acc << 8) | u32::from(byte);
-        bits += 8;
-        while bits >= 6 {
-            bits -= 6;
-            out.push(ALPHABET[(acc >> bits & 63) as usize] as char);
-        }
-        acc &= (1 << bits) - 1;
-    }
-    out.truncate(21);
-    out
 }
 
 /// A fact object (`value` plus `status`) reduced to its bare value.
@@ -562,7 +540,6 @@ pub(crate) fn check_evidence(
         profile: Verified {
             status: "invalid_input",
             schema_version: None,
-            fingerprint: None,
         },
         reason: Some("invalid_evidence"),
         evidence: None,
@@ -578,7 +555,6 @@ pub(crate) fn check_evidence(
         && let Ok(profile) = evidence.verified()
     {
         check.evidence = Some(EvidenceCounts {
-            identity_groups: evidence.identity_groups(),
             included_components: evidence
                 .components
                 .keys()
@@ -1040,10 +1016,21 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn short_id_is_21_url_safe_characters_from_the_hash_prefix() {
-        // Reference: Buffer.from(hex, 'hex').subarray(0, 16).toString('base64url').slice(0, 21)
-        let id = short_id(&format!("00ff10{}", "ab".repeat(29)));
-        assert_eq!(id, "AP8Qq6urq6urq6urq6urq");
+    fn identification_details_do_not_expose_identity_hashes() {
+        for input in [
+            payload(),
+            {
+                let mut input = payload();
+                input["fingerprint"] = serde_json::Value::Null;
+                input
+            },
+            serde_json::Value::Null,
+        ] {
+            let detail = serde_json::to_value(check_evidence(input, None, None)).unwrap();
+            assert!(detail.get("fingerprint").is_none());
+            assert!(detail.get("coreFingerprint").is_none());
+            assert!(detail["evidence"].get("identityGroups").is_none());
+        }
     }
 
     #[test]
@@ -1145,7 +1132,6 @@ pub(crate) mod tests {
         input["fingerprint"] = serde_json::Value::Null;
         let result = check_evidence(input, None, None);
         assert_eq!(result.profile.status, "insufficient_signals");
-        assert!(result.profile.fingerprint.is_none());
         assert!(result.profile.schema_version.is_none());
         assert!(result.evidence.is_some());
 
@@ -1158,7 +1144,7 @@ pub(crate) mod tests {
             assert_eq!(result.profile.status, "invalid_input");
             assert_eq!(result.reason, Some("invalid_evidence"));
             assert!(result.evidence.is_none());
-            assert!(result.profile.fingerprint.is_none());
+            assert!(result.profile.schema_version.is_none());
         }
     }
 
