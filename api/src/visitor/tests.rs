@@ -532,6 +532,11 @@ async fn missing_evidence_database_failure_timeout_and_rollback_stay_unknown() {
         .await
         .unwrap();
     assert!(known["identification"]["visitorId"].is_string());
+    assert!(known["identification"]["fingerprint"].is_string());
+    let mut compact = known.clone();
+    crate::check::compact(&mut compact);
+    assert_eq!(compact["visitorId"], known["identification"]["visitorId"]);
+    assert!(compact.get("fingerprint").is_none());
     contents.lock().unwrap().clear();
     let expired = Box::pin(crate::check::evaluate(&state, input()))
         .await
@@ -548,6 +553,11 @@ async fn missing_evidence_database_failure_timeout_and_rollback_stay_unknown() {
         .unwrap();
     assert_eq!(unavailable["identification"]["status"], "unavailable");
     assert!(unavailable["identification"]["visitorId"].is_null());
+    for mut response in [expired, unavailable] {
+        crate::check::compact(&mut response);
+        assert!(response.get("visitorId").is_none());
+        assert!(response.get("fingerprint").is_none());
+    }
     db.cleanup().await;
 }
 
