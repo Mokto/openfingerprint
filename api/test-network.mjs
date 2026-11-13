@@ -5,8 +5,7 @@ import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } fr
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tor, hosting, vpn, datacenter, proxy, vpnExits, update, validate, loop, prune } from './update-network-data.mjs';
-import { observe } from './observe-vpn-exit.mjs';
+import { tor, hosting, vpn, datacenter, proxy, update, validate, loop, prune } from './update-network-data.mjs';
 import { identifyEnvironment } from './test-certs.mjs';
 
 const directory = await mkdtemp(resolve(tmpdir(), 'openfingerprint-network-check-'));
@@ -112,69 +111,6 @@ try {
     await assert.rejects(proxy(proxyFetch('http://not-an-ip:80\n'), now), /Invalid proxy entry/);
     await assert.rejects(proxy(proxyFetch('\n'), now), /Invalid proxy count/);
     await assert.rejects(proxy(async url => url.endsWith('LICENSE') ? Buffer.from('other') : fetchBytes(url), now), /license changed/);
-    const observationOptions = { provider: 'PrivateVPN', endpoint: 'https://echo.example.test/ip', attribution: 'Test operator', confirmVpn: true, cc0: true };
-    const observed = await observe(observationOptions, async () => Buffer.from('{"ip":"8.8.4.4"}'));
-    let measured = observed.entries[0].observed_at_unix;
-    assert.equal(observed.metadata.updated_at_unix, measured);
-    assert.equal(observed.metadata.expires_at_unix, measured + 86400);
-    assert.equal(observed.entries[0].provider, 'PrivateVPN');
-    for (const override of [{ confirmVpn: false }, { cc0: false }, { provider: 'bad\nprovider' }, { endpoint: 'http://echo.example.test' }, { endpoint: 'https://user:pass@echo.example.test' }]) {
-        await assert.rejects(observe({ ...observationOptions, ...override }, async () => { assert.fail('Invalid collection configuration must not send requests'); }));
-    }
-    for (const body of ['{"ip":"invalid"}', '{}', 'not json', 'x'.repeat(4097)]) {
-        await assert.rejects(observe(observationOptions, async () => Buffer.from(body)));
-    }
-    observed.metadata.updated_at_unix -= 300;
-    observed.metadata.fetched_at_unix -= 300;
-    observed.metadata.expires_at_unix -= 300;
-    observed.entries[0].observed_at_unix -= 300;
-    measured -= 300;
-    const feedPath = resolve(directory, 'vpn-exits.json');
-    const observedPath = resolve(directory, 'observed-network.json');
-    await writeFile(feedPath, JSON.stringify(observed));
-    await writeFile(observedPath, JSON.stringify(snapshot));
-    const offline = async () => { throw new Error('offline'); };
-    const imported = await update(observedPath, { fetchBytes: offline, now: measured, vpnExitsPath: feedPath });
-    assert(imported.sources.includes('vpn_exits'));
-    assert.deepEqual(imported.failures, ['tor', 'hosting', 'vpn', 'datacenter', 'proxy', 'asn']);
-    const firstImport = JSON.parse(await readFile(observedPath)).vpn_exits;
-    await update(observedPath, { fetchBytes: offline, now: measured + 60, vpnExitsPath: feedPath });
-    const nextImport = JSON.parse(await readFile(observedPath)).vpn_exits;
-    assert.equal(nextImport.metadata.fetched_at_unix, measured + 60);
-    assert.equal(nextImport.metadata.updated_at_unix, measured);
-    assert.equal(nextImport.metadata.expires_at_unix, firstImport.metadata.expires_at_unix);
-    assert.equal(nextImport.metadata.revision, firstImport.metadata.revision);
-    assert.deepEqual(nextImport.entries, firstImport.entries);
-    await assert.rejects(vpnExits(feedPath, measured - 1), /Stale\/future/);
-    await assert.rejects(vpnExits(feedPath, measured + 86400), /Stale\/future/);
-    for (const invalid of [
-        { ...observed, entries: [{ ...observed.entries[0], ip: '8.8.4.0/24' }] },
-        { ...observed, entries: [{ ...observed.entries[0], ip: '127.0.0.1' }] },
-        { ...observed, entries: [{ ...observed.entries[0], observed_at_unix: measured + 1 }] },
-        { ...observed, metadata: { ...observed.metadata, license: 'unreviewed' } },
-        { ...observed, metadata: { ...observed.metadata, expires_at_unix: measured + 86401 } }
-    ]) {
-        await writeFile(feedPath, JSON.stringify(invalid));
-        const failure = await update(observedPath, { fetchBytes, now: measured + 120, vpnExitsPath: feedPath });
-        assert(failure.failures.includes('vpn_exits'));
-        assert.deepEqual(JSON.parse(await readFile(observedPath)).vpn_exits, nextImport);
-    }
-    const observedServer = await start({ OPENFINGERPRINT_NETWORK_DATA: observedPath });
-    const observedHit = await check(observedServer, '8.8.4.4');
-    assert.equal(observedHit.vpn.value.scope, 'operator_observed_vpn_exit');
-    assert.equal(observedHit.vpn.value.observations[0].provider, 'PrivateVPN');
-    assert.equal(observedHit.vpn.value.observations[0].evidenceUrl, observationOptions.endpoint);
-    const observedMetricsAddress = /metrics on (127\.0\.0\.1:\d+)/.exec(observedServer.output)[1];
-    const observedMetrics = await (await fetch('http://' + observedMetricsAddress + '/metrics')).text();
-    assert(observedMetrics.includes('openfingerprint_network_data_source_fresh{source="observed_vpn_exits"} 1'));
-    assert(!observedMetrics.includes('PrivateVPN') && !observedMetrics.includes('8.8.4.4'));
-    assert.equal((await check(observedServer, '8.8.4.5')).vpn.value, null);
-    const compactObserved = await (await post(observedServer, '/v1/check', { ip: '8.8.4.4' })).json();
-    assert.equal(compactObserved.vpn, true);
-    await writeFile(feedPath, JSON.stringify({ ...observed, entries: [] }));
-    await update(observedPath, { fetchBytes: offline, now: measured + 180, vpnExitsPath: feedPath });
-    const revokedServer = await start({ OPENFINGERPRINT_NETWORK_DATA: observedPath });
-    assert.equal((await check(revokedServer, '8.8.4.4')).vpn.value, null);
     const result = await update(path, { fetchBytes, now });
     assert.deepEqual(result.failures, ['hosting', 'vpn', 'datacenter', 'proxy', 'asn']);
     const refreshed = JSON.parse(await readFile(path));
@@ -215,7 +151,7 @@ try {
         assert.deepEqual((await readdir(sidecar)).sort(), ['network.json', `asn-${'b'.repeat(64)}.mmdb`, `asn-${'c'.repeat(64)}.mmdb`, 'notes.txt'].sort());
         const stop = new AbortController();
         const runs = [];
-        const looping = loop(manifest, stop.signal, { interval: 20, retry: 5, vpnExitsPath: feedPath, run: async (_output, options) => { assert.equal(options.vpnExitsPath, feedPath); runs.push(Date.now()); if (runs.length === 2) stop.abort(); return { failures: [], sources: ['tor'] }; } });
+        const looping = loop(manifest, stop.signal, { interval: 20, retry: 5, run: async () => { runs.push(Date.now()); if (runs.length === 2) stop.abort(); return { failures: [], sources: ['tor'] }; } });
         await looping;
         assert.equal(runs.length, 2);
         const missing = resolve(sidecar, 'missing/network.json');
