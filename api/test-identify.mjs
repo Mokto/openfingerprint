@@ -166,11 +166,13 @@ try {
 	}
 	const compact = (await check({ identificationId })).body;
 	assert.equal(compact.replayed, true, 'the second lookup');
-	assert.equal(compact.fingerprint, detail.fingerprint);
+	assert(!('fingerprint' in compact));
+	assert(!('visitorId' in compact));
+	assert.match(detail.fingerprint, /^[A-Za-z0-9_-]{21}$/);
 
 	phase = 'invalid and unknown identifications';
 	for (const id of ['AAAAAAAAAAAAAAAAAAAAAA', 'short', 42])
-		assert.deepEqual((await check({ identificationId: id })).body, { fingerprint: null, invalid: ['identificationId'] }, String(id));
+		assert.deepEqual((await check({ identificationId: id })).body, { invalid: ['identificationId'] }, String(id));
 
 	phase = 'HTTP/2 and certificates chosen by SNI';
 	const session = h2(`https://${addresses.identify}`, { rejectUnauthorized: false, servername: 'collect.example.test' });
@@ -217,7 +219,7 @@ try {
 			const id = JSON.parse(created.text).identificationId;
 			for (let i = 0; i < 3; i++) {
 				const detail = (await check({ identificationId: id, detail: true })).body.identification;
-				assert.equal(detail.fingerprint, compact.fingerprint, 'behavior never changes identity');
+				assert.equal(detail.fingerprint, viaH2Identification.fingerprint, 'behavior never changes identity');
 				assert.deepEqual(detail.behavior, { status: 'observed', ruleVersion: 2, source: 'client_reported', patterns: clicks ? ['clicks_without_movement', 'centered_clicks'] : ['no_input'], suspiciousClickPattern: version === 2 && clicks >= 3 ? true : null });
 			}
 			assert.equal(await metric(series), before + 1, 'checks do not recount observations');

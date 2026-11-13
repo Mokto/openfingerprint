@@ -14,8 +14,8 @@ import-time collection. It hashes identity locally and adds bounded automation,
 tampering and spoofing observations. `identify()` posts that evidence over TLS to the
 API's public `/v1/identify` listener, which observes the request itself, including the
 browser's TLS handshake (JA4), and returns an `identificationId`. Your backend sends that
-ID to the API's internal `/v1/check`, which reports the fingerprint, automation,
-tampering and spoofing verdicts, whether the identification was looked up before
+ID to the API's internal `/v1/check`, which reports an optional reconciled `visitorId`,
+automation, tampering and spoofing verdicts, whether the identification was looked up before
 (`replayed`) and its age by the API's clock. A script that posts a browser's evidence
 from Python, Go, curl or Node shows up as `tls_mismatch`; a real browser driven by
 automation does not, which the automation probes cover.

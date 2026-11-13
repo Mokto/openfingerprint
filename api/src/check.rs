@@ -451,9 +451,8 @@ fn bare(fact: &serde_json::Value) -> Option<serde_json::Value> {
 }
 
 /// Default response: one flat object of verdicts. `identification` becomes a bare
-/// `fingerprint` (null unless fully verified); every other section contributes
-/// only the facts to act on. Unknown facts are omitted, so a missing key means
-/// unknown, and rejected inputs are listed under `invalid`.
+/// visitor ID when resolved; every other section contributes only the facts to act on.
+/// Unknown facts are omitted, and rejected inputs are listed under `invalid`.
 pub(crate) fn compact(response: &mut serde_json::Value) {
     use serde_json::{Map, Value, json};
     let Some(map) = response.as_object_mut() else {
@@ -470,7 +469,6 @@ pub(crate) fn compact(response: &mut serde_json::Value) {
         }
     };
     if let Some(identification) = map.remove("identification") {
-        out.insert("fingerprint".into(), identification["fingerprint"].clone());
         for key in ["visitorId", "replayed", "ageMs"] {
             if let Some(value) = identification.get(key).filter(|v| !v.is_null()) {
                 out.insert(key.into(), value.clone());
@@ -938,14 +936,14 @@ pub(crate) mod tests {
                 evaluate(&state, request(unknown.clone(), false))
                     .await
                     .unwrap(),
-                serde_json::json!({"fingerprint":null,"invalid":["identificationId"]}),
+                serde_json::json!({"invalid":["identificationId"]}),
                 "{unknown}"
             );
         }
         let down = state_with_redis("127.0.0.1:9");
         assert_eq!(
             evaluate(&down, request(id.into(), false)).await.unwrap(),
-            serde_json::json!({"fingerprint":null}),
+            serde_json::json!({}),
             "unknown, not invalid, when Redis cannot answer"
         );
         let removed: Result<CheckRequest, _> =
@@ -1051,7 +1049,7 @@ pub(crate) mod tests {
     #[test]
     fn compact_responses_are_flat_verdicts() {
         let mut response = serde_json::json!({
-            "identification": {"status":"ok","fingerprint":"abc","replayed":true,"ageMs":1200,"evidence":{},"origin":"https://a.test","ja4":"t13d","tlsClient":"chromium",
+            "identification": {"status":"ok","fingerprint":"abc","visitorId":"visitor","replayed":true,"ageMs":1200,"evidence":{},"origin":"https://a.test","ja4":"t13d","tlsClient":"chromium",
                 "automation":{"status":"detected","ruleVersion":2,"source":"client_reported","indicators":["webdriver"],"unavailableProbes":[]},
                 "tampering":{"status":"not_detected","rule_version":1,"source":"client_reported","indicators":[],"unavailable_probes":[]}},
             "email": {"status":"checked","roleAccount":true},
@@ -1071,7 +1069,7 @@ pub(crate) mod tests {
         assert_eq!(
             response,
             serde_json::json!({
-                "fingerprint":"abc","replayed":true,"ageMs":1200,"automation":true,
+                "visitorId":"visitor","replayed":true,"ageMs":1200,"automation":true,
                 "tampering":false,"disposable":true,"free":false,"cheapTld":true,"mx":true,
                 "country":"dk","tor":false,"datacenter":true,"proxy":true
             })
@@ -1079,11 +1077,11 @@ pub(crate) mod tests {
         for (spoofing, expected) in [
             (
                 serde_json::json!({"status":"detected","indicators":["tls_mismatch"]}),
-                serde_json::json!({"fingerprint":"abc","spoofing":true}),
+                serde_json::json!({"spoofing":true}),
             ),
             (
                 serde_json::json!({"status":"unknown"}),
-                serde_json::json!({"fingerprint":"abc"}),
+                serde_json::json!({}),
             ),
         ] {
             let mut response = serde_json::json!({"identification":{"status":"ok","fingerprint":"abc","spoofing":spoofing}});
@@ -1100,7 +1098,7 @@ pub(crate) mod tests {
         compact(&mut invalid);
         assert_eq!(
             invalid,
-            serde_json::json!({"fingerprint":null,"invalid":["identificationId","email","ip"]})
+            serde_json::json!({"invalid":["identificationId","email","ip"]})
         );
     }
 

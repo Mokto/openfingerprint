@@ -17,7 +17,7 @@ Domain and country intelligence run locally against openly licensed datasets:
 
 | Requested check | Available behavior |
 | --- | --- |
-| `identificationId` | Schema-1 verification of the browser's evidence, with a 21-character fingerprint, automation, tampering and spoofing verdicts, whether this identification was looked up before (`replayed`) and its age. |
+| `identificationId` | Schema-1 verification of the browser's evidence, with an optional reconciled `visitorId`, automation, tampering and spoofing verdicts, whether this identification was looked up before (`replayed`) and its age. The fingerprint is available only with `detail: true`. |
 | `domain` | Disposable, free-subdomain, public-mailbox, email-relay and source-scoped referrer-spam evidence with provenance and expiry, typo suggestions, MX providers, registration dates and SPF/DMARC status. |
 | `email` | Role-account detection for a full address, plus every `domain` check for the address's domain. |
 | `ip` | Local country estimate plus independent Tor-exit, ASN and published cloud-range evidence under `network`, with source provenance and expiry. Missing facts remain unknown. |
@@ -122,7 +122,7 @@ build arguments, command-line arguments or logs.
 | `OPENFINGERPRINT_NETWORK_DATA` | Optional network manifest path. Keep its content-addressed ASN files in the same directory. No bundled/live fallback; absent/invalid data is unknown. Checked every 60 seconds; invalid replacements retain last-good data without extending expiry. |
 | `OPENFINGERPRINT_REDIS_URL` | Required private Redis/Valkey connection URL for the RDAP cache, identifications and lookup markers; the API does not start without it. Supports `rediss://` with certificate validation. An unreachable Redis means uncached RDAP lookups, HTTP 503 from `/v1/identify` and unknown identifications; domain and IP checks keep working and there is no memory fallback. Each pod keeps one multiplexed connection for each of these, replaced after any error, timeout or 60 s of idleness; commands are never retried. RDAP cache writes happen after the response (at most 64 in flight; extra writes are dropped and counted as cache errors). |
 | `OPENFINGERPRINT_REDIS_PASSWORD` | Optional Redis password, overriding one in the URL, so the URL can live outside a Secret. |
-| `OPENFINGERPRINT_POSTGRES_URL` | Optional dedicated PostgreSQL database connection string for visitor reconciliation. Without it, existing fingerprint-only behavior is unchanged. TLS is required by default, with certificate and hostname verification; only explicit `sslmode=disable` permits plaintext for trusted local tests. Credentials belong in a Secret. |
+| `OPENFINGERPRINT_POSTGRES_URL` | Optional dedicated PostgreSQL database connection string for visitor reconciliation. Without it, `visitorId` is absent; fingerprints remain available with `detail: true`. TLS is required by default, with certificate and hostname verification; only explicit `sslmode=disable` permits plaintext for trusted local tests. Credentials belong in a Secret. |
 | `OPENFINGERPRINT_POSTGRES_PASSWORD` | Optional password override for a URL without credentials. |
 | `OPENFINGERPRINT_POSTGRES_CA` | Optional PEM file adding a private PostgreSQL CA to the system roots. No insecure certificate-verification mode exists. |
 | `OPENFINGERPRINT_VISITOR_NAMESPACE` | Required with PostgreSQL: 1–64 ASCII letters, digits, underscores or hyphens. Stable, operator-controlled isolation boundary. Do not change it during rule upgrades. |
@@ -220,7 +220,7 @@ The JSON object accepts only these fields:
 By default the response is one flat object of verdicts:
 
 ```json
-{"fingerprint":"_AJUXF4ttBmXt1N1es89S",
+{"visitorId":"<resolved visitor ID, when available>",
  "replayed":false,
  "ageMs":1830,
  "automation":true,
@@ -234,12 +234,11 @@ By default the response is one flat object of verdicts:
  "tor":false}
 ```
 
-A key that is missing means unknown, so there are no `null` facts. Only the
-`fingerprint` can be `null`.
+A key that is missing means unknown, so there are no `null` facts.
 
 | Key | Meaning |
 | --- | --- |
-| `fingerprint` | From `identificationId`; `null` when the identification is unknown, expired or unavailable, or has no full ID. |
+| `visitorId` | Server-issued browser grouping from [visitor reconciliation](#visitor-reconciliation). Absent without PostgreSQL or when resolution is unknown. Never falls back to a fingerprint. |
 | `replayed`, `ageMs` | Whether this identification was looked up before, and milliseconds since it was stored, by the API's clock. See [Replays and age](#replays-and-age). |
 | `automation`, `tampering` | The browser reported automation tooling, or altered canvas/audio readback. |
 | `spoofing` | The browser's own report contradicts the request the public listener received: its headers or its TLS handshake. |
@@ -253,6 +252,12 @@ A key that is missing means unknown, so there are no `null` facts. Only the
 lists, rule versions, role account, ASN and hosting provider, MX providers,
 SPF/DMARC, registration date, suggested domain, `mx_listed` provenance, uppercase
 `countryCode`, sources, and rejection reasons) is only in the `detail: true` response.
+
+**Breaking change:** compact responses no longer return `fingerprint`, including a null
+placeholder for unknown identifications. Use `visitorId` for application identity, or
+request `detail: true` and read `identification.fingerprint` for the exact profile hash.
+The two identifiers are not interchangeable. Without PostgreSQL, compact checks return
+verdicts but no browser identity. The SDK's `identify()` response is unchanged.
 
 The rest of this guide describes the `detail: true` shape.
 
@@ -849,8 +854,9 @@ PostgreSQL decision already exists.
 #### Three different identifiers
 
 - `identificationId`: a random 128-bit reference to one hour-long observation.
-- `fingerprint`: the existing deterministic evidence hash, shortened in API responses.
-  Its hashing, meaning and storage keys are unchanged.
+- `fingerprint`: the existing deterministic evidence hash, shortened and returned only
+  in `identification.fingerprint` with `detail: true`. Its hashing, meaning and storage
+  keys are unchanged.
 - `visitorId`: a separate random 128-bit server-issued reference to a retained browser
   evidence grouping. It is not an account, authentication credential or physical-device ID.
 
@@ -858,7 +864,8 @@ With PostgreSQL configured, successful compact checks add `visitorId`. It is abs
 when unknown. With `detail: true`, `identification.visitorId` carries the same value and
 `identification.reconciliation` explains the decision: `status`, `ruleVersion`,
 optional `visitorId` and `method`. Existing identification/fingerprint statuses remain
-independent. No PostgreSQL configuration means no additional response fields.
+independent. Without PostgreSQL, visitor fields are absent; only detailed responses
+include the fingerprint.
 
 Statuses include `resolved`, `insufficient_evidence`, `ambiguous`, `unavailable`,
 `namespace_mismatch`, `invalid_site`, `invalid_observation_time` and
@@ -1037,7 +1044,7 @@ For example, using an ID returned by the public listener:
 | Detail field | Meaning |
 | --- | --- |
 | `status`, `reason` | The same identification outcome and rejection/unavailability reason as REST. An unknown or expired ID is `invalid_input` / `unknown_identification`; a malformed ID is `invalid_input` / `invalid_identification_id`. Redis failure is `unavailable` / `identification_unavailable`, not an invalid ID. |
-| `schemaVersion`, `fingerprint`, `replayed`, `ageMs` | The validated schema/ID, lookup marker and age by the API's clock. Compact fields remain unchanged. |
+| `schemaVersion`, `fingerprint`, `replayed`, `ageMs` | The validated schema/ID, lookup marker and age by the API's clock. The fingerprint is detail-only. |
 | `origin`, `ja4`, `tlsClient` | The origin and TLS observations of the public identify listener. An unlisted JA4 has no `tlsClient`; it is unknown, not a mismatch. |
 | `automation`, `tampering`, `spoofing` | Typed `status`, `indicators`, `ruleVersion`, `unavailableProbes`, `source` and optional `reason`. An unknown verdict stays `unknown`; it does not turn into `false`. |
 | `behavior` | Typed `status`, `patterns`, `ruleVersion`, `source`, optional `reason` and optional `suspiciousClickPattern`. The flag is unset when evidence is insufficient; false stays explicitly present. Absent without `watch()` evidence; patterns and the flag are context, not a verdict. |
@@ -1052,12 +1059,13 @@ for tampering), and encodes `int64` ages as strings. These are representation di
 not different evidence. REST is unchanged. Domain, email and IP details remain REST-only.
 
 Visitor fields have the same semantics across REST, Connect and gRPC: compact
-\`visitor_id\` uses new wire number 22; detail adds \`visitor_id\` at 15 and
-\`reconciliation\` at 16. Unknown visitor IDs remain unset. Existing wire numbers
-and reservations are unchanged.
+`visitor_id` uses wire number 22; detail has `visitor_id` at 15 and
+`reconciliation` at 16. Unknown visitor IDs remain unset. The removed top-level
+`fingerprint` name and wire number 1 are reserved and never emitted, even with detail.
+`IdentificationDetail.fingerprint` remains at wire number 4.
 
-Regenerate clients from the updated protobuf to request detail. Existing clients and
-requests keep their compact behavior and wire numbers; reserved fields stay reserved.
+Regenerate clients from the updated protobuf. Clients reading the old top-level
+fingerprint must migrate to `visitor_id` or request detail for the exact profile hash.
 Evidence is for shadow analysis/review, not authentication or blocking. No new detection,
 logging, IP retention or browser inputs are introduced.
 

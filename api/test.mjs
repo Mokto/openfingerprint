@@ -405,13 +405,14 @@ try {
     const evidence = signals('replay', 'replay');
     const id = await identified(evidence);
     const once1 = await lookup(id);
-    assert.equal(once1.fingerprint, shortId(evidence.fingerprint));
+    assert(!('fingerprint' in once1));
+    assert(!('visitorId' in once1));
     assert.equal(once1.replayed, false);
     assert(once1.ageMs >= 0 && once1.ageMs < 10000, 'age by the API clock');
     assert.equal((await lookup(id)).replayed, true, 'the same identification looked up again');
     assert.equal((await lookup(await identified(evidence))).replayed, false, 'a new identification of the same evidence is new');
     for (const unknown of ['AAAAAAAAAAAAAAAAAAAAAA', 'short', 42])
-        assert.deepEqual(await lookup(unknown), { fingerprint: null, invalid: ['identificationId'] });
+        assert.deepEqual(await lookup(unknown), { invalid: ['identificationId'] });
     console.log('Lookups mark replays, age comes from the API clock, unknown identifications are invalid.');
 
     phase = 'independent requested checks and explicit unconfigured intelligence';
@@ -514,8 +515,8 @@ try {
     const automated = () => identified({ ...signals(), automation: { ...automation, webdriver: true } });
     const compactResult = withoutAge(await compactCall({ identificationId: await automated(), domain: 'mail.example', ip: '192.0.2.1' }));
     assert.deepEqual(Object.keys(compactResult).filter(k => ['identification', 'domain', 'ip', 'email'].includes(k)), []);
-    assert.equal(compactResult.fingerprint, shortId(signals().fingerprint));
-    assert.match(compactResult.fingerprint, /^[A-Za-z0-9_-]{21}$/);
+    assert(!('fingerprint' in compactResult));
+    assert(!('visitorId' in compactResult));
     assert.equal(compactResult.automation, true);
     assert.equal(compactResult.replayed, false);
     assert.equal(compactResult.disposable, mode === 'fresh' ? true : undefined);
@@ -524,7 +525,7 @@ try {
     assert.deepEqual(compactEmail, mode === 'fresh' ? { disposable: true, mx: false } : { mx: false });
     assert.deepEqual(await compactCall({ email: 'nope' }), { invalid: ['email'] });
     assert.deepEqual(await compactCall({ identificationId: 'not-an-id', ip: 'nope' }), {
-        fingerprint: null, invalid: ['identificationId', 'ip']
+        invalid: ['identificationId', 'ip']
     });
     const rpcCheck = '/openfingerprint.v1.OpenFingerprint/Check';
     const grpcCall = (fields, path = rpcCheck, headers = {}) => new Promise((resolve, reject) => {
@@ -586,7 +587,7 @@ try {
     assert.deepEqual((await compactCall({ identificationId: await identified({ ...signals(), behavior: { ...watched, mouseClicks: 2 } }) })).behavior, []);
     const grpcResult = await grpcCall({ 6: await identified({ ...signals(), automation: { ...automation, webdriver: true }, behavior: watched }), 2: 'mail.example', 4: 'nope' });
     assert.equal(grpcResult.status, 0);
-    assert.equal(grpcResult.decoded[1], shortId(signals().fingerprint));
+    assert(!('1' in grpcResult.decoded), 'the removed fingerprint field stays absent');
     assert.equal(grpcResult.decoded[2], true);
     assert.equal(grpcResult.decoded[4], mode === 'fresh' ? true : undefined);
     assert.equal(grpcResult.decoded[8], false);
@@ -608,7 +609,7 @@ try {
     });
     const viaConnect = await connectCheck({ identificationId: await automated(), domain: 'mail.example', ip: 'nope' });
     assert.equal(viaConnect.status, 200);
-    assert.deepEqual(withoutAge(await viaConnect.json()), { fingerprint: shortId(signals().fingerprint), replayed: false, automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'] });
+    assert.deepEqual(withoutAge(await viaConnect.json()), { replayed: false, automation: true, mx: false, ...(mode === 'fresh' ? { disposable: true } : {}), invalid: ['ip'] });
     assert.equal((await connectCheck({ ip: '8.8.8.8' })).status, 200);
     assert.equal((await connectCheck({})).status, 400);
 
@@ -708,10 +709,11 @@ try {
         const detail = protobufFields(wire.decoded[21]);
         assert.equal(detail[14] ? protobufFields(detail[14])[6] : undefined, expected === null ? undefined : Number(expected));
         for (const response of [rest, connected]) {
-            assert.equal(response.fingerprint, shortId(signals().fingerprint));
+            assert(!('fingerprint' in response));
             assert.equal(response.automation, false, 'behavior is not an automation verdict');
         }
         const detailedRest = (await (await request('/v1/check', {}, { identificationId })).json()).identification;
+        assert.equal(detailedRest.fingerprint, shortId(signals().fingerprint));
         if (counts !== null) assert.equal(detailedRest.behavior.suspiciousClickPattern, expected);
         else assert.equal(detailedRest.behavior, undefined);
     }

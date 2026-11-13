@@ -26,8 +26,8 @@ message CheckRequest {
 
 // An unset field means unknown, not false.
 message CheckResponse {
-  // Unset when the identification is unknown, expired or invalid, or has no full ID.
-  optional string fingerprint = 1;
+  reserved 1;
+  reserved "fingerprint";
   optional bool automation = 2;
   optional bool tampering = 3;
   // The browser's own report (user agent, client hints, language) contradicts

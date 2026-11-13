@@ -124,12 +124,12 @@ mod tests {
     #[test]
     fn every_compact_key_has_a_field_in_the_response_message() {
         let response: CheckResponse = serde_json::from_value(serde_json::json!({
-            "fingerprint":"abc","automation":true,"tampering":false,"spoofing":true,"disposable":true,
+            "visitorId":"visitor","automation":true,"tampering":false,"spoofing":true,"disposable":true,
             "free":false,"spam":true,"relay":false,"cheapTld":true,"replayed":true,"ageMs":1500,"mx":true,"country":"dk","vpn":true,
             "tor":false,"datacenter":true,"proxy":false,"suspiciousClickPattern":false,"invalid":["ip"]
         }))
         .unwrap();
-        assert_eq!(response.fingerprint.as_deref(), Some("abc"));
+        assert_eq!(response.visitor_id.as_deref(), Some("visitor"));
         assert_eq!(response.country.as_deref(), Some("dk"));
         assert_eq!(
             [
@@ -279,6 +279,13 @@ mod tests {
             assert_eq!(detail.ja4.as_deref(), Some(ja4));
             assert_eq!(detail.origin.as_deref(), Some("https://app.example.test"));
             assert_eq!(detail.schema_version, Some(1));
+            assert!(detail.fingerprint.is_some());
+            assert!(
+                serde_json::to_value(&rpc)
+                    .unwrap()
+                    .get("fingerprint")
+                    .is_none()
+            );
             assert!((1_500..10_000).contains(&detail.age_ms.unwrap()));
             let automation = detail.automation.as_option().unwrap();
             assert_eq!(automation.status.as_deref(), Some("detected"));
@@ -426,7 +433,7 @@ mod tests {
             assert_eq!(spoofing.status.as_deref(), Some("unknown"));
             assert_eq!(spoofing.unavailable_probes, ["tls_mismatch"]);
             assert_eq!(
-                (rpc.fingerprint, rpc.automation, rpc.tampering, rpc.spoofing),
+                (rpc.visitor_id, rpc.automation, rpc.tampering, rpc.spoofing),
                 (None, None, None, None)
             );
         }
@@ -459,7 +466,7 @@ mod tests {
                 detail.evidence.is_unset() && detail.origin.is_none() && detail.replayed.is_none()
             );
             assert_eq!(
-                (rpc.fingerprint, rpc.invalid),
+                (rpc.visitor_id, rpc.invalid),
                 (None, vec!["identificationId".to_owned()])
             );
         }
