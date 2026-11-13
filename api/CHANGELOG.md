@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.24.0](https://github.com/Mokto/openfingerprint/compare/api-v0.23.0...api-v0.24.0) (2026-11-13)
+
+
+### Features
+
+* **api:** add public provider VPN server lists as independent sources ([#134](https://github.com/Mokto/openfingerprint/issues/134)) ([5cde5d7](https://github.com/Mokto/openfingerprint/commit/5cde5d79f11975583365e26efc73d13bca3f6e9f))
+* **api:** add seven more provider VPN server lists as independent sources ([#136](https://github.com/Mokto/openfingerprint/issues/136)) ([9a6ed2a](https://github.com/Mokto/openfingerprint/commit/9a6ed2a74fea426d99ad9a8bff46510c7cb63770))
+
 ## [0.23.0](https://github.com/Mokto/openfingerprint/compare/api-v0.22.0...api-v0.23.0) (2026-11-13)
 
 
