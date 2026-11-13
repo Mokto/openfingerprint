@@ -127,7 +127,7 @@ export async function proxy(fetchBytes, now) {
     assert(found.size > 0 && found.size <= 100000, 'Invalid proxy count');
     return { metadata: { ...metadata('open_proxies', 'MIT', `https://github.com/${proxyRepo}/blob/${commit.sha}/LICENSE`, 'monosans, proxy-list (checked public proxy addresses)', `https://github.com/${proxyRepo}/blob/${commit.sha}/proxies/all.txt`, commit.sha, epoch(commit.commit.committer.date), now, 6 * 3600), license_text: license }, entries: [...found.keys()].sort().map(ip => ({ ip, protocols: [...found.get(ip)].sort() })) };
 }
-export async function vpnExits(path, now) {
+export async function vpnExits(path, now, { allowExpired = false } = {}) {
     const file = await open(path, 'r');
     const chunks = [];
     let size = 0;
@@ -142,7 +142,7 @@ export async function vpnExits(path, now) {
     } finally { await file.close(); }
     const bytes = Buffer.concat(chunks);
     const source = JSON.parse(bytes);
-    assert(source.metadata?.updated_at_unix <= now && source.metadata?.expires_at_unix > now, 'Stale/future VPN exit feed');
+    assert(source.metadata?.updated_at_unix <= now && (allowExpired || source.metadata?.expires_at_unix > now), 'Stale/future VPN exit feed');
     return { ...source, metadata: { ...source.metadata, revision: sha(bytes), fetched_at_unix: now } };
 }
 async function asn(fetchBytes, now, directory) {
@@ -162,7 +162,7 @@ async function asn(fetchBytes, now, directory) {
     await atomic(resolve(directory, `asn-${revision}.mmdb`), bytes);
     return source;
 }
-async function atomic(path, bytes) {
+export async function atomic(path, bytes) {
     const temporary = `${path}.${randomBytes(8).toString('hex')}.tmp`;
     try {
         const file = await open(temporary, 'wx', 0o644);
@@ -173,7 +173,7 @@ async function atomic(path, bytes) {
 export async function validate(path, signal) {
     await execute(binary(), ['--validate-network-data', path], { timeout: 30000, maxBuffer: 65536, signal });
 }
-async function acquireLock(path, signal) {
+export async function acquireLock(path, signal) {
     const child = spawn(binary(), ['--lock-network-data', path], { stdio: ['pipe', 'pipe', 'pipe'], signal });
     child.stdin.on('error', () => {});
     child.stderr.resume();

@@ -109,6 +109,7 @@ struct VpnExit {
     ip: IpAddr,
     provider: String,
     observed_at_unix: u64,
+    expires_at_unix: Option<u64>,
     evidence_url: String,
 }
 #[derive(Deserialize)]
@@ -351,6 +352,10 @@ impl Data {
                         .all(|b| b.is_ascii_alphanumeric() || b" _-".contains(&b))
                     || entry.observed_at_unix == 0
                     || entry.observed_at_unix > source.metadata.updated_at_unix
+                    || entry.expires_at_unix.is_some_and(|expiry| {
+                        expiry <= entry.observed_at_unix
+                            || expiry > entry.observed_at_unix.saturating_add(DAY)
+                    })
                     || !url::Url::parse(&entry.evidence_url).is_ok_and(|url| {
                         url.scheme() == "https"
                             && url.has_host()
@@ -455,9 +460,9 @@ impl Data {
         let mut vpn = self.fact(3, scoped(&self.vpn, "listed_vpn_range"), now, "not_listed");
         if let Some(meta) = &self.metadata[6] {
             let observations: Vec<_> = self.vpn_exits.get(&ip).into_iter().flat_map(|providers| providers.values())
-                .filter(|entry| entry.observed_at_unix.saturating_add(DAY) > now)
+                .filter(|entry| entry.expires_at_unix.unwrap_or(entry.observed_at_unix.saturating_add(DAY)) > now)
                 .map(|entry| json!({"provider":entry.provider,"observedAtUnix":entry.observed_at_unix,"evidenceUrl":entry.evidence_url,
-                    "expiresAtUnix":meta.expires_at_unix.min(entry.observed_at_unix.saturating_add(DAY))}))
+                    "expiresAtUnix":meta.expires_at_unix.min(entry.expires_at_unix.unwrap_or(entry.observed_at_unix.saturating_add(DAY)))}))
                 .collect();
             if meta.status(now) == "fresh" && !observations.is_empty() {
                 vpn = self.fact(
@@ -877,6 +882,22 @@ mod tests {
         assert!(later["vpn"]["value"].is_null());
         assert_eq!(later["vpn"]["status"], "stale_data");
 
+        let mut capped = input.clone();
+        capped["vpn_exits"]["entries"][0]["expires_at_unix"] = json!(100003);
+        let capped = Data::load(path, &serde_json::to_vec(&capped).unwrap()).unwrap();
+        let capped = capped.check_at("8.8.4.4".parse().unwrap(), "peer", 100003);
+        assert_eq!(
+            capped["vpn"]["value"]["observations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            capped["vpn"]["value"]["observations"][0]["provider"],
+            "Mullvad"
+        );
+
         input.as_object_mut().unwrap().remove("vpn");
         let data = Data::load(path, &serde_json::to_vec(&input).unwrap()).unwrap();
         assert_eq!(
@@ -895,6 +916,8 @@ mod tests {
             ("provider", json!("x\n")),
             ("observed_at_unix", json!(0)),
             ("observed_at_unix", json!(100001)),
+            ("expires_at_unix", json!(14000)),
+            ("expires_at_unix", json!(100401)),
             ("evidence_url", json!("http://example.test")),
             ("evidence_url", json!("https://example.test/\n")),
         ] {

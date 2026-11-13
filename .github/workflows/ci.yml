@@ -63,6 +63,7 @@ jobs:
       - run: node api/test-identify.mjs
       - run: node api/test-country.mjs
       - run: node api/test-network.mjs
+      - run: node api/test-vpn-collector.mjs
       - run: bash api/chart/test.sh
   images:
     runs-on: ubuntu-26.04

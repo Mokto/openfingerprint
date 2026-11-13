@@ -826,6 +826,8 @@ or API dataset. Do not submit ordinary visitor IPs or copied provider lists.
 The source document has `metadata` and `entries`. Each entry contains `ip`,
 `provider` (1–64 ASCII letters/digits, spaces, `_` or `-`, starting with a letter
 or digit), `observed_at_unix` and `evidence_url` (HTTPS, no credentials/fragment).
+An optional `expires_at_unix` can shorten an entry's 24-hour lifetime; the
+scheduler retains it when carrying observations between source documents.
 For multiple servers/providers, combine entries into one document, retaining
 each original observation timestamp and evidence URL. Set metadata's
 `updated_at_unix` to the actual collection update time and `expires_at_unix` to
@@ -859,6 +861,122 @@ mount the feed read-only into the updater and pass its path. The default Helm
 sidecar does not mount an observation feed; use an externally refreshed network
 manifest with `networkData.existingClaim` (and disable `networkData.sidecar`) or
 customize the updater deployment. Do not commit measured address inventories.
+
+#### Scheduled VPN measurements
+
+`collect-vpn-exits.mjs` connects each configured OpenVPN or WireGuard profile in
+a separate, temporary [Gluetun](https://github.com/qdm12/gluetun) container, waits
+for healthy VPN status, then runs the observer in that container's network
+namespace. Gluetun's firewall stays enabled; there is no host-network mode,
+proxy fallback or change to the host routing table. The observer is read-only,
+unprivileged and has no credentials or Docker socket. The runner checks VPN
+health again after measurement and confirms both containers are removed on
+completion, failure or SIGTERM. A cleanup failure aborts the run rather than
+publishing that observation. It uses locally built, digest-pinned images, without pulling
+images or downloading provider configurations during collection.
+
+Build the native validator and the two optional collector images on a dedicated
+Docker host with `/dev/net/tun` support (Docker Desktop uses its Linux VM):
+
+```sh
+cargo build --manifest-path api/Cargo.toml --locked --release
+docker build -f api/vpn-collector.Dockerfile --target tunnel -t openfingerprint-vpn-tunnel:local .
+docker build -f api/vpn-collector.Dockerfile --target observer -t openfingerprint-vpn-observer:local .
+```
+
+Store a protected config outside the checkout, e.g.
+`/etc/openfingerprint/vpn-collector.json`:
+
+```json
+{
+  "version": 1,
+  "cc0": true,
+  "endpoint": "https://api.ipify.org?format=json",
+  "attribution": "Your organization",
+  "profiles": [
+    {
+      "id": "privatevpn-denmark",
+      "provider": "PrivateVPN",
+      "type": "openvpn",
+      "config": "privatevpn-denmark.ovpn",
+      "usernameFile": "privatevpn-username",
+      "passwordFile": "privatevpn-password"
+    },
+    {
+      "id": "another-provider-denmark",
+      "provider": "Your other VPN provider",
+      "type": "wireguard",
+      "config": "another-provider-denmark.conf"
+    }
+  ]
+}
+```
+
+Supply your own provider-issued profiles and paid/free account credentials,
+respecting their automation/account terms. Paths resolve relative to the JSON
+file. Each OpenVPN username/password file contains its single secret value;
+WireGuard keys stay in its config. Restrict these files to the collector's
+operator, keep them out of git and review profiles as trusted executable VPN
+configuration. OpenVPN profiles must use a numeric `remote` address and inline
+certificates/keys; external referenced files are not mounted. Gluetun supports
+only the first `remote` per OpenVPN profile, so configure a separate profile for
+each server to measure. WireGuard endpoints must likewise be numeric. The
+runner processes 1–64 profiles sequentially, with a 150-second connection and
+measurement limit per profile, plus bounded Docker cleanup;
+a run can exceed an hour with many failing profiles. Only the address/family
+returned by the echo service is observed, not an entire provider's exit pool.
+
+Run once and inspect the resulting feed before enabling the schedule:
+
+```sh
+OPENFINGERPRINT_API_BINARY="$PWD/api/target/release/openfingerprint-api" \
+  node api/collect-vpn-exits.mjs --config /etc/openfingerprint/vpn-collector.json \
+  --output /var/lib/openfingerprint/vpn-exits.json
+```
+
+The [cron file](vpn-collector.cron) runs at minute 17 of every hour in the Docker
+host's timezone. It assumes the checkout is `/opt/openfingerprint`, Node >=24 is
+`/usr/bin/node`, and the release validator was built there. Adjust those paths,
+create `/var/lib/openfingerprint`, verify the cron environment can access Docker,
+then enable it explicitly:
+
+```sh
+sudo install -m 644 api/vpn-collector.cron /etc/cron.d/openfingerprint-vpn-collector
+```
+
+The collector's OS lock rejects overlapping runs. Monitor cron output/exit
+status: partial failure exits nonzero but publishes successful measurements
+atomically after each profile; all failures leave the feed untouched. Fresh
+observations accumulate by provider/IP to cover recently seen rotating exits.
+Failed profiles' old entries retain their original observation timestamps and
+expire normally; they are never refreshed merely because another profile
+succeeded. Earlier source-expiry limits are retained per entry, so an import
+cannot revive evidence from an expired source or extend a shorter original TTL.
+Expired entries and providers removed from the config are pruned on
+the next successful publication. Removing only one profile of a provider does
+not revoke its previous IPs early; they still expire within 24 hours. Invalid
+existing feeds are preserved, not silently discarded.
+
+Keep the network updater configured with `--vpn-exits` or
+`OPENFINGERPRINT_VPN_EXITS`; collection writes the feed, while the updater imports
+it on its next run. No service, cron entry, live profile or credential is enabled
+or installed automatically. This is not a privileged sidecar for the API pod:
+keep Docker and VPN accounts on the dedicated collector host and distribute only
+the feed/validated manifest to the API. Docker access is effectively host-root
+access. SIGKILL/host failure cannot run cleanup; a subsequent attempt of the same
+profile removes its named containers. Inspect containers with the
+`openfingerprint.vpn-collector=true` label after a hard interruption (observer
+names end in `-observer`), especially if profiles have since been removed.
+Provider labels and account/profile authenticity remain the operator's assertion;
+there is still no automatic inventory or accuracy guarantee for all VPNs.
+
+`node api/test-vpn-collector.mjs` checks scheduling-run behavior with fake
+measurements and the real native validator/lock; it runs in API CI. After building
+the two images, `node api/test-vpn-collector.mjs --docker` also tests an unreachable
+WireGuard tunnel, the unhealthy gate, fail-closed outbound traffic (deliberately
+bypassing only the health gate in that test) and container cleanup. The Docker
+check needs a reachable public echo service; it does not establish successful
+real-provider connections or provider coverage.
 
 ### SDK evidence
 

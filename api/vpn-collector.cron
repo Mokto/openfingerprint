@@ -1,0 +1,1 @@
+17 * * * * root cd /opt/openfingerprint && OPENFINGERPRINT_API_BINARY=/opt/openfingerprint/api/target/release/openfingerprint-api /usr/bin/node api/collect-vpn-exits.mjs --config /etc/openfingerprint/vpn-collector.json --output /var/lib/openfingerprint/vpn-exits.json
