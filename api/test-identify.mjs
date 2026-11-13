@@ -168,7 +168,8 @@ try {
 	assert.equal(compact.replayed, true, 'the second lookup');
 	assert(!('fingerprint' in compact));
 	assert(!('visitorId' in compact));
-	assert.match(detail.fingerprint, /^[A-Za-z0-9_-]{21}$/);
+	assert(!('fingerprint' in detail));
+	assert(!('identityGroups' in detail.evidence));
 
 	phase = 'invalid and unknown identifications';
 	for (const id of ['AAAAAAAAAAAAAAAAAAAAAA', 'short', 42])
@@ -219,7 +220,8 @@ try {
 			const id = JSON.parse(created.text).identificationId;
 			for (let i = 0; i < 3; i++) {
 				const detail = (await check({ identificationId: id, detail: true })).body.identification;
-				assert.equal(detail.fingerprint, viaH2Identification.fingerprint, 'behavior never changes identity');
+				assert(!('fingerprint' in detail));
+				assert(!('identityGroups' in detail.evidence));
 				assert.deepEqual(detail.behavior, { status: 'observed', ruleVersion: 2, source: 'client_reported', patterns: clicks ? ['clicks_without_movement', 'centered_clicks'] : ['no_input'], suspiciousClickPattern: version === 2 && clicks >= 3 ? true : null });
 			}
 			assert.equal(await metric(series), before + 1, 'checks do not recount observations');

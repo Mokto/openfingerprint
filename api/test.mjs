@@ -247,7 +247,6 @@ const base = new Promise((resolve, reject) => {
 	timer = setTimeout(() => reject(new Error('Startup timed out')), container ? 30000 : 10000);
 });
 child.stderr.on('data', data => { serverOutput += data.toString(); });
-const shortId = (hex) => Buffer.from(hex, 'hex').subarray(0, 16).toString('base64url').slice(0, 21);
 const digest = (s) => createHash('sha256').update(s).digest('hex');
 let collections = 0;
 const spoofedAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 spoof-probe';
@@ -294,7 +293,7 @@ const identified = async (evidence, headers) => {
 	return response.body.identificationId;
 };
 /** What /v1/check reports about the identification apart from what the connection decides. */
-const core = ({ status, schema_version, fingerprint, evidence }) => ({ status, schema_version, fingerprint, evidence });
+const core = ({ status, schema_version, evidence }) => ({ status, schema_version, evidence });
 async function request(path, headers, body, method = 'POST') {
 	return fetch(origin + path, {
 		method,
@@ -374,7 +373,11 @@ try {
         assert.equal(response.headers.get('cache-control'), 'no-store');
         assert.equal(response.headers.get('set-cookie'), null);
         assert.equal(response.headers.get('access-control-allow-origin'), null);
-        return (await response.json()).identification;
+        const detail = (await response.json()).identification;
+        assert(!('fingerprint' in detail));
+        assert(!('coreFingerprint' in detail));
+        assert(!('identityGroups' in (detail.evidence ?? {})));
+        return detail;
     };
     const first = await checked(signals('same', 'same', 1));
     const nodeKnown = first.tlsClient === 'node';
@@ -383,10 +386,11 @@ try {
     assert.match(first.ja4, /^t13d\d{4}00_[0-9a-f]{12}_[0-9a-f]{12}$/);
     assert.equal(first.status, 'ok');
     assert.equal(first.schema_version, 1);
-    assert.equal(first.fingerprint, shortId(signals('same', 'same', 1).fingerprint));
-    assert.equal((await checked({ ...signals('same', 'same', 1), coreFingerprint: null })).status, 'ok');
-    assert.equal((await checked(signals('same', 'same', 1))).fingerprint, (await checked(signals('same', 'same', 1))).fingerprint, 'the same identity gives the same ID in every identification');
-    assert.notEqual((await checked(signals('different', 'different', 1))).fingerprint, first.fingerprint);
+    for (const evidence of [
+        { ...signals('same', 'same', 1), coreFingerprint: null },
+        signals('same', 'same', 1),
+        signals('different', 'different', 1)
+    ]) assert.equal((await checked(evidence)).status, 'ok');
     for (const insufficient of [
         { ...signals(), fingerprint: null },
         { ...signals(), fingerprint: null, coreFingerprint: null, components: {}, hints: {} }
@@ -394,9 +398,8 @@ try {
         const profile = await checked(insufficient);
         assert.equal(profile.status, 'insufficient_signals');
         assert.equal(profile.schema_version, null);
-        assert.equal(profile.fingerprint, null);
     }
-    console.log('Canonical schema-1 profiles, repeat identities and unknown/core-only identities passed.');
+    console.log('Canonical schema-1 profiles, withheld identity hashes and insufficient/core-only evidence passed.');
 
     phase = 'identification lookups, replay and age';
     const lookup = async (id) => (await fetch(origin + '/v1/check', {
@@ -418,7 +421,7 @@ try {
     phase = 'independent requested checks and explicit unconfigured intelligence';
     const unknown = { status: 'unknown', reason: 'not_configured', network: { status: 'unknown', reason: 'non_global_ip', source: 'backend_supplied' } };
     const checkedProfile = input => ({
-        status: 'ok', schema_version: input.version, fingerprint: shortId(input.fingerprint),
+        status: 'ok', schema_version: input.version,
         evidence: { includedComponents: 2, includedHints: 1, unavailableProbes: 3, excludedProbes: 3 }
     });
     const fields = { identificationId: null, domain: 'ExAmPlE.test.', ip: '2001:db8::1' };
@@ -621,6 +624,10 @@ try {
     await lookup(detailId);
     const restDetail = (await (await request('/v1/check', {}, { identificationId: detailId })).json()).identification;
     const detailed = await (await connectCheck({ identificationId: detailId, detail: true, ip: 'nope' })).json();
+    assert(!('fingerprint' in restDetail));
+    assert(!('identityGroups' in restDetail.evidence));
+    assert(!('fingerprint' in detailed.identification));
+    assert(!('identityGroups' in detailed.identification.evidence));
     assert.deepEqual(comparableDetail(detailed.identification), comparableDetail(restDetail));
     assert.equal(detailed.identification.automation.status, 'unknown');
     assert.equal(detailed.identification.tampering.status, 'unknown');
@@ -664,6 +671,8 @@ try {
     assert.equal((await grpcCall({ 6: detailId, 7: false })).decoded[21], undefined);
     const wireDetail = protobufFields(wire.decoded[21]);
     assert.equal(wireDetail[1].toString(), 'ok');
+    assert(!('4' in wireDetail), 'the detail fingerprint field stays absent');
+    assert(!('1' in protobufFields(wireDetail[5])), 'identity group hashes stay absent');
     assert.equal(wireDetail[8].toString(), restDetail.origin);
     assert.equal(wireDetail[9].toString(), restDetail.ja4);
     assert.equal(wireDetail[10]?.toString(), restDetail.tlsClient);
@@ -713,7 +722,7 @@ try {
             assert.equal(response.automation, false, 'behavior is not an automation verdict');
         }
         const detailedRest = (await (await request('/v1/check', {}, { identificationId })).json()).identification;
-        assert.equal(detailedRest.fingerprint, shortId(signals().fingerprint));
+        assert(!('fingerprint' in detailedRest));
         if (counts !== null) assert.equal(detailedRest.behavior.suspiciousClickPattern, expected);
         else assert.equal(detailedRest.behavior, undefined);
     }
@@ -992,7 +1001,7 @@ try {
     console.log(`Snapshot reload, last-good retention and metrics passed (${mode}).`);
     phase = 'no request or credential logging';
     for (const sensitive of [
-        signals().fingerprint, shortId(signals().fingerprint), signals('same', 'same', 5).fingerprint,
+        signals().fingerprint, signals('same', 'same', 5).fingerprint,
         signals().components.fontPreferences, spoofedAgent, 'unsolicited', 'ExAmPlE.test.', 'Support+EU', 'zq.person-7', '2001:db8::1', '192.0.2.1',
         'mail.example', 'disputed.mail.example', 'child.disputed.mail.example', 'dnsmx.example', 'mx.other.example', 'rdapfound.example'
     ]) assert(!serverOutput.includes(sensitive));
