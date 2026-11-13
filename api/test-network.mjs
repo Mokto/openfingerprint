@@ -159,8 +159,9 @@ try {
     ]) await assert.rejects(privatevpnServers(privatevpnFetch(bad), now));
     await assert.rejects(privatevpnServers(privatevpnFetch(privatevpnData, new Date((now + 60) * 1000).toISOString().replace('.000Z', 'Z')), now), /timestamp/);
     await assert.rejects(privatevpnServers(async url => url.endsWith('/LICENSE') ? Buffer.from('changed license') : privatevpnFetch()(url), now), /license changed/);
-    const extraProviders = [['cyberghost', 5], ['expressvpn', 2], ['purevpn', 3], ['vpnunlimited', 1, 'vpn unlimited'], ['privado', 6]];
+    const extraProviders = [['cyberghost', 5], ['expressvpn', 2], ['purevpn', 3], ['vpnunlimited', 1, 'vpn unlimited'], ['privado', 6], ['fastestvpn', 2], ['vpnsecure', 1]];
     const gluetunData = Object.fromEntries(extraProviders.map(([provider, version, file = provider], index) => [file, { ...privatevpnData, version, servers: [{ vpn: 'openvpn', ips: [`1.1.1.${10 + index}`, `2001:4860:4860::${10 + index}`, `1.1.1.${10 + index}`] }] }]));
+    gluetunData.fastestvpn.servers.push({ vpn: 'wireguard', ips: ['1.1.1.15', '1.1.1.100'] });
     const gluetunFetch = async url => {
         if (url.includes('/commits?')) return fetchBytes(url);
         if (url.endsWith('/LICENSE')) return Buffer.from(privatevpnLicense);
@@ -176,8 +177,13 @@ try {
         assert.equal(source.metadata.id, provider + '_servers');
         assert.equal(source.metadata.updated_at_unix, privatevpnData.timestamp);
         assert.equal(source.metadata.expires_at_unix, privatevpnData.timestamp + 45 * 86400);
-        assert.equal(source.entries.length, 2);
-        for (const bad of [{ ...gluetunData[file], version: version + 10 }, { ...gluetunData[file], timestamp: now + 1 }, { ...gluetunData[file], timestamp: now - 45 * 86400 }]) {
+        assert.equal(source.entries.length, provider === 'fastestvpn' ? 3 : 2);
+        const invalid = [
+            { ...gluetunData[file], version: version + 10 }, { ...gluetunData[file], timestamp: now + 1 }, { ...gluetunData[file], timestamp: now - 45 * 86400 },
+            { ...gluetunData[file], servers: [{ vpn: 'pptp', ips: ['1.1.1.10'] }] }
+        ];
+        if (provider !== 'fastestvpn') invalid.push({ ...gluetunData[file], servers: [{ vpn: 'wireguard', ips: ['1.1.1.10'] }] });
+        for (const bad of invalid) {
             await assert.rejects(gluetunServers(async url => url.endsWith('.json') ? Buffer.from(JSON.stringify(bad)) : gluetunFetch(url), now, provider));
         }
         snapshot[provider + '_servers'] = source;
@@ -329,7 +335,8 @@ try {
         assert.equal((await (await post(direct, '/v1/check', { ip })).json()).vpn, true);
         assert.equal((await (await post(direct, '/openfingerprint.v1.OpenFingerprint/Check', { ip }, { 'Connect-Protocol-Version': '1' })).json()).vpn, true);
     }
-    assert.equal((await check(direct, '1.1.1.15')).vpn.value, null);
+    assert.equal((await check(direct, '1.1.1.100')).vpn.source.id, 'fastestvpn_servers');
+    assert.equal((await check(direct, '1.1.1.17')).vpn.value, null);
     const stale = structuredClone(snapshot);
     stale.tor.metadata.updated_at_unix = now - 20000;
     stale.tor.metadata.fetched_at_unix = now - 19000;

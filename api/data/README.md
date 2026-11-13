@@ -165,9 +165,11 @@ including ingress servers, not independently measured exit IPs. These ten lists
 do not include PrivateVPN and do not guarantee complete coverage.
 
 The separate `privatevpn_servers`, `cyberghost_servers`, `expressvpn_servers`,
-`purevpn_servers`, `vpnunlimited_servers` and `privado_servers` sources read
+`purevpn_servers`, `vpnunlimited_servers`, `privado_servers`, `fastestvpn_servers`
+and `vpnsecure_servers` sources read
 [Gluetun's provider-server data](https://github.com/qdm12/gluetun-servers/tree/main/pkg/servers)
-under MIT, with separately pinned schema versions. The updater pins and retains the license at the immutable data-file
+under MIT, with separately pinned schema versions. FastestVPN's OpenVPN and
+WireGuard records share one deduplicated inventory; other sources require OpenVPN. The updater pins and retains the license at the immutable data-file
 revision. Its 45-day expiry is bounded by both the embedded collection timestamp
 and the file commit, not local downloads; upstream refreshes monthly. Only exact
 public addresses are accepted. These are DNS-resolved connection endpoints, not

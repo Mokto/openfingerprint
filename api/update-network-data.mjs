@@ -149,7 +149,9 @@ const gluetunProviders = {
     expressvpn: ['expressvpn_servers', 2, 'ExpressVPN'],
     purevpn: ['purevpn_servers', 3, 'PureVPN'],
     vpnunlimited: ['vpnunlimited_servers', 1, 'VPN Unlimited', 'vpn unlimited'],
-    privado: ['privado_servers', 6, 'Privado']
+    privado: ['privado_servers', 6, 'Privado'],
+    fastestvpn: ['fastestvpn_servers', 2, 'FastestVPN'],
+    vpnsecure: ['vpnsecure_servers', 1, 'VPNSecure']
 };
 export async function gluetunServers(fetchBytes, now, provider) {
     assert(Object.hasOwn(gluetunProviders, provider), 'Unsupported Gluetun provider');
@@ -170,7 +172,7 @@ export async function gluetunServers(fetchBytes, now, provider) {
         `https://github.com/${gluetunRepo}/blob/${commit.sha}/${path}`, commit.sha, Math.min(data.timestamp, committed), now, 45 * day);
     const entries = new Set();
     for (const server of data.servers) {
-        assert(server.vpn === 'openvpn' && Array.isArray(server.ips) && server.ips.length > 0 && server.ips.length <= 100000, `Invalid ${name} server`);
+        assert((server.vpn === 'openvpn' || (provider === 'fastestvpn' && server.vpn === 'wireguard')) && Array.isArray(server.ips) && server.ips.length > 0 && server.ips.length <= 100000, `Invalid ${name} server`);
         for (const ip of server.ips) {
             assert(typeof ip === 'string' && isIP(ip), `Invalid ${name} IP`);
             entries.add(`${ip}/${isIP(ip) === 4 ? 32 : 128}`);

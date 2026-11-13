@@ -120,9 +120,11 @@ struct Snapshot {
     purevpn_servers: Option<Source<Vec<Range>>>,
     vpnunlimited_servers: Option<Source<Vec<Range>>>,
     privado_servers: Option<Source<Vec<Range>>>,
+    fastestvpn_servers: Option<Source<Vec<Range>>>,
+    vpnsecure_servers: Option<Source<Vec<Range>>>,
 }
 
-const SOURCES: usize = 13;
+const SOURCES: usize = 15;
 const PROXY_LIFETIME: u64 = 6 * 3600;
 
 fn ranges(
@@ -165,6 +167,8 @@ pub struct Data {
     purevpn_servers: HashSet<IpNet>,
     vpnunlimited_servers: HashSet<IpNet>,
     privado_servers: HashSet<IpNet>,
+    fastestvpn_servers: HashSet<IpNet>,
+    vpnsecure_servers: HashSet<IpNet>,
     datacenter: HashSet<IpNet>,
     proxy: HashMap<IpAddr, BTreeSet<String>>,
     asn: Option<maxminddb::Reader<Vec<u8>>>,
@@ -184,6 +188,8 @@ impl Data {
             purevpn_servers: HashSet::new(),
             vpnunlimited_servers: HashSet::new(),
             privado_servers: HashSet::new(),
+            fastestvpn_servers: HashSet::new(),
+            vpnsecure_servers: HashSet::new(),
             datacenter: HashSet::new(),
             proxy: HashMap::new(),
             asn: None,
@@ -208,7 +214,9 @@ impl Data {
                 && snapshot.expressvpn_servers.is_none()
                 && snapshot.purevpn_servers.is_none()
                 && snapshot.vpnunlimited_servers.is_none()
-                && snapshot.privado_servers.is_none())
+                && snapshot.privado_servers.is_none()
+                && snapshot.fastestvpn_servers.is_none()
+                && snapshot.vpnsecure_servers.is_none())
         {
             return Err(());
         }
@@ -411,6 +419,22 @@ impl Data {
                 45 * DAY,
                 &mut data.privado_servers,
             ),
+            (
+                snapshot.fastestvpn_servers,
+                "fastestvpn_servers",
+                "MIT",
+                13,
+                45 * DAY,
+                &mut data.fastestvpn_servers,
+            ),
+            (
+                snapshot.vpnsecure_servers,
+                "vpnsecure_servers",
+                "MIT",
+                14,
+                45 * DAY,
+                &mut data.vpnsecure_servers,
+            ),
         ] {
             let Some(mut source) = source else { continue };
             if source.entries.len() > 100000 {
@@ -518,6 +542,8 @@ impl Data {
             (10, &self.purevpn_servers),
             (11, &self.vpnunlimited_servers),
             (12, &self.privado_servers),
+            (13, &self.fastestvpn_servers),
+            (14, &self.vpnsecure_servers),
         ] {
             if !vpn["value"].is_null() {
                 break;
@@ -639,6 +665,8 @@ impl Store {
             "purevpn_servers",
             "vpnunlimited_servers",
             "privado_servers",
+            "fastestvpn_servers",
+            "vpnsecure_servers",
         ]
         .iter()
         .enumerate()
@@ -1001,6 +1029,8 @@ mod tests {
             "purevpn_servers",
             "vpnunlimited_servers",
             "privado_servers",
+            "fastestvpn_servers",
+            "vpnsecure_servers",
         ] {
             let mut metadata = combined["vpn"]["metadata"].clone();
             metadata["id"] = json!(id);
