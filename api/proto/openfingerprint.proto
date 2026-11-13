@@ -17,6 +17,7 @@ message CheckRequest {
   reserved "signals", "headers";
   // The `identificationId` the browser got from the public `POST /v1/identify`.
   optional string identification_id = 6;
+  optional string visitor_scope = 8;
   optional string domain = 2;
   optional string email = 3;
   optional string ip = 4;

@@ -299,4 +299,29 @@ for bad in "postgres.namespace=" "postgres.existingSecret=" "networkPolicy.postg
   if render "${pg[@]}" --set "$bad" >/dev/null 2>&1; then echo "PostgreSQL rendering must reject $bad" >&2; exit 1; fi
 done
 if render "${pg[@]}" --set-json 'networkPolicy.postgresTo=[]' >/dev/null 2>&1; then echo "PostgreSQL requires scoped peers" >&2; exit 1; fi
-echo "External PostgreSQL, retained database, migration Job, CA and network isolation checks passed."
+render "${pg[@]}" --set postgres.visitorScope=customer-a > "$rendered"
+ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact
+docs.select { |d| %w[Deployment Job].include?(d["kind"]) && %w[openfingerprint openfingerprint-visitor-migrations].include?(d["metadata"]["name"]) }.each do |d|
+  env = d["spec"]["template"]["spec"]["containers"][0]["env"].to_h { |e| [e["name"], e["value"]] }
+  abort("Stable configured visitor scope") unless env["OPENFINGERPRINT_VISITOR_SCOPE"] == "customer-a"
+  abort("Default scopes must not enable required request scopes") if env.key?("OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE")
+end
+' "$rendered"
+render "${pg[@]}" --set postgres.requireVisitorScope=true > "$rendered"
+ruby -ryaml -e '
+docs = YAML.load_stream(File.read(ARGV[0])).compact
+docs.select { |d| %w[Deployment Job].include?(d["kind"]) && %w[openfingerprint openfingerprint-visitor-migrations].include?(d["metadata"]["name"]) }.each do |d|
+  env = d["spec"]["template"]["spec"]["containers"][0]["env"].to_h { |e| [e["name"], e["value"]] }
+  abort("Hosted deployments require explicit customer scopes") unless env["OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE"] == "true"
+  abort("Hosted deployments must have no shared default") if env.key?("OPENFINGERPRINT_VISITOR_SCOPE")
+end
+' "$rendered"
+for bad in "postgres.visitorScope=customer/other" "postgres.visitorScope=42" "postgres.requireVisitorScope=1"; do
+  if render "${pg[@]}" --set "$bad" >/dev/null 2>&1; then echo "Visitor scopes must reject $bad" >&2; exit 1; fi
+done
+for setting in "postgres.visitorScope=customer-a" "postgres.requireVisitorScope=true"; do
+  if render --set "$setting" >/dev/null 2>&1; then echo "Visitor scopes require PostgreSQL: $setting" >&2; exit 1; fi
+done
+if render "${pg[@]}" --set postgres.visitorScope=customer-a --set postgres.requireVisitorScope=true >/dev/null 2>&1; then echo "Required request scopes must reject a shared default" >&2; exit 1; fi
+echo "External PostgreSQL, retained database, migration Job, CA, customer scopes and network isolation checks passed."

@@ -336,6 +336,7 @@ struct Verified {
 pub(crate) struct CheckRequest {
     /// From the browser's `POST /v1/identify`.
     pub(crate) identification_id: Option<serde_json::Value>,
+    pub(crate) visitor_scope: Option<serde_json::Value>,
     pub(crate) domain: Option<serde_json::Value>,
     pub(crate) email: Option<serde_json::Value>,
     pub(crate) ip: Option<serde_json::Value>,
@@ -647,6 +648,25 @@ pub(crate) async fn evaluate(
     if empty || (input.domain.is_some() && input.email.is_some()) {
         return Err(ApiError::invalid());
     }
+    let scope = input
+        .visitor_scope
+        .as_ref()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|scope| crate::visitor::valid_scope(scope))
+                .ok_or_else(ApiError::invalid)
+        })
+        .transpose()?;
+    if (scope.is_some() && input.identification_id.is_none())
+        || (input.identification_id.is_some()
+            && state
+                .visitors
+                .as_ref()
+                .is_some_and(|store| !store.valid_scope(scope)))
+    {
+        return Err(ApiError::invalid());
+    }
     use crate::metrics::{Step, start, timed};
     let (email, domain) = match input.email.as_ref().map(crate::email::parse) {
         Some(Some((local, domain))) => (
@@ -658,7 +678,7 @@ pub(crate) async fn evaluate(
     };
     let identification = async {
         match &input.identification_id {
-            Some(id) => Some(check_identification(state, id).await),
+            Some(id) => Some(check_identification(state, scope, id).await),
             None => None,
         }
     };
@@ -691,7 +711,11 @@ pub(crate) async fn evaluate(
     Ok(response)
 }
 
-async fn check_identification(state: &AppState, id: &serde_json::Value) -> IdentificationCheck {
+async fn check_identification(
+    state: &AppState,
+    scope: Option<&str>,
+    id: &serde_json::Value,
+) -> IdentificationCheck {
     use crate::metrics::{Step, timed};
     let Some(id) = id.as_str().filter(|id| crate::identify::valid_id(id)) else {
         return IdentificationCheck::failed("invalid_input", "invalid_identification_id");
@@ -719,7 +743,7 @@ async fn check_identification(state: &AppState, id: &serde_json::Value) -> Ident
     }
     if let Some(visitors) = &state.visitors {
         let decision = if check.is_valid() {
-            visitors.resolve(id, &record).await
+            visitors.resolve(scope, id, &record).await
         } else {
             crate::visitor::Decision::unknown("invalid_evidence")
         };
@@ -789,6 +813,7 @@ pub(crate) mod tests {
     }
     fn request(identification_id: serde_json::Value, detail: bool) -> CheckRequest {
         CheckRequest {
+            visitor_scope: None,
             identification_id: Some(identification_id),
             domain: None,
             email: None,
@@ -837,6 +862,35 @@ pub(crate) mod tests {
         assert_eq!(
             state.reject_browsers(&headers).unwrap_err().0,
             StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn visitor_scope_is_validated_before_identification_lookups() {
+        let state = state();
+        for scope in [
+            serde_json::json!(""),
+            serde_json::json!("a".repeat(129)),
+            serde_json::json!("customer/other"),
+            serde_json::json!("é"),
+            serde_json::json!(42),
+            serde_json::json!(false),
+            serde_json::json!([]),
+        ] {
+            let mut input = request("AAAAAAAAAAAAAAAAAAAAAA".into(), false);
+            input.visitor_scope = Some(scope);
+            assert_eq!(
+                evaluate(&state, input).await.unwrap_err().0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let input = serde_json::from_value(serde_json::json!({
+            "visitorScope": "customer-a", "ip": "192.0.2.1"
+        }))
+        .unwrap();
+        assert_eq!(
+            evaluate(&state, input).await.unwrap_err().0,
+            StatusCode::BAD_REQUEST
         );
     }
 
