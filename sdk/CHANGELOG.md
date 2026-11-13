@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.12.0...sdk-v0.13.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** identification.fingerprint and evidence.identityGroups are no longer returned over REST, Connect or gRPC; the protobuf fields are reserved.
+
+### Features
+
+* add behavior evidence v2 and click-pattern observability metrics ([#125](https://github.com/Mokto/openfingerprint/issues/125)) ([f36ba75](https://github.com/Mokto/openfingerprint/commit/f36ba75f1730f18cb2ea71d34bcee3c810ea0df1))
+* **api:** add durable PostgreSQL visitor reconciliation ([#129](https://github.com/Mokto/openfingerprint/issues/129)) ([e2b41cb](https://github.com/Mokto/openfingerprint/commit/e2b41cb1c860b5977e72f4a1a6b5042e074a57c2))
+* **api:** remove fingerprint and identity groups from detailed responses ([#132](https://github.com/Mokto/openfingerprint/issues/132)) ([baefb5b](https://github.com/Mokto/openfingerprint/commit/baefb5b0c879a8833972985242085c6c4b48718f))
+
 ## [0.12.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.11.0...sdk-v0.12.0) (2026-11-11)
 
 
