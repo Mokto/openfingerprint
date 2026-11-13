@@ -155,6 +155,13 @@ link where the data is used, for example
 through downstream consumers, and do not redistribute the ranges (`network.json`) without
 meeting ShareAlike. See the [attribution note](../README.md#local-network-intelligence).
 
+Operator-owned, provider-specific exit observations can optionally supplement
+these ranges under CC0-1.0. They are collected through an active VPN, never inferred
+from endpoint DNS, a provider name or a hosting ASN. See the
+[collection/import workflow](../README.md#provider-specific-vpn-exit-observations)
+for licensing consent, trust boundaries, 24-hour expiry and deployment limits.
+No measured VPN inventory is bundled here.
+
 ## IP country data
 
 [DB-IP Country Lite](https://db-ip.com/db/download/ip-to-country-lite) provides

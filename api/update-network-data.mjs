@@ -22,14 +22,14 @@ const epoch = text => {
     return ms / 1000;
 };
 
-export async function download(url, signal) {
-    const response = await fetch(url, { redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(30000), signal].filter(Boolean)), headers: { Accept: 'application/vnd.github+json' } });
+export async function download(url, signal, limit = 32 * 1024 * 1024, accept = 'application/vnd.github+json') {
+    const response = await fetch(url, { redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(30000), signal].filter(Boolean)), headers: { Accept: accept } });
     if (response.status !== 200) { await response.body?.cancel(); throw new Error(`HTTP ${response.status}`); }
     let size = 0;
     const chunks = [];
     for await (const chunk of response.body) {
         size += chunk.length;
-        assert(size <= 32 * 1024 * 1024, 'Source exceeds download limit');
+        assert(size <= limit, 'Source exceeds download limit');
         chunks.push(chunk);
     }
     return Buffer.concat(chunks);
@@ -127,6 +127,24 @@ export async function proxy(fetchBytes, now) {
     assert(found.size > 0 && found.size <= 100000, 'Invalid proxy count');
     return { metadata: { ...metadata('open_proxies', 'MIT', `https://github.com/${proxyRepo}/blob/${commit.sha}/LICENSE`, 'monosans, proxy-list (checked public proxy addresses)', `https://github.com/${proxyRepo}/blob/${commit.sha}/proxies/all.txt`, commit.sha, epoch(commit.commit.committer.date), now, 6 * 3600), license_text: license }, entries: [...found.keys()].sort().map(ip => ({ ip, protocols: [...found.get(ip)].sort() })) };
 }
+export async function vpnExits(path, now) {
+    const file = await open(path, 'r');
+    const chunks = [];
+    let size = 0;
+    try {
+        const info = await file.stat();
+        assert(info.isFile() && info.size <= 16 * 1024 * 1024, 'VPN exit feed must be a bounded regular file');
+        for await (const chunk of file.createReadStream()) {
+            size += chunk.length;
+            assert(size <= 16 * 1024 * 1024, 'VPN exit feed exceeds size limit');
+            chunks.push(chunk);
+        }
+    } finally { await file.close(); }
+    const bytes = Buffer.concat(chunks);
+    const source = JSON.parse(bytes);
+    assert(source.metadata?.updated_at_unix <= now && source.metadata?.expires_at_unix > now, 'Stale/future VPN exit feed');
+    return { ...source, metadata: { ...source.metadata, revision: sha(bytes), fetched_at_unix: now } };
+}
 async function asn(fetchBytes, now, directory) {
     const date = new Date(now * 1000);
     let url, compressed, updated;
@@ -171,7 +189,7 @@ async function acquireLock(path, signal) {
     });
     return child;
 }
-export async function update(output, { fetchBytes = download, now = Math.floor(Date.now() / 1000), check = validate, signal } = {}) {
+export async function update(output, { fetchBytes = download, now = Math.floor(Date.now() / 1000), check = validate, signal, vpnExitsPath = process.env.OPENFINGERPRINT_VPN_EXITS } = {}) {
     output = resolve(output);
     await mkdir(dirname(output), { recursive: true });
     const lockPath = output + '.lock';
@@ -193,7 +211,7 @@ export async function update(output, { fetchBytes = download, now = Math.floor(D
         try { await check(output, signal); baselineValid = true; } catch {}
         const failures = [];
         let refreshed = 0;
-        for (const [id, load] of [['tor', tor], ['hosting', hosting], ['vpn', vpn], ['datacenter', datacenter], ['proxy', proxy], ['asn', (fetch, time) => asn(fetch, time, dirname(output))]]) {
+        for (const [id, load] of [['tor', tor], ['hosting', hosting], ['vpn', vpn], ['datacenter', datacenter], ['proxy', proxy], ['asn', (fetch, time) => asn(fetch, time, dirname(output))], ...(vpnExitsPath ? [['vpn_exits', (_fetch, time) => vpnExits(vpnExitsPath, time)]] : [])]) {
             signal?.throwIfAborted();
             try {
                 if (id === 'asn' && baselineValid && result.asn && result.asn.fetched_at_unix <= now && now - result.asn.fetched_at_unix < day && result.asn.expires_at_unix > now) continue;
@@ -215,7 +233,7 @@ export async function update(output, { fetchBytes = download, now = Math.floor(D
         await check(temporary, signal);
         signal?.throwIfAborted();
         await rename(temporary, output);
-        return { failures, sources: ['tor', 'hosting', 'vpn', 'datacenter', 'proxy', 'asn'].filter(id => result[id]) };
+        return { failures, sources: ['tor', 'hosting', 'vpn', 'datacenter', 'proxy', 'asn', 'vpn_exits'].filter(id => result[id]) };
     } finally {
         // Never unlink the lock file: another writer may already be locking the same inode.
         if (lock.exitCode === null && lock.signalCode === null) {
@@ -239,12 +257,12 @@ export async function prune(output, now = Date.now(), grace = 3600000) {
 }
 // Hourly like the CronJob; a failure with no manifest yet retries after a minute so a new pod
 // does not serve unknown network facts for an hour.
-export async function loop(output, signal, { run = update, interval = 3600000, retry = 60000 } = {}) {
+export async function loop(output, signal, { run = update, interval = 3600000, retry = 60000, vpnExitsPath = process.env.OPENFINGERPRINT_VPN_EXITS } = {}) {
     output = resolve(output);
     while (!signal.aborted) {
         let delay = interval;
         try {
-            const result = await run(output, { signal });
+            const result = await run(output, { signal, vpnExitsPath });
             console.log(`Network snapshot published atomically; sources: ${result.sources.join(', ')}.`);
             if (result.failures.length) console.warn(`Retrying sources that failed in ${Math.round(delay / 60000)} minutes.`);
             await prune(output).catch(() => console.warn('Old ASN versions could not be pruned.'));
@@ -258,13 +276,14 @@ export async function loop(output, signal, { run = update, interval = 3600000, r
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     try {
-        const { values } = parseArgs({ options: { output: { type: 'string' }, loop: { type: 'boolean' } } });
+        const { values } = parseArgs({ options: { output: { type: 'string' }, loop: { type: 'boolean' }, 'vpn-exits': { type: 'string' } } });
         assert(values.output, 'An --output path is required');
         const controller = new AbortController();
         process.once('SIGTERM', () => controller.abort());
         process.once('SIGINT', () => controller.abort());
-        if (values.loop) { await loop(values.output, controller.signal); process.exit(0); }
-        const result = await update(values.output, { signal: controller.signal });
+        const vpnExitsPath = values['vpn-exits'] ?? process.env.OPENFINGERPRINT_VPN_EXITS;
+        if (values.loop) { await loop(values.output, controller.signal, { vpnExitsPath }); process.exit(0); }
+        const result = await update(values.output, { signal: controller.signal, vpnExitsPath });
         console.log(`Network snapshot published atomically; sources: ${result.sources.join(', ')}.`);
         if (result.failures.length) process.exitCode = 1;
     } catch {

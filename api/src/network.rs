@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     io::Read,
     net::IpAddr,
     path::{Path, PathBuf},
@@ -105,6 +105,14 @@ struct ProxyEntry {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct VpnExit {
+    ip: IpAddr,
+    provider: String,
+    observed_at_unix: u64,
+    evidence_url: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Snapshot {
     version: u8,
     tor: Option<Source<Vec<TorEntry>>>,
@@ -113,9 +121,10 @@ struct Snapshot {
     vpn: Option<Source<Vec<Range>>>,
     datacenter: Option<Source<Vec<Range>>>,
     proxy: Option<Source<Vec<ProxyEntry>>>,
+    vpn_exits: Option<Source<Vec<VpnExit>>>,
 }
 
-const SOURCES: usize = 6;
+const SOURCES: usize = 7;
 const PROXY_LIFETIME: u64 = 6 * 3600;
 
 fn ranges(source: Source<Vec<Range>>, id: &str) -> Result<(HashSet<IpNet>, Metadata), ()> {
@@ -146,6 +155,7 @@ pub struct Data {
     tor: HashMap<IpAddr, Option<u64>>,
     hosting: HashMap<IpNet, BTreeSet<String>>,
     vpn: HashSet<IpNet>,
+    vpn_exits: HashMap<IpAddr, BTreeMap<String, VpnExit>>,
     datacenter: HashSet<IpNet>,
     proxy: HashMap<IpAddr, BTreeSet<String>>,
     asn: Option<maxminddb::Reader<Vec<u8>>>,
@@ -154,10 +164,11 @@ pub struct Data {
 impl Data {
     fn unavailable(reason: &'static str) -> Self {
         Self {
-            metadata: [None, None, None, None, None, None],
+            metadata: [None, None, None, None, None, None, None],
             tor: HashMap::new(),
             hosting: HashMap::new(),
             vpn: HashSet::new(),
+            vpn_exits: HashMap::new(),
             datacenter: HashSet::new(),
             proxy: HashMap::new(),
             asn: None,
@@ -175,7 +186,8 @@ impl Data {
                 && snapshot.asn.is_none()
                 && snapshot.vpn.is_none()
                 && snapshot.datacenter.is_none()
-                && snapshot.proxy.is_none())
+                && snapshot.proxy.is_none()
+                && snapshot.vpn_exits.is_none())
         {
             return Err(());
         }
@@ -321,6 +333,46 @@ impl Data {
             }
             data.metadata[5] = Some(source.metadata);
         }
+        if let Some(source) = snapshot.vpn_exits {
+            if !source.metadata.valid("observed_vpn_exits", "CC0-1.0", DAY)
+                || source.entries.len() > 100000
+            {
+                return Err(());
+            }
+            for mut entry in source.entries {
+                entry.ip = entry.ip.to_canonical();
+                if !public(entry.ip)
+                    || entry.provider.is_empty()
+                    || entry.provider.len() > 64
+                    || !entry.provider.as_bytes()[0].is_ascii_alphanumeric()
+                    || !entry
+                        .provider
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b" _-".contains(&b))
+                    || entry.observed_at_unix == 0
+                    || entry.observed_at_unix > source.metadata.updated_at_unix
+                    || !url::Url::parse(&entry.evidence_url).is_ok_and(|url| {
+                        url.scheme() == "https"
+                            && url.has_host()
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                            && url.fragment().is_none()
+                    })
+                    || entry.evidence_url.len() > 512
+                    || entry.evidence_url.chars().any(char::is_control)
+                {
+                    return Err(());
+                }
+                let providers = data.vpn_exits.entry(entry.ip).or_default();
+                if providers
+                    .get(&entry.provider)
+                    .is_none_or(|previous| previous.observed_at_unix < entry.observed_at_unix)
+                {
+                    providers.insert(entry.provider.clone(), entry);
+                }
+            }
+            data.metadata[6] = Some(source.metadata);
+        }
         Ok(data)
     }
     pub fn check(&self, value: Value, source: &'static str) -> Value {
@@ -400,7 +452,29 @@ impl Data {
                 Value::Null
             }
         };
-        let vpn = self.fact(3, scoped(&self.vpn, "listed_vpn_range"), now, "not_listed");
+        let mut vpn = self.fact(3, scoped(&self.vpn, "listed_vpn_range"), now, "not_listed");
+        if let Some(meta) = &self.metadata[6] {
+            let observations: Vec<_> = self.vpn_exits.get(&ip).into_iter().flat_map(|providers| providers.values())
+                .filter(|entry| entry.observed_at_unix.saturating_add(DAY) > now)
+                .map(|entry| json!({"provider":entry.provider,"observedAtUnix":entry.observed_at_unix,"evidenceUrl":entry.evidence_url,
+                    "expiresAtUnix":meta.expires_at_unix.min(entry.observed_at_unix.saturating_add(DAY))}))
+                .collect();
+            if meta.status(now) == "fresh" && !observations.is_empty() {
+                vpn = self.fact(
+                    6,
+                    json!({"scope":"operator_observed_vpn_exit","observations":observations}),
+                    now,
+                    "not_listed",
+                );
+            } else if vpn["value"].is_null() && self.metadata[3].is_none() {
+                let missing = if self.vpn_exits.contains_key(&ip) {
+                    "stale_data"
+                } else {
+                    "not_listed"
+                };
+                vpn = self.fact(6, Value::Null, now, missing);
+            }
+        }
         let datacenter = self.fact(
             4,
             scoped(&self.datacenter, "listed_datacenter_range"),
@@ -506,11 +580,15 @@ impl Store {
             "vpn_ranges",
             "datacenter_ranges",
             "open_proxies",
+            "observed_vpn_exits",
         ]
         .iter()
         .enumerate()
         {
             let meta = data.metadata[i].as_ref();
+            if i == 6 && meta.is_none() {
+                continue;
+            }
             out += &format!(
                 "openfingerprint_network_data_source_expiry_timestamp_seconds{{source=\"{id}\"}} {}\nopenfingerprint_network_data_source_fresh{{source=\"{id}\"}} {}\n",
                 meta.map_or(0, |m| m.expires_at_unix),
@@ -550,6 +628,22 @@ fn expire_at(check: &mut Value, now: u64) {
         if status != "matched" {
             check["tor"]["value"] = Value::Null;
             check["tor"]["status"] = json!(status);
+        }
+    }
+    if check["vpn"]["value"]["scope"] == "operator_observed_vpn_exit" {
+        if let Some(observations) = check["vpn"]["value"]["observations"].as_array_mut() {
+            observations.retain(|entry| {
+                entry["expiresAtUnix"]
+                    .as_u64()
+                    .is_some_and(|expiry| now < expiry)
+            });
+            if observations.is_empty() {
+                check["vpn"]["value"] = Value::Null;
+                check["vpn"]["status"] = json!("stale_data");
+            }
+        } else {
+            check["vpn"]["value"] = Value::Null;
+            check["vpn"]["status"] = json!("observation_time_unavailable");
         }
     }
     check["status"] = json!(
@@ -732,6 +826,113 @@ mod tests {
                 &serde_json::to_vec(&bad).unwrap()
             )
             .is_err()
+        );
+    }
+    #[test]
+    fn observed_vpn_exits_are_exact_provider_scoped_and_expire_individually() {
+        let mut input = snapshot();
+        input["vpn_exits"] = json!({
+            "metadata": {"id":"observed_vpn_exits","license":"CC0-1.0","license_url":"https://creativecommons.org/publicdomain/zero/1.0/",
+                "attribution":"operator fixture","url":"https://example.test/measurements","revision":"b".repeat(64),
+                "updated_at_unix":100000,"fetched_at_unix":100001,"expires_at_unix":101000},
+            "entries":[
+                {"ip":"8.8.4.4","provider":"PrivateVPN","observed_at_unix":14000,"evidence_url":"https://example.test/observation/1"},
+                {"ip":"::ffff:8.8.4.4","provider":"PrivateVPN","observed_at_unix":13999,"evidence_url":"https://example.test/older"},
+                {"ip":"8.8.4.4","provider":"Mullvad","observed_at_unix":100000,"evidence_url":"https://example.test/observation/2"},
+                {"ip":"2606:4700:4700::1111","provider":"IVPN","observed_at_unix":100000,"evidence_url":"https://example.test/observation/3"}
+            ]
+        });
+        let path = Path::new("/tmp/network.json");
+        let data = Data::load(path, &serde_json::to_vec(&input).unwrap()).unwrap();
+        let c = |ip: &str, time| data.check_at(ip.parse().unwrap(), "backend_supplied", time);
+        let hit = c("8.8.4.4", 100002);
+        assert_eq!(hit["vpn"]["value"]["scope"], "operator_observed_vpn_exit");
+        assert_eq!(hit["vpn"]["source"]["id"], "observed_vpn_exits");
+        let observations = hit["vpn"]["value"]["observations"].as_array().unwrap();
+        assert_eq!(observations.len(), 2);
+        assert_eq!(observations[1]["provider"], "PrivateVPN");
+        assert_eq!(observations[1]["observedAtUnix"], 14000);
+        assert_eq!(observations[1]["expiresAtUnix"], 100400);
+        assert_eq!(
+            observations[1]["evidenceUrl"],
+            "https://example.test/observation/1"
+        );
+        assert_eq!(
+            c("2606:4700:4700::1111", 100002)["vpn"]["value"]["observations"][0]["provider"],
+            "IVPN"
+        );
+        assert!(c("8.8.4.5", 100002)["vpn"]["value"].is_null());
+        assert!(c("8.8.4.4", 99999)["vpn"]["value"].is_null());
+        let mut later = hit;
+        expire_at(&mut later, 100400);
+        assert_eq!(
+            later["vpn"]["value"]["observations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(c("8.8.4.4", 100400)["vpn"]["value"], later["vpn"]["value"]);
+        expire_at(&mut later, 101000);
+        assert!(later["vpn"]["value"].is_null());
+        assert_eq!(later["vpn"]["status"], "stale_data");
+
+        input.as_object_mut().unwrap().remove("vpn");
+        let data = Data::load(path, &serde_json::to_vec(&input).unwrap()).unwrap();
+        assert_eq!(
+            data.check_at("8.8.4.5".parse().unwrap(), "peer", 100002)["vpn"]["status"],
+            "not_listed"
+        );
+        assert_eq!(
+            data.check_at("8.8.4.4".parse().unwrap(), "peer", 101000)["vpn"]["status"],
+            "stale_data"
+        );
+        for (field, invalid) in [
+            ("ip", json!("8.8.4.0/24")),
+            ("ip", json!("10.0.0.1")),
+            ("ip", json!("::ffff:127.0.0.1")),
+            ("provider", json!("")),
+            ("provider", json!("x\n")),
+            ("observed_at_unix", json!(0)),
+            ("observed_at_unix", json!(100001)),
+            ("evidence_url", json!("http://example.test")),
+            ("evidence_url", json!("https://example.test/\n")),
+        ] {
+            let mut invalid_input = input.clone();
+            invalid_input["vpn_exits"]["entries"][0][field] = invalid;
+            assert!(
+                Data::load(path, &serde_json::to_vec(&invalid_input).unwrap()).is_err(),
+                "{field}"
+            );
+        }
+        input["vpn_exits"]["entries"] = json!([]);
+        assert!(Data::load(path, &serde_json::to_vec(&input).unwrap()).is_ok());
+    }
+    #[test]
+    fn observed_exits_do_not_mask_independent_vpn_ranges() {
+        let mut input = snapshot();
+        input["vpn_exits"] = json!({"metadata": {
+            "id":"observed_vpn_exits","license":"CC0-1.0","license_url":"https://example.test/license",
+            "attribution":"fixture","url":"https://example.test/source","revision":"b".repeat(64),
+            "updated_at_unix":1000,"fetched_at_unix":1000,"expires_at_unix":2000},
+            "entries":[{"ip":"9.9.9.9","provider":"PrivateVPN","observed_at_unix":1000,"evidence_url":"https://example.test/evidence"}]});
+        let data = Data::load(
+            Path::new("/tmp/network.json"),
+            &serde_json::to_vec(&input).unwrap(),
+        )
+        .unwrap();
+        let ip = "9.9.9.9".parse().unwrap();
+        assert_eq!(
+            data.check_at(ip, "peer", 1500)["vpn"]["value"]["scope"],
+            "operator_observed_vpn_exit"
+        );
+        assert_eq!(
+            data.check_at(ip, "peer", 2000)["vpn"]["value"],
+            json!({"scope":"listed_vpn_range"})
+        );
+        assert_eq!(
+            data.check_at("9.9.9.10".parse().unwrap(), "peer", 1500)["vpn"]["source"]["id"],
+            "vpn_ranges"
         );
     }
     #[test]

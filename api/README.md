@@ -20,14 +20,14 @@ Domain and country intelligence run locally against openly licensed datasets:
 | `identificationId` | Schema-1 verification of the browser's evidence, with an optional reconciled `visitorId`, automation, tampering and spoofing verdicts, whether this identification was looked up before (`replayed`) and its age. Profile hashes are not returned. |
 | `domain` | Disposable, free-subdomain, public-mailbox, email-relay and source-scoped referrer-spam evidence with provenance and expiry, typo suggestions, MX providers, registration dates and SPF/DMARC status. |
 | `email` | Role-account detection for a full address, plus every `domain` check for the address's domain. |
-| `ip` | Local country estimate plus independent Tor-exit, ASN and published cloud-range evidence under `network`, with source provenance and expiry. Missing facts remain unknown. |
+| `ip` | Local country estimate plus independent Tor, ASN, hosting, VPN and open-proxy list evidence under `network`, with source provenance and expiry. Missing facts remain unknown. |
 
 The domain snapshot is bundled and can be overridden with a refreshed local file.
 A valid input does not mean a domain is legitimate or an IP is clean. Unlisted or
 uncovered domains remain null, not false. The API looks up MX hosts to detect
 mail routed to a listed disposable provider, and reports when the registered
 domain was created, from its registry over RDAP.
-VPN/proxy classification and domain authority are not implemented. The spam scope is specifically **referrer spam**,
+VPN/proxy evidence is list-based and incomplete; domain authority is not implemented. The spam scope is specifically **referrer spam**,
 not email-sending reputation. See [sources, licenses and refresh](data/README.md).
 
 The API does not execute browser probes, recognize physical devices, execute
@@ -711,7 +711,10 @@ is `{"number":15169,"organization":"Google LLC"}` (illustrative values).
 visitor is safe; it does not change `ip.status` or the country estimate.
 A `vpn` match is `{"scope":"listed_vpn_range"}`, a `datacenter` match is
 `{"scope":"listed_datacenter_range"}` and a `proxy` match is
-`{"protocols":["http","socks5"],"scope":"listed_open_proxy"}`. These objects are in the
+`{"protocols":["http","socks5"],"scope":"listed_open_proxy"}`. An optional operator-observed
+VPN exit match has `scope: "operator_observed_vpn_exit"` and an `observations` array
+with `provider`, `observedAtUnix`, `evidenceUrl` and `expiresAtUnix` per observation.
+These objects are in the
 `detail: true` response; the default response and the RPC message carry `true` for a
 listed `vpn`, `tor`, `datacenter` or `proxy` and leave the key out otherwise.
 No match yields null, never false or a residential/human verdict. Facts for a source
@@ -729,6 +732,7 @@ relabel old data as newly updated.
 | [Tor CollecTor exit lists](https://collector.torproject.org/recent/exit-lists/) | Recently measured exit addresses only, not relay listening addresses or proof of abuse. Each observation expires at 24 hours, even while its snapshot is fresh. Incomplete coverage, including IPv6; absence stays unknown. | [CC0](https://metrics.torproject.org/about.html) | 3 hours from the collected list timestamp. |
 | [Published cloud ranges](https://github.com/tobilg/public-cloud-provider-ip-ranges) | Source-labelled provider ranges, not a physical datacenter/device classifier. Includes shared/CDN infrastructure; not all hosting providers are covered. No organization-name or whole-ASN heuristics. | MIT; exact license pinned and retained in the manifest. | 7 days from the last commit changing the source data file. |
 | [X4BNet lists_vpn](https://github.com/X4BNet/lists_vpn) `output/vpn` | Netblocks of common VPN providers, built by the project from ASN data. A match shows the address belongs to a listed VPN network, not that this visitor is hiding anything. Incomplete; unlisted VPNs stay unknown. | MIT (the project's statement; its ASN input, IPLocate, is CC BY-SA 4.0 and is credited in the manifest). The license text is pinned and retained. | 7 days from the last commit changing the lists. |
+| Operator-owned VPN exit observations (optional) | Exact public IPs measured through a VPN, with operator-reported provider labels. Not an independent verification of provider ownership or a complete provider inventory. No endpoint-to-exit or ASN inference. | CC0-1.0; only submit observations you have the right to dedicate. | 24 hours per observation and source. |
 | X4BNet lists_vpn `output/datacenter` | Networks that are "not an eyeball network": VPN and datacenter/hosting ASNs, selected partly by name keywords. Overlaps `hosting` and `vpn`; shared or CDN space is included. | Same as above. | 7 days. |
 | [monosans/proxy-list](https://github.com/monosans/proxy-list) | Public HTTP, SOCKS4 and SOCKS5 proxy addresses that the upstream tested as working. Only the listening address is matched, without port. A proxy can exit through another address, and these lists change by the hour. | MIT; exact license pinned and retained in the manifest. | 6 hours from the last commit changing the list. |
 | [DB-IP ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) | Monthly IPv4/IPv6 ASN number and organization, with reduced coverage/accuracy. ASN is not visitor identity, geolocation or hosting proof. | CC BY 4.0. | 45 days from the earlier of the release month and actual MMDB build time. |
@@ -793,6 +797,68 @@ versions when needed. No visitor addresses are written to this directory.
 Override `OPENFINGERPRINT_API_BINARY` when the validator is not at the default
 debug-build path. The API image also accepts `--validate-network-data <path>`
 without server credentials or networking.
+
+#### Provider-specific VPN exit observations
+
+The X4B feed remains the default. To supplement gaps for PrivateVPN or any other
+provider, collect an **actual HTTPS egress address while connected to that VPN**:
+
+```sh
+node api/observe-vpn-exit.mjs --provider PrivateVPN \
+  --endpoint 'https://api.ipify.org?format=json' --attribution 'Your organization' \
+  --confirm-vpn --cc0 > /var/lib/openfingerprint/vpn-exits.json.tmp && \
+  mv /var/lib/openfingerprint/vpn-exits.json.tmp /var/lib/openfingerprint/vpn-exits.json
+node api/update-network-data.mjs --output /var/lib/openfingerprint/network.json \
+  --vpn-exits /var/lib/openfingerprint/vpn-exits.json
+```
+
+The echo endpoint must return `{"ip":"<address>"}` over HTTPS without redirects;
+you can use your own trusted endpoint instead of ipify. It sees the request's
+source address and applies its own logging/retention policy. The collector runs
+only when invoked, performs one bounded request and prints a source document; it
+does not connect to or authenticate with a VPN. Confirm the active provider and
+that the echo request routes through the tunnel (not split-tunnel bypass or an
+unrelated proxy), preferably cross-checking with another trusted echo service.
+`--confirm-vpn` records the operator's assertion, not software attestation.
+`--cc0` explicitly dedicates your own observation data, not a provider's website
+or API dataset. Do not submit ordinary visitor IPs or copied provider lists.
+
+The source document has `metadata` and `entries`. Each entry contains `ip`,
+`provider` (1–64 ASCII letters/digits, spaces, `_` or `-`, starting with a letter
+or digit), `observed_at_unix` and `evidence_url` (HTTPS, no credentials/fragment).
+For multiple servers/providers, combine entries into one document, retaining
+each original observation timestamp and evidence URL. Set metadata's
+`updated_at_unix` to the actual collection update time and `expires_at_unix` to
+at most 24 hours after that time; never update an old observation's timestamp to
+make it fresh. The URL documents the measurement method or record, not a signed
+proof. Import only a trusted operator-owned file; browsers cannot submit it.
+No provider addresses or credentials are bundled with this repository.
+
+`--vpn-exits` (or `OPENFINGERPRINT_VPN_EXITS` on the updater) accepts a local file,
+including in `--loop` mode. The updater hashes its bytes as the source revision
+and records fetch time without moving update/expiry or observation timestamps.
+The native validator rejects private/special-use IPs, CIDRs, malformed evidence,
+future observations and invalid source lifetimes. Duplicate IP/provider pairs
+keep the latest observation, including canonical IPv4-mapped addresses. A
+successful import replaces this optional source in full; an empty `entries`
+array revokes its observations. Invalid or failed imports retain the previous
+source with its original expiry and report a source failure.
+
+Fresh observations take precedence over a generic VPN range match. Each
+observation expires at the earlier of its source expiry and 24 hours after
+measurement; other providers' observations and the existing range feed remain
+independent. No match remains null, never `false`. An observed address may later
+be reassigned, and one observed IP/family/location does not cover all exits of a
+provider. The software cannot independently validate the operator's provider
+label. This is a collection/import mechanism, **not automatic coverage of all
+VPN providers**; real VPN measurements are still required.
+
+Upgrade API readers before enabling this source: older readers reject the
+optional `vpn_exits` field and retain their last-good snapshot. For containers,
+mount the feed read-only into the updater and pass its path. The default Helm
+sidecar does not mount an observation feed; use an externally refreshed network
+manifest with `networkData.existingClaim` (and disable `networkData.sidecar`) or
+customize the updater deployment. Do not commit measured address inventories.
 
 ### SDK evidence
 
