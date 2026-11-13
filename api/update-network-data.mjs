@@ -141,34 +141,47 @@ export async function vpnServers(fetchBytes, now) {
     }
     return { metadata: { ...source, license_text: license }, entries: [...entries].sort().map(network => ({ network })) };
 }
-const privatevpnRepo = 'qdm12/gluetun-servers';
-const privatevpnLicenseHash = '3d439d9033b63c8187a2d4a32d846aa8ecd2b647efe2b32a46939828ef9a1466';
-export async function privatevpnServers(fetchBytes, now) {
-    const path = 'pkg/servers/privatevpn.json';
-    const commits = JSON.parse(String(await fetchBytes(`https://api.github.com/repos/${privatevpnRepo}/commits?path=${path}&per_page=1`)));
+const gluetunRepo = 'qdm12/gluetun-servers';
+const gluetunLicenseHash = '3d439d9033b63c8187a2d4a32d846aa8ecd2b647efe2b32a46939828ef9a1466';
+const gluetunProviders = {
+    privatevpn: ['privatevpn_servers', 4, 'PrivateVPN'],
+    cyberghost: ['cyberghost_servers', 5, 'CyberGhost'],
+    expressvpn: ['expressvpn_servers', 2, 'ExpressVPN'],
+    purevpn: ['purevpn_servers', 3, 'PureVPN'],
+    vpnunlimited: ['vpnunlimited_servers', 1, 'VPN Unlimited', 'vpn unlimited'],
+    privado: ['privado_servers', 6, 'Privado'],
+    fastestvpn: ['fastestvpn_servers', 2, 'FastestVPN'],
+    vpnsecure: ['vpnsecure_servers', 1, 'VPNSecure']
+};
+export async function gluetunServers(fetchBytes, now, provider) {
+    assert(Object.hasOwn(gluetunProviders, provider), 'Unsupported Gluetun provider');
+    const [id, version, name, file = provider] = gluetunProviders[provider];
+    const path = `pkg/servers/${encodeURIComponent(file)}.json`;
+    const commits = JSON.parse(String(await fetchBytes(`https://api.github.com/repos/${gluetunRepo}/commits?path=${encodeURIComponent(`pkg/servers/${file}.json`)}&per_page=1`)));
     const commit = commits[0];
-    assert(/^[a-f0-9]{40}$/.test(commit?.sha), 'Invalid PrivateVPN revision');
-    const base = `https://raw.githubusercontent.com/${privatevpnRepo}/${commit.sha}/`;
+    assert(/^[a-f0-9]{40}$/.test(commit?.sha), `Invalid ${name} revision`);
+    const base = `https://raw.githubusercontent.com/${gluetunRepo}/${commit.sha}/`;
     const license = String(await fetchBytes(base + 'LICENSE'));
-    assert(sha(license) === privatevpnLicenseHash, 'PrivateVPN license changed: review required');
+    assert(sha(license) === gluetunLicenseHash, `${name} license changed: review required`);
     const data = JSON.parse(String(await fetchBytes(base + path)));
     const committed = epoch(commit.commit.committer.date);
-    assert(data.version === 4 && Array.isArray(data.servers) && data.servers.length > 0 && data.servers.length <= 100000, 'Invalid PrivateVPN snapshot');
-    assert(Number.isSafeInteger(data.timestamp) && data.timestamp > 0 && data.timestamp <= now && committed <= now, 'Invalid PrivateVPN timestamp');
-    const source = metadata('privatevpn_servers', 'MIT', `https://github.com/${privatevpnRepo}/blob/${commit.sha}/LICENSE`,
-        'Quentin McGaw, Gluetun servers (PrivateVPN connection endpoints; not verified egress)',
-        `https://github.com/${privatevpnRepo}/blob/${commit.sha}/${path}`, commit.sha, Math.min(data.timestamp, committed), now, 45 * day);
+    assert(data.version === version && Array.isArray(data.servers) && data.servers.length > 0 && data.servers.length <= 100000, `Invalid ${name} snapshot`);
+    assert(Number.isSafeInteger(data.timestamp) && data.timestamp > 0 && data.timestamp <= now && committed <= now, `Invalid ${name} timestamp`);
+    const source = metadata(id, 'MIT', `https://github.com/${gluetunRepo}/blob/${commit.sha}/LICENSE`,
+        `Quentin McGaw, Gluetun servers (${name} connection endpoints; not verified egress)`,
+        `https://github.com/${gluetunRepo}/blob/${commit.sha}/${path}`, commit.sha, Math.min(data.timestamp, committed), now, 45 * day);
     const entries = new Set();
     for (const server of data.servers) {
-        assert(server.vpn === 'openvpn' && Array.isArray(server.ips) && server.ips.length > 0 && server.ips.length <= 100000, 'Invalid PrivateVPN server');
+        assert((server.vpn === 'openvpn' || (provider === 'fastestvpn' && server.vpn === 'wireguard')) && Array.isArray(server.ips) && server.ips.length > 0 && server.ips.length <= 100000, `Invalid ${name} server`);
         for (const ip of server.ips) {
-            assert(typeof ip === 'string' && isIP(ip), 'Invalid PrivateVPN IP');
+            assert(typeof ip === 'string' && isIP(ip), `Invalid ${name} IP`);
             entries.add(`${ip}/${isIP(ip) === 4 ? 32 : 128}`);
-            assert(entries.size <= 100000, 'PrivateVPN count exceeds limit');
+            assert(entries.size <= 100000, `${name} count exceeds limit`);
         }
     }
     return { metadata: { ...source, license_text: license }, entries: [...entries].sort().map(network => ({ network })) };
 }
+export const privatevpnServers = (fetchBytes, now) => gluetunServers(fetchBytes, now, 'privatevpn');
 const proxyRepo = 'monosans/proxy-list';
 const proxyLicenseHash = 'f0214b6cf7a99766c90f7007fbddcc8df43df7ab6299c40c84c3ae10458d58ca';
 export async function proxy(fetchBytes, now) {
@@ -254,7 +267,9 @@ export async function update(output, { fetchBytes = download, now = Math.floor(D
         try { await check(output, signal); baselineValid = true; } catch {}
         const failures = [];
         let refreshed = 0;
-        for (const [id, load] of [['tor', tor], ['hosting', hosting], ['vpn', vpn], ['datacenter', datacenter], ['proxy', proxy], ['asn', (fetch, time) => asn(fetch, time, dirname(output))], ['vpn_servers', vpnServers], ['privatevpn_servers', privatevpnServers]]) {
+        const loaders = [['tor', tor], ['hosting', hosting], ['vpn', vpn], ['datacenter', datacenter], ['proxy', proxy], ['asn', (fetch, time) => asn(fetch, time, dirname(output))], ['vpn_servers', vpnServers],
+            ...Object.entries(gluetunProviders).map(([provider, [id]]) => [id, (fetch, time) => gluetunServers(fetch, time, provider)])];
+        for (const [id, load] of loaders) {
             signal?.throwIfAborted();
             try {
                 if (id === 'asn' && baselineValid && result.asn && result.asn.fetched_at_unix <= now && now - result.asn.fetched_at_unix < day && result.asn.expires_at_unix > now) continue;
@@ -276,7 +291,7 @@ export async function update(output, { fetchBytes = download, now = Math.floor(D
         await check(temporary, signal);
         signal?.throwIfAborted();
         await rename(temporary, output);
-        return { failures, sources: ['tor', 'hosting', 'vpn', 'datacenter', 'proxy', 'asn', 'vpn_servers', 'privatevpn_servers'].filter(id => result[id]) };
+        return { failures, sources: loaders.map(([id]) => id).filter(id => result[id]) };
     } finally {
         // Never unlink the lock file: another writer may already be locking the same inode.
         if (lock.exitCode === null && lock.signalCode === null) {
