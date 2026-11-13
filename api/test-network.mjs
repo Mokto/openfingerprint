@@ -5,7 +5,7 @@ import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } fr
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tor, hosting, vpn, datacenter, proxy, update, validate, loop, prune } from './update-network-data.mjs';
+import { tor, hosting, vpn, vpnServers, privatevpnServers, datacenter, proxy, update, validate, loop, prune } from './update-network-data.mjs';
 import { identifyEnvironment } from './test-certs.mjs';
 
 const directory = await mkdtemp(resolve(tmpdir(), 'openfingerprint-network-check-'));
@@ -20,7 +20,9 @@ const snapshot = {
     hosting: { metadata: meta('cloud_ranges', 'MIT', 86400), entries: [{ network: '8.8.8.0/24', provider: 'Test Cloud' }, { network: '2606:4700::/32', provider: 'IPv6 Cloud' }] },
     vpn: { metadata: meta('vpn_ranges', 'MIT', 86400), entries: [{ network: '8.8.8.0/25' }, { network: '2606:4700:4700::/48' }] },
     datacenter: { metadata: meta('datacenter_ranges', 'MIT', 86400), entries: [{ network: '8.8.0.0/16' }] },
-    proxy: { metadata: meta('open_proxies', 'MIT', 3600), entries: [{ ip: '8.8.8.8', protocols: ['http', 'socks5'] }] }
+    proxy: { metadata: meta('open_proxies', 'MIT', 3600), entries: [{ ip: '8.8.8.8', protocols: ['http', 'socks5'] }] },
+    vpn_servers: { metadata: meta('vpn_servers', 'CC0-1.0', 86400), entries: [{ network: '1.1.1.1/32' }, { network: '2001:4860:4860::8888/128' }] },
+    privatevpn_servers: { metadata: meta('privatevpn_servers', 'MIT', 86400), entries: [{ network: '193.104.211.5/32' }, { network: '2001:4860:4860::8844/128' }] }
 };
 const x4bLicense = "MIT License\n\nCopyright (c) 2026 X4B (Mathew Heard)\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n";
 const proxyLicense = "MIT License\n\nCopyright (c) 2022 monosans\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n";
@@ -111,8 +113,68 @@ try {
     await assert.rejects(proxy(proxyFetch('http://not-an-ip:80\n'), now), /Invalid proxy entry/);
     await assert.rejects(proxy(proxyFetch('\n'), now), /Invalid proxy count/);
     await assert.rejects(proxy(async url => url.endsWith('LICENSE') ? Buffer.from('other') : fetchBytes(url), now), /license changed/);
+    const serverLicense = await readFile(new URL('./data/vpn-servers-license.txt', import.meta.url), 'utf8');
+    const publication = date.slice(0, 10);
+    const serverFetch = (body = '1.1.1.1\n2001:4860:4860::8888\n1.1.1.1\n', published = publication) => async url => {
+        if (url.includes('/commits?')) return fetchBytes(url);
+        if (url.endsWith('/LICENSE')) return Buffer.from(serverLicense);
+        if (url.endsWith('/README.md')) return Buffer.from(`**Last updated:** ${published}`);
+        if (url.endsWith('.txt')) return Buffer.from(body);
+        throw new Error('source unavailable');
+    };
+    const requested = [];
+    const serversResult = await vpnServers(async url => { requested.push(url); return serverFetch()(url); }, now);
+    assert.equal(requested.filter(url => url.endsWith('.txt')).length, 10);
+    assert.deepEqual(serversResult.entries, [{ network: '1.1.1.1/32' }, { network: '2001:4860:4860::8888/128' }]);
+    assert.equal(serversResult.metadata.id, 'vpn_servers');
+    assert.equal(serversResult.metadata.license, 'CC0-1.0');
+    assert.equal(serversResult.metadata.updated_at_unix, Date.parse(publication + 'T00:00:00Z') / 1000);
+    assert.equal(serversResult.metadata.expires_at_unix, serversResult.metadata.updated_at_unix + 7 * 86400);
+    for (const body of ['1.1.1.0/24\n', 'vpn.example.test\n', 'http://1.1.1.1\n', '\n']) await assert.rejects(vpnServers(serverFetch(body), now));
+    await assert.rejects(vpnServers(serverFetch(undefined, '2020-01-01'), now), /Stale\/future/);
+    await assert.rejects(vpnServers(serverFetch(undefined, new Date((now + 86400) * 1000).toISOString().slice(0, 10)), now), /Future/);
+    await assert.rejects(vpnServers(async url => url.endsWith('/LICENSE') ? Buffer.from('changed license') : serverFetch()(url), now), /license changed/);
+    const privatevpnLicense = x4bLicense.replace('X4B (Mathew Heard)', 'Quentin McGaw');
+    const privatevpnData = { version: 4, timestamp: now - 30 * 86400, servers: [{ vpn: 'openvpn', ips: ['193.104.211.5', '2001:4860:4860::8844', '193.104.211.5'] }] };
+    const privatevpnFetch = (data = privatevpnData, committed = date.replace('.000Z', 'Z')) => async url => {
+        if (url.includes('/commits?')) return Buffer.from(JSON.stringify([{ sha: 'a'.repeat(40), commit: { committer: { date: committed } } }]));
+        assert(url.startsWith('https://raw.githubusercontent.com/qdm12/gluetun-servers/' + 'a'.repeat(40) + '/'));
+        if (url.endsWith('/LICENSE')) return Buffer.from(privatevpnLicense);
+        if (url.endsWith('/pkg/servers/privatevpn.json')) return Buffer.from(JSON.stringify(data));
+        throw new Error('source unavailable');
+    };
+    const privatevpnResult = await privatevpnServers(privatevpnFetch(), now);
+    assert.deepEqual(privatevpnResult.entries, [{ network: '193.104.211.5/32' }, { network: '2001:4860:4860::8844/128' }]);
+    assert.equal(privatevpnResult.metadata.id, 'privatevpn_servers');
+    assert.equal(privatevpnResult.metadata.license_text, privatevpnLicense);
+    assert.equal(privatevpnResult.metadata.updated_at_unix, privatevpnData.timestamp);
+    assert.equal(privatevpnResult.metadata.expires_at_unix, privatevpnData.timestamp + 45 * 86400);
+    const oldCommit = new Date((now - 35 * 86400) * 1000).toISOString().replace('.000Z', 'Z');
+    assert.equal((await privatevpnServers(privatevpnFetch(privatevpnData, oldCommit), now)).metadata.updated_at_unix, now - 35 * 86400);
+    for (const bad of [
+        { ...privatevpnData, version: 5 }, { ...privatevpnData, servers: [] },
+        { ...privatevpnData, servers: [{ vpn: 'openvpn', ips: [] }] },
+        ...['193.104.211.0/24', 'vpn.example.test', 'https://193.104.211.5', 42].map(ip => ({ ...privatevpnData, servers: [{ vpn: 'openvpn', ips: [ip] }] })),
+        ...[now + 1, now - 45 * 86400, 0, '123', now - 0.5].map(timestamp => ({ ...privatevpnData, timestamp }))
+    ]) await assert.rejects(privatevpnServers(privatevpnFetch(bad), now));
+    await assert.rejects(privatevpnServers(privatevpnFetch(privatevpnData, new Date((now + 60) * 1000).toISOString().replace('.000Z', 'Z')), now), /timestamp/);
+    await assert.rejects(privatevpnServers(async url => url.endsWith('/LICENSE') ? Buffer.from('changed license') : privatevpnFetch()(url), now), /license changed/);
+    const loaded = await update(path, { fetchBytes: async url => url.includes('Joe12387/') ? serverFetch()(url) : url.includes('qdm12/gluetun-servers/') ? privatevpnFetch()(url) : fetchBytes(url), now });
+    assert(loaded.sources.includes('privatevpn_servers') && !loaded.failures.includes('privatevpn_servers'));
+    const privatevpnRetained = JSON.parse(await readFile(path)).privatevpn_servers;
+    assert(loaded.sources.includes('vpn_servers') && !loaded.failures.includes('vpn_servers'));
+    const retained = JSON.parse(await readFile(path)).vpn_servers;
+    const incomplete = await update(path, { now: now + 60, fetchBytes: async url => {
+        if (url.endsWith('/windscribe.txt')) throw new Error('provider unavailable');
+        return url.includes('Joe12387/') ? serverFetch()(url) : fetchBytes(url);
+    } });
+    assert(incomplete.failures.includes('vpn_servers'));
+    assert(incomplete.failures.includes('privatevpn_servers'));
+    assert.deepEqual(JSON.parse(await readFile(path)).vpn_servers, retained);
+    assert.deepEqual(JSON.parse(await readFile(path)).privatevpn_servers, privatevpnRetained);
     const result = await update(path, { fetchBytes, now });
-    assert.deepEqual(result.failures, ['hosting', 'vpn', 'datacenter', 'proxy', 'asn']);
+    assert.deepEqual(result.failures, ['hosting', 'vpn', 'datacenter', 'proxy', 'asn', 'vpn_servers', 'privatevpn_servers']);
+    assert.deepEqual(JSON.parse(await readFile(path)).vpn_servers, retained);
     const refreshed = JSON.parse(await readFile(path));
     assert.equal(refreshed.hosting.metadata.expires_at_unix, snapshot.hosting.metadata.expires_at_unix);
     assert.equal(refreshed.tor.metadata.updated_at_unix, now - 1800);
@@ -190,6 +252,22 @@ try {
     assert.deepEqual(matched.datacenter.value, { scope: 'listed_datacenter_range' });
     assert.deepEqual(matched.proxy.value, { protocols: ['http', 'socks5'], scope: 'listed_open_proxy' });
     assert.equal(matched.source, 'backend_supplied');
+    const seeded = await check(direct, '1.1.1.1');
+    assert.deepEqual(seeded.vpn.value, { scope: 'listed_vpn_server' });
+    assert.equal(seeded.vpn.source.id, 'vpn_servers');
+    assert.equal((await (await post(direct, '/v1/check', { ip: '1.1.1.1' })).json()).vpn, true);
+    assert.equal((await (await post(direct, '/openfingerprint.v1.OpenFingerprint/Check', { ip: '1.1.1.1' }, { 'Connect-Protocol-Version': '1' })).json()).vpn, true);
+    assert.equal((await check(direct, '::ffff:1.1.1.1')).vpn.value.scope, 'listed_vpn_server');
+    assert.equal((await check(direct, '2001:4860:4860::8888')).vpn.value.scope, 'listed_vpn_server');
+    assert.equal((await check(direct, '1.1.1.2')).vpn.value, null);
+    const privatevpn = await check(direct, '193.104.211.5');
+    assert.deepEqual(privatevpn.vpn.value, { scope: 'listed_vpn_server' });
+    assert.equal(privatevpn.vpn.source.id, 'privatevpn_servers');
+    assert.equal((await check(direct, '::ffff:193.104.211.5')).vpn.value.scope, 'listed_vpn_server');
+    assert.equal((await check(direct, '2001:4860:4860::8844')).vpn.source.id, 'privatevpn_servers');
+    assert.equal((await check(direct, '193.104.211.6')).vpn.value, null);
+    assert.equal((await (await post(direct, '/v1/check', { ip: '193.104.211.5' })).json()).vpn, true);
+    assert.equal((await (await post(direct, '/openfingerprint.v1.OpenFingerprint/Check', { ip: '193.104.211.5' }, { 'Connect-Protocol-Version': '1' })).json()).vpn, true);
     assert.equal((await check(direct, '::ffff:8.8.8.8')).tor.value, true);
     assert.equal((await check(direct, '2606:4700:4700::1111')).tor.value, true);
     const absent = await check(direct, '9.9.9.9');
@@ -219,6 +297,8 @@ try {
     const metrics = /metrics on (127\.0\.0\.1:\d+)/.exec(direct.output)[1];
     const text = await (await fetch('http://' + metrics + '/metrics')).text();
     assert(text.includes('openfingerprint_network_data_source_fresh{source="tor_exit"} 1'));
+    assert(text.includes('openfingerprint_network_data_source_fresh{source="vpn_servers"} 1'));
+    assert(text.includes('openfingerprint_network_data_source_fresh{source="privatevpn_servers"} 1'));
     assert(!text.includes('8.8.8.8'));
     const series = name => Number(new RegExp(`^${name.replace(/[{}"]/g, '\\$&')} (\\d+)$`, 'm').exec(text)?.[1]);
     assert(series('openfingerprint_http_request_duration_seconds_count{route="check",status="2xx"}') >= 1);

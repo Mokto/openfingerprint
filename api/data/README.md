@@ -155,6 +155,25 @@ link where the data is used, for example
 through downstream consumers, and do not redistribute the ranges (`network.json`) without
 meeting ShareAlike. See the [attribution note](../README.md#local-network-intelligence).
 
+The independent `vpn_servers` source adds ten exact-address provider lists from
+[Joe12387/open-source-vpn-ip-lists](https://github.com/Joe12387/open-source-vpn-ip-lists)
+under CC0-1.0. The updater pins the license hash, retains its text and bounds
+freshness by the snapshot's declared publication day and immutable README commit.
+The [license fixture](vpn-servers-license.txt) is retained for offline checks;
+no IP inventory is bundled. These are provider-associated server addresses,
+including ingress servers, not independently measured exit IPs. These ten lists
+do not include PrivateVPN and do not guarantee complete coverage.
+
+The separate `privatevpn_servers` source reads
+[Gluetun's PrivateVPN server data](https://github.com/qdm12/gluetun-servers/blob/main/pkg/servers/privatevpn.json)
+under MIT. The updater pins and retains the license at the immutable data-file
+revision. Its 45-day expiry is bounded by both the embedded collection timestamp
+and the file commit, not local downloads; upstream refreshes monthly. Only exact
+public addresses are accepted. These are DNS-resolved connection endpoints, not
+verified browsing exits. Gluetun, Joe12387 and X4B retain independent provenance
+and expiry; no VPN accounts, profiles or live sessions are needed. See the
+[network evidence contract](../README.md#local-network-intelligence).
+
 ## IP country data
 
 [DB-IP Country Lite](https://db-ip.com/db/download/ip-to-country-lite) provides
