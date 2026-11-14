@@ -23,7 +23,15 @@ const epoch = text => {
 };
 
 export async function download(url, signal) {
-    const response = await fetch(url, { redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(30000), signal].filter(Boolean)), headers: { Accept: 'application/vnd.github+json' } });
+    const options = { redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(30000), signal].filter(Boolean)), headers: { Accept: 'application/vnd.github+json' } };
+    const releaseAsset = /^https:\/\/github\.com\/whois-api-llc\/ipgeo-community\/releases\/download\/community-\d{4}-\d{2}-\d{2}\/(?:MANIFEST\.json|LICENSE|ATTRIBUTION\.txt|VPN-ATTRIBUTION\.txt|community-vpn-list\.csv\.gz)$/.test(url);
+    let response = await fetch(url, { ...options, redirect: releaseAsset ? 'manual' : 'error' });
+    if (releaseAsset && response.status === 302) {
+        const target = new URL(response.headers.get('location'));
+        await response.body?.cancel();
+        assert(target.origin === 'https://release-assets.githubusercontent.com' && !target.username && !target.password, 'Invalid release asset redirect');
+        response = await fetch(target, options);
+    }
     if (response.status !== 200) { await response.body?.cancel(); throw new Error(`HTTP ${response.status}`); }
     let size = 0;
     const chunks = [];
@@ -182,6 +190,48 @@ export async function gluetunServers(fetchBytes, now, provider) {
     return { metadata: { ...source, license_text: license }, entries: [...entries].sort().map(network => ({ network })) };
 }
 export const privatevpnServers = (fetchBytes, now) => gluetunServers(fetchBytes, now, 'privatevpn');
+const ipgeoRepo = 'whois-api-llc/ipgeo-community';
+const ipgeoNotices = {
+    LICENSE: '87674f8d034f47bb3724e6f600bb020d8fcd948eba9c71ec725f98a7d06261c9',
+    'ATTRIBUTION.txt': '3de2e5a3efb314a129e99a559abb1defcb3451896f42cc30afbe4e4c0561e648',
+    'VPN-ATTRIBUTION.txt': 'c81d8e8863fa905bf57d17643bc034e33b3bd25f751960206af10b737d56b709'
+};
+export async function ipgeoVpn(fetchBytes, now) {
+    const release = JSON.parse(String(await fetchBytes(`https://api.github.com/repos/${ipgeoRepo}/releases/latest`)));
+    const date = /^community-(\d{4}-\d{2}-\d{2})$/.exec(release.tag_name)?.[1];
+    assert(date && release.draft === false && release.prerelease === false, 'Invalid ipgeo release');
+    const published = epoch(release.published_at);
+    const dated = epoch(date + 'T00:00:00Z');
+    assert(published <= now && dated <= now, 'Future ipgeo release');
+    const base = `https://github.com/${ipgeoRepo}/releases/download/${release.tag_name}/`;
+    const manifest = JSON.parse(String(await fetchBytes(base + 'MANIFEST.json')));
+    const file = manifest.files?.['community-vpn-list.csv'];
+    assert(manifest.name === 'ipgeo Community Edition' && manifest.version === date && manifest.license === 'CC BY-SA 4.0', 'Invalid ipgeo manifest');
+    assert(Number.isSafeInteger(manifest.vpn_list_rows) && manifest.vpn_list_rows > 0 && manifest.vpn_list_rows <= 100000, 'Invalid ipgeo row count');
+    assert(Number.isSafeInteger(file?.bytes) && file.bytes > 0 && file.bytes <= 8 * 1024 * 1024 && /^[a-f0-9]{64}$/.test(file.sha256), 'Invalid ipgeo file metadata');
+    const notices = [];
+    for (const [name, hash] of Object.entries(ipgeoNotices)) {
+        const notice = await fetchBytes(base + name);
+        assert(sha(notice) === hash, 'ipgeo license or attribution changed: review required');
+        notices.push(String(notice));
+    }
+    const source = metadata('ipgeo_vpn', 'CC-BY-SA-4.0', base + 'LICENSE',
+        'WhoisXML API / ipgeo Community Edition; DB-IP, IPtoASN, X4B/IPLocate. Modified to retain VPN ranges, provider labels and classification basis only.',
+        base + 'community-vpn-list.csv.gz', file.sha256, Math.min(dated, published), now, 14 * day);
+    const bytes = gunzipSync(await fetchBytes(source.url), { maxOutputLength: 8 * 1024 * 1024 });
+    assert(bytes.length === file.bytes && sha(bytes) === file.sha256, 'ipgeo checksum mismatch');
+    const lines = String(bytes).split(/\r?\n/);
+    if (lines.at(-1) === '') lines.pop();
+    assert(lines.shift() === 'network,provider,basis' && lines.length === manifest.vpn_list_rows, 'Invalid ipgeo CSV schema or count');
+    const entries = lines.map(line => {
+        const [network, provider, basis, extra] = line.split(',');
+        const [ip, prefix, trailing] = network.split('/');
+        assert(isIP(ip) === 4 && trailing === undefined && /^\d{1,2}$/.test(prefix) && +prefix > 0 && +prefix < 32, 'Invalid ipgeo IPv4 range');
+        assert(extra === undefined && /^[A-Za-z0-9 _-]{0,64}$/.test(provider) && ['asn', 'x4bnet', 'cluster'].includes(basis), 'Invalid ipgeo provider or basis');
+        return { network, provider, basis };
+    });
+    return { metadata: { ...source, license_text: notices.join('\n') }, entries };
+}
 const proxyRepo = 'monosans/proxy-list';
 const proxyLicenseHash = 'f0214b6cf7a99766c90f7007fbddcc8df43df7ab6299c40c84c3ae10458d58ca';
 export async function proxy(fetchBytes, now) {
@@ -268,7 +318,7 @@ export async function update(output, { fetchBytes = download, now = Math.floor(D
         const failures = [];
         let refreshed = 0;
         const loaders = [['tor', tor], ['hosting', hosting], ['vpn', vpn], ['datacenter', datacenter], ['proxy', proxy], ['asn', (fetch, time) => asn(fetch, time, dirname(output))], ['vpn_servers', vpnServers],
-            ...Object.entries(gluetunProviders).map(([provider, [id]]) => [id, (fetch, time) => gluetunServers(fetch, time, provider)])];
+            ...Object.entries(gluetunProviders).map(([provider, [id]]) => [id, (fetch, time) => gluetunServers(fetch, time, provider)]), ['ipgeo_vpn', ipgeoVpn]];
         for (const [id, load] of loaders) {
             signal?.throwIfAborted();
             try {

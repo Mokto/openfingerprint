@@ -99,6 +99,13 @@ struct Range {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct VpnRange {
+    network: IpNet,
+    provider: String,
+    basis: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProxyEntry {
     ip: IpAddr,
     protocols: Vec<String>,
@@ -122,9 +129,10 @@ struct Snapshot {
     privado_servers: Option<Source<Vec<Range>>>,
     fastestvpn_servers: Option<Source<Vec<Range>>>,
     vpnsecure_servers: Option<Source<Vec<Range>>>,
+    ipgeo_vpn: Option<Source<Vec<VpnRange>>>,
 }
 
-const SOURCES: usize = 15;
+const SOURCES: usize = 16;
 const PROXY_LIFETIME: u64 = 6 * 3600;
 
 fn ranges(
@@ -169,6 +177,7 @@ pub struct Data {
     privado_servers: HashSet<IpNet>,
     fastestvpn_servers: HashSet<IpNet>,
     vpnsecure_servers: HashSet<IpNet>,
+    ipgeo_vpn: HashMap<IpNet, VpnRange>,
     datacenter: HashSet<IpNet>,
     proxy: HashMap<IpAddr, BTreeSet<String>>,
     asn: Option<maxminddb::Reader<Vec<u8>>>,
@@ -190,6 +199,7 @@ impl Data {
             privado_servers: HashSet::new(),
             fastestvpn_servers: HashSet::new(),
             vpnsecure_servers: HashSet::new(),
+            ipgeo_vpn: HashMap::new(),
             datacenter: HashSet::new(),
             proxy: HashMap::new(),
             asn: None,
@@ -216,7 +226,8 @@ impl Data {
                 && snapshot.vpnunlimited_servers.is_none()
                 && snapshot.privado_servers.is_none()
                 && snapshot.fastestvpn_servers.is_none()
-                && snapshot.vpnsecure_servers.is_none())
+                && snapshot.vpnsecure_servers.is_none()
+                && snapshot.ipgeo_vpn.is_none())
         {
             return Err(());
         }
@@ -454,6 +465,36 @@ impl Data {
             *target = set;
             data.metadata[index] = Some(metadata);
         }
+        if let Some(source) = snapshot.ipgeo_vpn {
+            if !source.metadata.valid("ipgeo_vpn", "CC-BY-SA-4.0", 14 * DAY)
+                || source.metadata.revision.len() != 64
+                || source.metadata.license_text.is_empty()
+                || source.entries.is_empty()
+                || source.entries.len() > 100000
+            {
+                return Err(());
+            }
+            for entry in source.entries {
+                if !entry.network.is_ipv4()
+                    || entry.network.prefix() == 0
+                    || entry.network.prefix() >= 32
+                    || entry.network.ip() != entry.network.network()
+                    || !public(entry.network.network())
+                    || !public(entry.network.broadcast())
+                    || entry.provider.len() > 64
+                    || !entry
+                        .provider
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b" _-".contains(&b))
+                    || !["asn", "x4bnet", "cluster"].contains(&entry.basis.as_str())
+                    || data.ipgeo_vpn.contains_key(&entry.network)
+                {
+                    return Err(());
+                }
+                data.ipgeo_vpn.insert(entry.network, entry);
+            }
+            data.metadata[15] = Some(source.metadata);
+        }
         Ok(data)
     }
     pub fn check(&self, value: Value, source: &'static str) -> Value {
@@ -551,6 +592,26 @@ impl Data {
             let servers = self.fact(index, scoped(set, "listed_vpn_server"), now, "not_listed");
             if !servers["value"].is_null() || vpn["source"].is_null() {
                 vpn = servers;
+            }
+        }
+        if vpn["value"].is_null() {
+            let entry = (1..=if ip.is_ipv4() { 32 } else { 128 })
+                .rev()
+                .find_map(|prefix| {
+                    self.ipgeo_vpn.get(
+                        &IpNet::new(IpNet::new(ip, prefix).unwrap().network(), prefix).unwrap(),
+                    )
+                });
+            let value = entry.map_or(Value::Null, |entry| {
+                let mut value = json!({"scope":"listed_vpn_range", "basis":entry.basis});
+                if !entry.provider.is_empty() {
+                    value["provider"] = json!(entry.provider);
+                }
+                value
+            });
+            let community = self.fact(15, value, now, "not_listed");
+            if !community["value"].is_null() || vpn["source"].is_null() {
+                vpn = community;
             }
         }
         let datacenter = self.fact(
@@ -667,6 +728,7 @@ impl Store {
             "privado_servers",
             "fastestvpn_servers",
             "vpnsecure_servers",
+            "ipgeo_vpn",
         ]
         .iter()
         .enumerate()
@@ -1074,6 +1136,90 @@ mod tests {
             data.check_at("1.1.1.10".parse().unwrap(), "peer", 1500)["vpn"]["source"]["id"],
             "expressvpn_servers"
         );
+    }
+    #[test]
+    fn community_vpn_ranges_keep_basis_precedence_and_independent_expiry() {
+        let path = Path::new("/tmp/network.json");
+        let mut metadata = snapshot()["vpn"]["metadata"].clone();
+        metadata["id"] = json!("ipgeo_vpn");
+        metadata["license"] = json!("CC-BY-SA-4.0");
+        metadata["expires_at_unix"] = json!(1000 + 14 * DAY);
+        let input = json!({"version":1,"ipgeo_vpn":{"metadata":metadata,"entries":[
+            {"network":"8.8.0.0/16","provider":"","basis":"asn"},
+            {"network":"8.8.8.0/24","provider":"testvpn","basis":"cluster"},
+            {"network":"9.9.9.0/24","provider":"testvpn","basis":"x4bnet"}]}});
+        let data = Data::load(path, &serde_json::to_vec(&input).unwrap()).unwrap();
+        let c = |ip: &str, time| data.check_at(ip.parse().unwrap(), "peer", time);
+        let hit = c("8.8.8.8", 1500);
+        assert_eq!(
+            hit["vpn"]["value"],
+            json!({"scope":"listed_vpn_range","provider":"testvpn","basis":"cluster"})
+        );
+        assert_eq!(hit["vpn"]["source"]["id"], "ipgeo_vpn");
+        assert_eq!(hit["vpn"]["source"]["license"], "CC-BY-SA-4.0");
+        assert_eq!(
+            c("8.8.9.1", 1500)["vpn"]["value"],
+            json!({"scope":"listed_vpn_range","basis":"asn"})
+        );
+        assert_eq!(c("8.9.0.1", 1500)["vpn"]["status"], "not_listed");
+        assert_eq!(c("8.8.8.8", 999)["vpn"]["status"], "clock_skew");
+        let expiry = 1000 + 14 * DAY;
+        assert_eq!(c("8.8.8.8", expiry)["vpn"]["status"], "stale_data");
+        assert!(c("8.8.8.8", expiry)["vpn"]["value"].is_null());
+        let mut consumed = hit;
+        expire_at(&mut consumed, expiry);
+        assert!(consumed["vpn"]["value"].is_null());
+        let mut combined = snapshot();
+        combined["ipgeo_vpn"] = input["ipgeo_vpn"].clone();
+        let data = Data::load(path, &serde_json::to_vec(&combined).unwrap()).unwrap();
+        assert_eq!(
+            data.check_at("9.9.9.9".parse().unwrap(), "peer", 1500)["vpn"]["source"]["id"],
+            "vpn_ranges"
+        );
+        combined["vpn"]["metadata"]["expires_at_unix"] = json!(1500);
+        let data = Data::load(path, &serde_json::to_vec(&combined).unwrap()).unwrap();
+        assert_eq!(
+            data.check_at("9.9.9.9".parse().unwrap(), "peer", 1500)["vpn"]["source"]["id"],
+            "ipgeo_vpn"
+        );
+        let mut exact_meta = combined["vpn"]["metadata"].clone();
+        exact_meta["id"] = json!("vpn_servers");
+        exact_meta["license"] = json!("CC0-1.0");
+        exact_meta["expires_at_unix"] = json!(3000);
+        combined["vpn_servers"] =
+            json!({"metadata":exact_meta,"entries":[{"network":"8.8.8.8/32"}]});
+        let data = Data::load(path, &serde_json::to_vec(&combined).unwrap()).unwrap();
+        assert_eq!(
+            data.check_at("8.8.8.8".parse().unwrap(), "peer", 1500)["vpn"]["source"]["id"],
+            "vpn_servers"
+        );
+        for (key, value) in [
+            ("network", json!("8.8.8.1/24")),
+            ("network", json!("0.0.0.0/0")),
+            ("network", json!("127.0.0.0/8")),
+            ("network", json!("192.0.2.0/24")),
+            ("network", json!("2001:4860::/32")),
+            ("network", json!("8.8.8.8/32")),
+            ("basis", json!("observed_exit")),
+            ("provider", json!("test\nvpn")),
+            ("provider", json!("x".repeat(65))),
+        ] {
+            let mut bad = input.clone();
+            bad["ipgeo_vpn"]["entries"][0][key] = value;
+            assert!(Data::load(path, &serde_json::to_vec(&bad).unwrap()).is_err());
+        }
+        let mut bad = input.clone();
+        bad["ipgeo_vpn"]["entries"][1] = bad["ipgeo_vpn"]["entries"][0].clone();
+        assert!(Data::load(path, &serde_json::to_vec(&bad).unwrap()).is_err());
+        for (key, value) in [
+            ("license", json!("MIT")),
+            ("revision", json!("a".repeat(40))),
+            ("expires_at_unix", json!(1001 + 14 * DAY)),
+        ] {
+            let mut bad = input.clone();
+            bad["ipgeo_vpn"]["metadata"][key] = value;
+            assert!(Data::load(path, &serde_json::to_vec(&bad).unwrap()).is_err());
+        }
     }
     #[test]
     fn tor_observations_expire_individually_and_keep_the_latest_canonical_address() {
