@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tor, hosting, vpn, vpnServers, privatevpnServers, gluetunServers, datacenter, proxy, update, validate, loop, prune } from './update-network-data.mjs';
+import { tor, hosting, vpn, vpnServers, privatevpnServers, gluetunServers, ipgeoVpn, download, datacenter, proxy, update, validate, loop, prune } from './update-network-data.mjs';
 import { identifyEnvironment } from './test-certs.mjs';
 
 const directory = await mkdtemp(resolve(tmpdir(), 'openfingerprint-network-check-'));
@@ -189,9 +191,62 @@ try {
         snapshot[provider + '_servers'] = source;
     }
     for (const provider of ['ipvanish', 'vyprvpn', '__proto__', '../privatevpn']) await assert.rejects(gluetunServers(async () => assert.fail('Unsupported provider must not fetch'), now, provider), /Unsupported/);
-    const allFetch = async url => url.includes('Joe12387/') ? serverFetch()(url) : url.includes('qdm12/gluetun-servers/') ? gluetunFetch(url) : fetchBytes(url);
+    const ipgeoNotices = JSON.parse(await readFile(new URL('./data/ipgeo-community-notices.json', import.meta.url), 'utf8'));
+    const ipgeoDate = new Date((now - 86400) * 1000).toISOString().slice(0, 10);
+    const ipgeoCsv = 'network,provider,basis\n4.2.0.0/24,testvpn,cluster\n4.2.1.0/24,,asn\n8.8.8.0/24,testvpn,x4bnet\n';
+    const ipgeoFetch = ({ csv = ipgeoCsv, release = {}, manifest = {}, notices = {}, compressed } = {}) => async url => {
+        if (url.endsWith('/releases/latest')) return Buffer.from(JSON.stringify({ tag_name: 'community-' + ipgeoDate, published_at: date.replace('.000Z', 'Z'), draft: false, prerelease: false, ...release }));
+        assert(url.startsWith(`https://github.com/whois-api-llc/ipgeo-community/releases/download/community-${release.tag_name?.slice(10) ?? ipgeoDate}/`));
+        const name = url.split('/').at(-1);
+        if (name === 'MANIFEST.json') return Buffer.from(JSON.stringify({ name: 'ipgeo Community Edition', version: ipgeoDate, license: 'CC BY-SA 4.0', vpn_list_rows: csv.trimEnd().split('\n').length - 1, files: { 'community-vpn-list.csv': { bytes: Buffer.byteLength(csv), sha256: createHash('sha256').update(csv).digest('hex') } }, ...manifest }));
+        if (Object.hasOwn(ipgeoNotices, name)) return Buffer.from(notices[name] ?? ipgeoNotices[name]);
+        assert.equal(name, 'community-vpn-list.csv.gz');
+        return compressed ?? gzipSync(csv);
+    };
+    const ipgeoResult = await ipgeoVpn(ipgeoFetch(), now);
+    assert.equal(ipgeoResult.metadata.id, 'ipgeo_vpn');
+    assert.equal(ipgeoResult.metadata.license, 'CC-BY-SA-4.0');
+    assert.equal(ipgeoResult.metadata.updated_at_unix, Date.parse(ipgeoDate + 'T00:00:00Z') / 1000);
+    assert.equal(ipgeoResult.metadata.expires_at_unix, ipgeoResult.metadata.updated_at_unix + 14 * 86400);
+    assert.equal(ipgeoResult.metadata.license_text, Object.values(ipgeoNotices).join('\n'));
+    assert.deepEqual(ipgeoResult.entries[0], { network: '4.2.0.0/24', provider: 'testvpn', basis: 'cluster' });
+    const earlierPublication = new Date((ipgeoResult.metadata.updated_at_unix - 3600) * 1000).toISOString().replace('.000Z', 'Z');
+    assert.equal((await ipgeoVpn(ipgeoFetch({ release: { published_at: earlierPublication } }), now)).metadata.updated_at_unix, ipgeoResult.metadata.updated_at_unix - 3600);
+    for (const release of [{ draft: true }, { prerelease: true }, { tag_name: '../other' }, { published_at: new Date((now + 60) * 1000).toISOString().replace('.000Z', 'Z') }]) {
+        await assert.rejects(ipgeoVpn(ipgeoFetch({ release }), now));
+    }
+    await assert.rejects(ipgeoVpn(ipgeoFetch(), ipgeoResult.metadata.expires_at_unix), /Stale/);
+    for (const name of Object.keys(ipgeoNotices)) await assert.rejects(ipgeoVpn(ipgeoFetch({ notices: { [name]: 'changed' } }), now), /review required/);
+    for (const manifest of [{ license: 'MIT' }, { version: '2020-01-01' }, { vpn_list_rows: 0 }, { vpn_list_rows: 4 }, { files: { 'community-vpn-list.csv': { bytes: 8388609, sha256: 'a'.repeat(64) } } }, { files: { 'community-vpn-list.csv': { bytes: Buffer.byteLength(ipgeoCsv), sha256: 'a'.repeat(64) } } }]) {
+        await assert.rejects(ipgeoVpn(ipgeoFetch({ manifest }), now));
+    }
+    for (const csv of ['network,basis,provider\n4.2.0.0/24,cluster,testvpn\n', ...['4.2.0.1/32,testvpn,cluster', '4.2.0.0/0,testvpn,cluster', '2001:4860::/32,testvpn,cluster', '4.2.0.0/24,testvpn,other', '4.2.0.0/24,testvpn,cluster,extra', '4.2.0.0/24,"test,vpn",cluster'].map(row => 'network,provider,basis\n' + row + '\n')]) {
+        await assert.rejects(ipgeoVpn(ipgeoFetch({ csv }), now));
+    }
+    await assert.rejects(ipgeoVpn(ipgeoFetch({ compressed: Buffer.from('invalid gzip') }), now));
+    const originalFetch = globalThis.fetch;
+    const asset = `https://github.com/whois-api-llc/ipgeo-community/releases/download/community-${ipgeoDate}/LICENSE`;
+    try {
+        let requests = 0;
+        globalThis.fetch = async (_url, options) => {
+            requests++;
+            assert.equal(options.redirect, requests === 1 ? 'manual' : 'error');
+            return requests === 1 ? new Response('', { status: 302, headers: { location: 'https://release-assets.githubusercontent.com/example' } }) : new Response('asset');
+        };
+        assert.equal(String(await download(asset)), 'asset');
+        assert.equal(requests, 2);
+        for (const target of ['http://release-assets.githubusercontent.com/example', 'https://example.test/asset', 'https://user@release-assets.githubusercontent.com/asset']) {
+            globalThis.fetch = async () => new Response('', { status: 302, headers: { location: target } });
+            await assert.rejects(download(asset), /Invalid release asset redirect/);
+        }
+        globalThis.fetch = async (_url, options) => { assert.equal(options.redirect, 'error'); return new Response('ordinary'); };
+        assert.equal(String(await download('https://example.test/source')), 'ordinary');
+    } finally { globalThis.fetch = originalFetch; }
+    const allFetch = async url => url.includes('whois-api-llc/ipgeo-community/') ? ipgeoFetch()(url) : url.includes('Joe12387/') ? serverFetch()(url) : url.includes('qdm12/gluetun-servers/') ? gluetunFetch(url) : fetchBytes(url);
     const loaded = await update(path, { fetchBytes: allFetch, now });
     for (const [provider] of extraProviders) assert(loaded.sources.includes(provider + '_servers') && !loaded.failures.includes(provider + '_servers'));
+    assert(loaded.sources.includes('ipgeo_vpn') && !loaded.failures.includes('ipgeo_vpn'));
+    const ipgeoRetained = JSON.parse(await readFile(path)).ipgeo_vpn;
     const cyberghostRetained = JSON.parse(await readFile(path)).cyberghost_servers;
     const isolated = await update(path, { now: now + 60, fetchBytes: async url => {
         if (url.includes('cyberghost')) throw new Error('provider unavailable');
@@ -201,6 +256,8 @@ try {
     assert(!isolated.failures.includes('expressvpn_servers'));
     const independent = JSON.parse(await readFile(path));
     assert.deepEqual(independent.cyberghost_servers, cyberghostRetained);
+    assert.equal(independent.ipgeo_vpn.metadata.fetched_at_unix, now + 60);
+    assert.equal(independent.ipgeo_vpn.metadata.expires_at_unix, ipgeoRetained.metadata.expires_at_unix);
     assert.equal(independent.expressvpn_servers.metadata.fetched_at_unix, now + 60);
     assert.equal(independent.expressvpn_servers.metadata.updated_at_unix, privatevpnData.timestamp);
     assert(loaded.sources.includes('privatevpn_servers') && !loaded.failures.includes('privatevpn_servers'));
@@ -216,10 +273,11 @@ try {
     assert.deepEqual(JSON.parse(await readFile(path)).vpn_servers, retained);
     assert.deepEqual(JSON.parse(await readFile(path)).privatevpn_servers, privatevpnRetained);
     const result = await update(path, { fetchBytes, now });
-    assert.deepEqual(result.failures, ['hosting', 'vpn', 'datacenter', 'proxy', 'asn', 'vpn_servers', 'privatevpn_servers', ...extraProviders.map(([provider]) => provider + '_servers')]);
+    assert.deepEqual(result.failures, ['hosting', 'vpn', 'datacenter', 'proxy', 'asn', 'vpn_servers', 'privatevpn_servers', ...extraProviders.map(([provider]) => provider + '_servers'), 'ipgeo_vpn']);
     assert.deepEqual(JSON.parse(await readFile(path)).vpn_servers, retained);
     const refreshed = JSON.parse(await readFile(path));
     assert.equal(refreshed.hosting.metadata.expires_at_unix, snapshot.hosting.metadata.expires_at_unix);
+    assert.deepEqual(refreshed.ipgeo_vpn, independent.ipgeo_vpn);
     assert.equal(refreshed.tor.metadata.updated_at_unix, now - 1800);
     const previous = await readFile(path, 'utf8');
     await assert.rejects(update(path, { fetchBytes: async () => { throw new Error('offline'); }, now }));
@@ -282,6 +340,7 @@ try {
         catch { await new Promise(resolve => setTimeout(resolve, 25)); }
     }
     assert(recovered, 'OS updater lock must recover after parent SIGKILL');
+    snapshot.ipgeo_vpn = ipgeoResult;
     await writeFile(path, JSON.stringify(snapshot));
     console.log('Network updater validates observed exits, license changes, retained expiry, atomic preservation and exclusive updates.');
 
@@ -303,6 +362,16 @@ try {
     assert.equal((await check(direct, '::ffff:1.1.1.1')).vpn.value.scope, 'listed_vpn_server');
     assert.equal((await check(direct, '2001:4860:4860::8888')).vpn.value.scope, 'listed_vpn_server');
     assert.equal((await check(direct, '1.1.1.2')).vpn.value, null);
+    const community = (await check(direct, '4.2.0.10')).vpn;
+    assert.deepEqual(community.value, { scope: 'listed_vpn_range', provider: 'testvpn', basis: 'cluster' });
+    assert.equal(community.source.id, 'ipgeo_vpn');
+    assert.equal(community.source.license, 'CC-BY-SA-4.0');
+    assert.equal((await check(direct, '::ffff:4.2.0.10')).vpn.source.id, 'ipgeo_vpn');
+    assert.equal((await check(direct, '4.2.1.10')).vpn.value.basis, 'asn');
+    assert(!Object.hasOwn((await check(direct, '4.2.1.10')).vpn.value, 'provider'));
+    assert.equal((await check(direct, '4.2.2.10')).vpn.value, null);
+    assert.equal((await (await post(direct, '/v1/check', { ip: '4.2.0.10' })).json()).vpn, true);
+    assert.equal((await (await post(direct, '/openfingerprint.v1.OpenFingerprint/Check', { ip: '4.2.0.10' }, { 'Connect-Protocol-Version': '1' })).json()).vpn, true);
     const privatevpn = await check(direct, '193.104.211.5');
     assert.deepEqual(privatevpn.vpn.value, { scope: 'listed_vpn_server' });
     assert.equal(privatevpn.vpn.source.id, 'privatevpn_servers');
@@ -354,6 +423,7 @@ try {
     assert(text.includes('openfingerprint_network_data_source_fresh{source="tor_exit"} 1'));
     assert(text.includes('openfingerprint_network_data_source_fresh{source="vpn_servers"} 1'));
     assert(text.includes('openfingerprint_network_data_source_fresh{source="privatevpn_servers"} 1'));
+    assert(text.includes('openfingerprint_network_data_source_fresh{source="ipgeo_vpn"} 1'));
     for (const [provider] of extraProviders) assert(text.includes(`openfingerprint_network_data_source_fresh{source="${provider}_servers"} 1`));
     assert(!text.includes('8.8.8.8'));
     const series = name => Number(new RegExp(`^${name.replace(/[{}"]/g, '\\$&')} (\\d+)$`, 'm').exec(text)?.[1]);

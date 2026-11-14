@@ -179,6 +179,27 @@ IPVanish and VyprVPN remain excluded because their inventories were stale at
 review; discovery of another upstream file does not automatically enable it. See the
 [network evidence contract](../README.md#local-network-intelligence).
 
+The independent `ipgeo_vpn` source uses the weekly
+[WhoisXML ipgeo Community VPN CSV](https://github.com/whois-api-llc/ipgeo-community)
+under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). It retains
+published IPv4 ranges and upstream provider labels and classification basis (`asn`,
+`x4bnet`, `cluster`), without adding our own ASN expansion. Matches are
+`listed_vpn_range`, not observed exits or verified provider identity, and are the
+last fallback after existing sources. Counts overlap other inventories; the
+November 9 release did not cover the five reviewed PrivateVPN exits.
+
+The updater verifies the decompressed CSV's SHA-256, size and row count against its
+release manifest. Expiry is 14 days from the earlier of the declared release date
+(UTC midnight) and GitHub publication time, not the download date. Release assets
+may redirect once, only from the reviewed repository to GitHub's HTTPS release-asset
+host; all other downloads continue to reject redirects. Failures retain original expiry.
+The exact upstream license, attribution and X4B notices are pinned and retained;
+[notice fixtures](ipgeo-community-notices.json) support offline checks, with no VPN
+inventory bundled. Credit WhoisXML API / ipgeo Community Edition and preserve all
+upstream notices, including DB-IP, IPtoASN and X4B/IPLocate. Our derivative snapshot
+retains only VPN ranges, labels and basis; redistribution requires the same CC BY-SA
+4.0 license. These data terms do not change the code's MIT license.
+
 ## IP country data
 
 [DB-IP Country Lite](https://db-ip.com/db/download/ip-to-country-lite) provides

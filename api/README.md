@@ -712,8 +712,10 @@ is `{"number":15169,"organization":"Google LLC"}` (illustrative values).
 visitor is safe; it does not change `ip.status` or the country estimate.
 A `vpn` match is `{"scope":"listed_vpn_range"}` for a listed network or
 `{"scope":"listed_vpn_server"}` for an exact address in the provider-server lists.
-The latter is VPN infrastructure association, not a verified browsing exit or
-provider identity. A `datacenter` match is
+These are VPN infrastructure associations, not verified browsing exits or
+provider identity. WhoisXML Community range matches additionally include the upstream
+`basis` (`asn`, `x4bnet` or `cluster`) and, when present, its claimed `provider` label.
+The API does not independently verify those labels or expand ASNs into ranges. A `datacenter` match is
 `{"scope":"listed_datacenter_range"}` and a `proxy` match is
 `{"protocols":["http","socks5"],"scope":"listed_open_proxy"}`. These objects are in the
 `detail: true` response; the default response and the RPC message carry `true` for a
@@ -742,6 +744,7 @@ relabel old data as newly updated.
 | [X4BNet lists_vpn](https://github.com/X4BNet/lists_vpn) `output/vpn` | Netblocks of common VPN providers, built by the project from ASN data. A match shows the address belongs to a listed VPN network, not that this visitor is hiding anything. Incomplete; unlisted VPNs stay unknown. | MIT (the project's statement; its ASN input, IPLocate, is CC BY-SA 4.0 and is credited in the manifest). The license text is pinned and retained. | 7 days from the last commit changing the lists. |
 | [Joe12387 Open Source VPN IP Lists](https://github.com/Joe12387/open-source-vpn-ip-lists) | Exact IPv4/IPv6 addresses from ten provider-server lists: AirVPN, IVPN, Mullvad, NordVPN, OVPN, PIA, ProtonVPN, RiseupVPN, Surfshark and Windscribe. The upstream describes first-party provider data, including entry addresses: association is not proof of egress, and retired IPs may linger. No CIDR expansion or hosting inference. Does not include PrivateVPN (which is different from PIA). | CC0-1.0; exact license pinned and retained in the manifest. | 7 days from the earlier of the README's declared publication day (UTC midnight) and its commit time. |
 | [Gluetun provider servers](https://github.com/qdm12/gluetun-servers/tree/main/pkg/servers) | Separate exact-address inventories for PrivateVPN, CyberGhost, ExpressVPN, PureVPN, VPN Unlimited, Privado, FastestVPN and VPNSecure, collected by Gluetun from provider connection-server data. Uses `listed_vpn_server`, not verified browsing exits; entry/exit addresses may differ and retired addresses may linger. No accounts, profiles, live VPN sessions or ASN expansion. | MIT; exact license pinned and retained in the manifest. | 45 days from the earlier of the embedded collection timestamp and the data-file commit time; upstream refreshes monthly. |
+| [WhoisXML ipgeo Community](https://github.com/whois-api-llc/ipgeo-community) VPN CSV | Published IPv4 VPN ranges with optional provider names and `asn`, `x4bnet` or `cluster` classification basis. Uses `listed_vpn_range`, not verified exits; ASN/cluster inference can be overinclusive and overlap existing sources. Does not cover the five PrivateVPN exits reviewed in November 2026. | CC BY-SA 4.0; license, attribution and X4B notices are pinned and retained. | 14 days from the earlier of the release's declared date (UTC midnight) and GitHub publication time; upstream publishes weekly. |
 | X4BNet lists_vpn `output/datacenter` | Networks that are "not an eyeball network": VPN and datacenter/hosting ASNs, selected partly by name keywords. Overlaps `hosting` and `vpn`; shared or CDN space is included. | Same X4B/IPLocate terms as the VPN ranges. | 7 days. |
 | [monosans/proxy-list](https://github.com/monosans/proxy-list) | Public HTTP, SOCKS4 and SOCKS5 proxy addresses that the upstream tested as working. Only the listening address is matched, without port. A proxy can exit through another address, and these lists change by the hour. | MIT; exact license pinned and retained in the manifest. | 6 hours from the last commit changing the list. |
 | [DB-IP ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) | Monthly IPv4/IPv6 ASN number and organization, with reduced coverage/accuracy. ASN is not visitor identity, geolocation or hosting proof. | CC BY 4.0. | 45 days from the earlier of the release month and actual MMDB build time. |
@@ -759,8 +762,16 @@ Where these results are used, credit the data, for example
 `IP address data powered by <a href="https://www.iplocate.io">IPLocate.io</a>`, and
 keep the manifest's license and attribution text with any redistributed copy. ShareAlike
 applies if you redistribute the ranges themselves, so do not publish `network.json`:
-this project's repository and images contain no ranges, and the API returns only a scope
-label.
+this project's repository and images contain no ranges, and the API returns individual
+fact evidence, not downloadable inventories.
+
+**WhoisXML Community attribution:** credit [WhoisXML API / ipgeo Community Edition](https://github.com/whois-api-llc/ipgeo-community)
+under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), including its
+DB-IP, IPtoASN and X4B/IPLocate notices. The manifest retains the complete upstream
+`LICENSE`, `ATTRIBUTION.txt` and `VPN-ATTRIBUTION.txt` and notes our modification to
+retain only VPN ranges, provider labels and classification basis. Preserve these
+notices and license any redistributed derivative dataset under CC BY-SA 4.0;
+the application's MIT license does not cover the data.
 
 Build the native validator, then refresh a directory outside the repository:
 
@@ -796,13 +807,18 @@ address.
 Upgrade API readers before the network updater. Optional host-list sources are
 `vpn_servers`, `privatevpn_servers`, `cyberghost_servers`, `expressvpn_servers`,
 `purevpn_servers`, `vpnunlimited_servers`, `privado_servers`, `fastestvpn_servers`
-and `vpnsecure_servers`. Readers must
+and `vpnsecure_servers`; the optional range source is `ipgeo_vpn`. Readers must
 support the new fields before publishing them; older readers reject unknown
 fields and retain their last-good manifest. Each source refreshes and expires
 independently: one provider failing never renews another's timestamps or blocks
 a fresh match. Existing X4B matches keep their original scope and provenance,
 followed by Joe12387, PrivateVPN, CyberGhost, ExpressVPN, PureVPN, VPN Unlimited
-Privado, FastestVPN and VPNSecure. FastestVPN includes OpenVPN and WireGuard
+Privado, FastestVPN and VPNSecure, with WhoisXML Community as the final fallback.
+A stale earlier match cannot block a fresh later match. WhoisXML CSV bytes and row
+counts are checked against the release manifest's SHA-256 and size; unexpected schemas,
+licenses or attribution changes fail closed without renewing the previous snapshot.
+Only the small VPN CSV and notices are downloaded, not the geolocation database.
+FastestVPN includes OpenVPN and WireGuard
 records, deduplicated by address; the other Gluetun sources require OpenVPN.
 The Joe12387 aggregate is refreshed only when all ten files succeed;
 each Gluetun provider is validated and published separately. Schema versions are
