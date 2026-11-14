@@ -1,10 +1,18 @@
 use std::{collections::BTreeMap, io::BufReader, time::Duration};
 
+use axum::{
+    Json,
+    extract::{FromRequest, Request, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use deadpool_postgres::{Manager, Pool};
 use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::{Config, Transaction, config::SslMode};
 use tokio_postgres_rustls::MakeRustlsConnect;
+
+use crate::check::ApiError;
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 const MIGRATION_LOCK: i64 = 0x4f46505649534954;
@@ -212,6 +220,19 @@ impl Store {
         scope.is_none_or(valid_scope) && (!self.require_scope || scope.is_some())
     }
 
+    fn partition(&self, scope: Option<&str>) -> String {
+        scope.or(self.default_scope.as_deref()).map_or_else(
+            || self.namespace.clone(),
+            |scope| {
+                format!(
+                    "{}:scope:v1:{}",
+                    self.namespace,
+                    crate::check::sha256(scope)
+                )
+            },
+        )
+    }
+
     pub async fn resolve(
         &self,
         scope: Option<&str>,
@@ -221,16 +242,7 @@ impl Store {
         if !self.valid_scope(scope) {
             return Decision::unknown("invalid_scope");
         }
-        let namespace = scope.or(self.default_scope.as_deref()).map_or_else(
-            || self.namespace.clone(),
-            |scope| {
-                format!(
-                    "{}:scope:v1:{}",
-                    self.namespace,
-                    crate::check::sha256(scope)
-                )
-            },
-        );
+        let namespace = self.partition(scope);
         if record.namespace.as_deref() != Some(self.namespace()) {
             return Decision::unknown("namespace_mismatch");
         }
@@ -390,6 +402,69 @@ impl Store {
         })
     }
 
+    /// Deletes one visitor, with its aliases, rule indexes and frozen decisions, from one
+    /// customer partition. `Ok(false)` when the partition has no such visitor.
+    pub async fn delete_visitor(&self, scope: Option<&str>, visitor: &str) -> Result<bool, ()> {
+        if !self.valid_scope(scope) || !crate::identify::valid_id(visitor) {
+            return Err(());
+        }
+        let namespace = self.partition(scope);
+        tokio::time::timeout(TIMEOUT, self.delete_inner(&namespace, visitor))
+            .await
+            .map_err(|_| ())?
+    }
+
+    async fn delete_inner(&self, namespace: &str, visitor: &str) -> Result<bool, ()> {
+        let mut client = self.pool.get().await.map_err(|_| ())?;
+        let transaction = client.transaction().await.map_err(|_| ())?;
+        transaction.batch_execute("SET LOCAL statement_timeout = '1500ms'; SET LOCAL lock_timeout = '1000ms'; SET LOCAL synchronous_commit = on")
+            .await.map_err(|_| ())?;
+        transaction
+            .execute(
+                "SELECT pg_advisory_xact_lock_shared($1)",
+                &[&MIGRATION_LOCK],
+            )
+            .await
+            .map_err(|_| ())?;
+        // A concurrent resolve reaches this visitor only through one of its exact aliases or its
+        // rule signatures, and holds that lock while it adds an alias or a decision.
+        let mut locks = Vec::new();
+        for row in transaction.query("SELECT site, fingerprint FROM of_fingerprints WHERE namespace=$1 AND visitor_id=$2",
+            &[&namespace, &visitor]).await.map_err(|_| ())? {
+            locks.push(lock_key(namespace, row.get(0), "exact", row.get(1)));
+        }
+        for row in transaction.query("SELECT site, rule, signature FROM of_rule_indexes WHERE namespace=$1 AND visitor_id=$2",
+            &[&namespace, &visitor]).await.map_err(|_| ())? {
+            locks.push(lock_key(namespace, row.get(0), row.get(1), row.get(2)));
+        }
+        locks.sort_unstable();
+        locks.dedup();
+        for key in locks {
+            transaction
+                .execute("SELECT pg_advisory_xact_lock($1)", &[&key])
+                .await
+                .map_err(|_| ())?;
+        }
+        // ponytail: scans the partition's decisions, which live at most an hour; index
+        // decision->>'visitorId' if one partition ever holds millions of them.
+        transaction
+            .execute(
+                "DELETE FROM of_resolutions WHERE namespace=$1 AND decision->>'visitorId'=$2",
+                &[&namespace, &visitor],
+            )
+            .await
+            .map_err(|_| ())?;
+        let deleted = transaction
+            .execute(
+                "DELETE FROM of_visitors WHERE namespace=$1 AND visitor_id=$2",
+                &[&namespace, &visitor],
+            )
+            .await
+            .map_err(|_| ())?;
+        transaction.commit().await.map_err(|_| ())?;
+        Ok(deleted > 0)
+    }
+
     pub async fn prune(&self) -> Result<u64, ()> {
         tokio::time::timeout(TIMEOUT, async {
             let client = self.pool.get().await.map_err(|_| ())?;
@@ -397,6 +472,38 @@ impl Store {
                 .await.map_err(|_| ())
         }).await.map_err(|_| ())?
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DeleteRequest {
+    visitor_id: String,
+    visitor_scope: Option<String>,
+}
+
+pub(crate) async fn delete(
+    State(state): State<std::sync::Arc<crate::check::AppState>>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    state.reject_browsers(request.headers())?;
+    let Json(input) = Json::<DeleteRequest>::from_request(request, &())
+        .await
+        .map_err(crate::check::json_error)?;
+    let scope = input.visitor_scope.as_deref();
+    let Some(store) = &state.visitors else {
+        return Err(ApiError(StatusCode::NOT_FOUND, "not_configured"));
+    };
+    if !store.valid_scope(scope)
+        || scope.is_some_and(|scope| !valid_scope(scope))
+        || !crate::identify::valid_id(&input.visitor_id)
+    {
+        return Err(ApiError::invalid());
+    }
+    let deleted = store
+        .delete_visitor(scope, &input.visitor_id)
+        .await
+        .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"))?;
+    Ok(Json(serde_json::json!({"deleted": deleted})).into_response())
 }
 
 pub(crate) fn valid_scope(scope: &str) -> bool {

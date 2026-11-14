@@ -9,6 +9,7 @@ A self-hosted, MIT-licensed backend companion to the browser SDK. It has two lis
   an hour, and answers with an `identificationId`.
 - **Internal, `POST /v1/check` (and the same check over Connect/gRPC):** your backend sends
   the `identificationId` with any email, domain or IP and gets independent verdicts.
+  `POST /v1/visitors/delete` deletes one visitor from reconciliation.
 
 **The internal listener has no authentication.** Keep it on a private network behind
 your own backend, gateway or NetworkPolicy; see [Security](#security).
@@ -1029,7 +1030,26 @@ This removes both legacy and scoped data for the deployment. For one customer on
 compute its exact partition key as described above and delete by equality instead.
 Visitor deletion cascades to exact aliases and rule indexes. Coordinate deletion with
 writers and backup retention; ongoing traffic can create new identities. There is no
-public deletion or account-linking endpoint.
+account-linking endpoint.
+
+To delete one visitor, call the internal endpoint instead of running SQL:
+
+```json
+POST /v1/visitors/delete
+{"visitorId":"<visitor ID>","visitorScope":"customer-account-id"}
+```
+
+It removes that visitor, its exact aliases, rule indexes and any unexpired frozen decision
+that returns it, in a single transaction, and answers `{"deleted":true}`, or
+`{"deleted":false}` when the partition has no such visitor (so repeating it is safe).
+`visitorScope` selects the partition exactly as in `/v1/check`, is required when
+`OPENFINGERPRINT_VISITOR_REQUIRE_SCOPE=true`, and a visitor ID is never found in another
+partition: a gateway must inject the scope from the authenticated account, never trust the
+caller's. A browser `Origin` header is refused, like on `/v1/check`. It returns `404
+not_configured` without PostgreSQL and `503 unavailable` when the database cannot commit
+the deletion. The visitor's next visit gets a new ID. It takes the same locks as
+reconciliation, so a concurrent check either finishes first or sees a new visitor. Backups
+keep their own retention. There is no gRPC form.
 
 #### Forward migrations and later rules
 

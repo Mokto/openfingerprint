@@ -38,6 +38,7 @@ fn app(state: Arc<check::AppState>) -> Router {
         Router::new()
             .route("/health", get(|| async { "ok" }))
             .route("/v1/check", post(check::check))
+            .route("/v1/visitors/delete", post(visitor::delete))
             .merge(rpc::routes(state.clone()))
             .layer(DefaultBodyLimit::max(check::BODY_LIMIT))
             .with_state(state),

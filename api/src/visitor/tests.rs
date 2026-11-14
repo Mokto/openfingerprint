@@ -768,3 +768,223 @@ async fn independently_labelled_synthetic_cases_expose_splits_and_indistinguisha
     );
     db.cleanup().await;
 }
+
+async fn call_delete(
+    state: &std::sync::Arc<crate::check::AppState>,
+    origin: bool,
+    body: Value,
+) -> (axum::http::StatusCode, Value) {
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .header("content-type", "application/json");
+    if origin {
+        request = request.header("origin", "https://evil.example");
+    }
+    let request = request
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = match delete(axum::extract::State(state.clone()), request).await {
+        Ok(response) => response,
+        Err(error) => axum::response::IntoResponse::into_response(error),
+    };
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn deletion_endpoint_validates_before_touching_the_store() {
+    let id = crate::identify::new_id().unwrap();
+    let mut state = crate::check::tests::state();
+    let state_without_store = std::sync::Arc::new(crate::check::tests::state());
+    assert_eq!(
+        call_delete(&state_without_store, false, json!({"visitorId": id})).await,
+        (
+            axum::http::StatusCode::NOT_FOUND,
+            json!({"error": "not_configured"})
+        )
+    );
+    state.visitors = Some(
+        Store::new(
+            Config::new(),
+            "study".into(),
+            rustls::RootCertStore::empty(),
+            None,
+            true,
+        )
+        .unwrap(),
+    );
+    let state = std::sync::Arc::new(state);
+    assert_eq!(
+        call_delete(&state, true, json!({"visitorId": id, "visitorScope": "a"}))
+            .await
+            .1,
+        json!({"error": "origin_not_allowed"})
+    );
+    for body in [
+        json!({"visitorId": id}),
+        json!({"visitorId": id, "visitorScope": "not valid"}),
+        json!({"visitorId": "short", "visitorScope": "a"}),
+        json!({"visitorId": id, "visitorScope": "a", "extra": 1}),
+        json!({"visitorScope": "a"}),
+    ] {
+        assert_eq!(
+            call_delete(&state, false, body).await,
+            (
+                axum::http::StatusCode::BAD_REQUEST,
+                json!({"error": "invalid_request"})
+            )
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn deleting_a_visitor_removes_it_from_its_customer_scope_only() {
+    let db = Database::new().await;
+    let store = db.store("study");
+    store.migrate().await.unwrap();
+    let observation = record();
+    let mut locale = record();
+    change(&mut locale, "hints", "locale", "travel");
+    let a = store
+        .resolve(Some("customer-a"), "a-first", &observation)
+        .await
+        .visitor_id
+        .unwrap();
+    let alias = store.resolve(Some("customer-a"), "a-locale", &locale).await;
+    assert_eq!(alias.visitor_id.as_deref(), Some(a.as_str()));
+    let b = store
+        .resolve(Some("customer-b"), "b-first", &observation)
+        .await
+        .visitor_id
+        .unwrap();
+    let legacy = store
+        .resolve(None, "legacy-first", &observation)
+        .await
+        .visitor_id
+        .unwrap();
+    let rows = |table: &'static str, id: &str| {
+        let id = id.to_owned();
+        let pool = store.pool.clone();
+        async move {
+            pool.get()
+                .await
+                .unwrap()
+                .query_one(
+                    &format!("SELECT count(*) FROM {table} WHERE visitor_id = $1"),
+                    &[&id],
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0)
+        }
+    };
+    assert_eq!(rows("of_fingerprints", &a).await, 2);
+    assert_eq!(rows("of_rule_indexes", &a).await, 1);
+    let frozen = |id: String| {
+        let pool = store.pool.clone();
+        async move {
+            pool.get()
+                .await
+                .unwrap()
+                .query_one(
+                    "SELECT count(*) FROM of_resolutions WHERE decision->>'visitorId' = $1",
+                    &[&id],
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0)
+        }
+    };
+    assert_eq!(frozen(a.clone()).await, 2);
+
+    for (scope, id) in [
+        (Some("customer-b"), a.as_str()),
+        (Some("customer-a"), b.as_str()),
+        (None, a.as_str()),
+        (Some("customer-c"), a.as_str()),
+    ] {
+        assert_eq!(store.delete_visitor(scope, id).await, Ok(false));
+    }
+    for id in [&a, &b, &legacy] {
+        assert_eq!(rows("of_visitors", id).await, 1);
+    }
+
+    assert_eq!(store.delete_visitor(Some("customer-a"), &a).await, Ok(true));
+    assert_eq!(
+        store.delete_visitor(Some("customer-a"), &a).await,
+        Ok(false)
+    );
+    for table in ["of_visitors", "of_fingerprints", "of_rule_indexes"] {
+        assert_eq!(rows(table, &a).await, 0, "{table}");
+    }
+    assert_eq!(frozen(a.clone()).await, 0);
+    for (scope, id) in [(Some("customer-b"), &b), (None, &legacy)] {
+        assert_eq!(rows("of_visitors", id).await, 1);
+        assert_eq!(
+            store
+                .resolve(scope, "unchanged", &observation)
+                .await
+                .visitor_id,
+            Some(id.clone())
+        );
+    }
+    assert_eq!(
+        store
+            .resolve(Some("customer-b"), "b-first", &observation)
+            .await
+            .visitor_id,
+        Some(b)
+    );
+
+    let again = store
+        .resolve(Some("customer-a"), "a-first", &observation)
+        .await;
+    assert_eq!(again.method.as_deref(), Some("new"));
+    assert_ne!(again.visitor_id.as_deref(), Some(a.as_str()));
+    db.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires disposable PostgreSQL"]
+async fn deletion_racing_a_resolve_never_leaves_a_decision_for_the_deleted_visitor() {
+    let db = Database::new().await;
+    let store = std::sync::Arc::new(db.store("study"));
+    store.migrate().await.unwrap();
+    let observation = std::sync::Arc::new(record());
+    for round in 0..200 {
+        let scope = format!("customer-{round}");
+        let visitor = store
+            .resolve(Some(&scope), "first", &observation)
+            .await
+            .visitor_id
+            .unwrap();
+        let resolve = tokio::spawn({
+            let (store, scope, observation) = (store.clone(), scope.clone(), observation.clone());
+            async move { store.resolve(Some(&scope), "second", &observation).await }
+        });
+        let delete = tokio::spawn({
+            let (store, scope, visitor) = (store.clone(), scope.clone(), visitor.clone());
+            async move { store.delete_visitor(Some(&scope), &visitor).await }
+        });
+        resolve.await.unwrap();
+        assert_eq!(delete.await.unwrap(), Ok(true));
+        let orphans: i64 = store
+            .pool
+            .get()
+            .await
+            .unwrap()
+            .query_one(
+                "SELECT count(*) FROM of_resolutions WHERE decision->>'visitorId' = $1",
+                &[&visitor],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(orphans, 0, "round {round}");
+    }
+    db.cleanup().await;
+}
