@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/Mokto/openfingerprint/compare/api-v0.25.0...api-v0.26.0) (2026-11-14)
+
+
+### Features
+
+* **api:** add WhoisXML ipgeo Community VPN ranges as an independent source ([#139](https://github.com/Mokto/openfingerprint/issues/139)) ([2539ff7](https://github.com/Mokto/openfingerprint/commit/2539ff79f361afd2385a7e2bca395dabcb22e2ff))
+
 ## [0.25.0](https://github.com/Mokto/openfingerprint/compare/api-v0.24.0...api-v0.25.0) (2026-11-14)
 
 
