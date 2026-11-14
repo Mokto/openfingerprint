@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/Mokto/openfingerprint/compare/api-v0.24.0...api-v0.25.0) (2026-11-14)
+
+
+### Features
+
+* **api:** add internal endpoint to delete one visitor from reconciliation ([#137](https://github.com/Mokto/openfingerprint/issues/137)) ([5d2c57b](https://github.com/Mokto/openfingerprint/commit/5d2c57b51c6d1a819e2df75d49455e74f1017ef3))
+
 ## [0.24.0](https://github.com/Mokto/openfingerprint/compare/api-v0.23.0...api-v0.24.0) (2026-11-13)
 
 
