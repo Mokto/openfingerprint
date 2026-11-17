@@ -324,6 +324,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn partial_probe_diagnostics_match_rest_and_keep_zero_timings() {
+        let (addr, _) = crate::cache::tests::fake_redis(None).await;
+        let state = crate::check::tests::state_with_redis(&addr);
+        let id = "diagnostic000000000000";
+        let mut record = record(Some(CHROME_JA4));
+        record.evidence["fingerprint"] = Value::Null;
+        record.evidence["unavailable"] =
+            serde_json::json!({"audio": "timeout", "gpu": "unsupported"});
+        record.evidence["timings"] =
+            serde_json::json!({"audio": {"durationMs": 2000, "blockingMs": 0}});
+        record.evidence["durationMs"] = serde_json::json!(2000);
+        state.identifications.store(id, &record).await.unwrap();
+        let rpc = parity(&state, id).await;
+        let detail = rpc.identification.as_option().unwrap();
+        assert_eq!(detail.status.as_deref(), Some("insufficient_signals"));
+        assert!(detail.visitor_id.is_none());
+        let evidence = detail.evidence.as_option().unwrap();
+        assert_eq!(
+            evidence.unavailable.get("audio").map(String::as_str),
+            Some("timeout")
+        );
+        assert_eq!(
+            evidence.unavailable.get("gpu").map(String::as_str),
+            Some("unsupported")
+        );
+        assert_eq!(evidence.duration_ms, Some(2000.0));
+        assert_eq!(evidence.timings["audio"].duration_ms, Some(2000.0));
+        assert_eq!(evidence.timings["audio"].blocking_ms, Some(0.0));
+        let compact = respond(&state, input(Some(id.into()), Some(false)))
+            .await
+            .unwrap();
+        assert!(!compact.identification.is_set());
+    }
+
+    #[tokio::test]
     async fn click_flag_keeps_true_false_and_unknown_in_both_shapes() {
         let (addr, _) = crate::cache::tests::fake_redis(None).await;
         let state = crate::check::tests::state_with_redis(&addr);

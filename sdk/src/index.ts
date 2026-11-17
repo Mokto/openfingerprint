@@ -596,12 +596,13 @@ export async function collect(options: Options = {}): Promise<Result> {
 			else (name in environment ? result.hints : result.components)[name] = done.hash;
 		};
 		const audioJob = excluded.has('audio') ? null : run('audio');
-		// Finish each cheap probe's hash before GPU initialization can block the
-		// main thread past the deadline and discard those earlier observations.
-		for (const name of Object.keys(probes) as Name[])
-			if (name !== 'audio' && name !== 'gpu' && !excluded.has(name)) await run(name);
+		for (const name of Object.keys(environment) as Name[])
+			if (!excluded.has(name)) await run(name);
+		const preferencesJob = run('fontPreferences');
+		for (const name of ['canvas', 'fonts', 'fontFallbacks'] as const)
+			if (!excluded.has(name)) await run(name);
 		await run('gpu');
-		await audioJob;
+		await Promise.all([audioJob, preferencesJob]);
 		Object.assign(result.automation, await asyncAutomation);
 		result.tampering = await tampering;
 		const entries = Object.entries(result.components)

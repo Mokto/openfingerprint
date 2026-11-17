@@ -822,10 +822,50 @@ try {
 				assert.equal(deadline.result.coreFingerprint, null);
 				assert.equal(deadline.result.unavailable.fonts, 'timeout');
 				assert.equal(deadline.result.unavailable.audio, 'timeout');
+				assert.equal(Object.keys(deadline.result.hints).length, 10, 'Slow font work must not discard cheap environment hints');
 				assert.equal(await delayed.locator('iframe').count(), 0);
 				await delayed.close();
 			}
 			report.checks.push({ browser: name, check: 'Logical expiry before reads or after yields cancels concurrent audio even with a delayed abort timer', passed: true });
+
+			const blockedPreferences = await fresh(() => {
+				const append = Element.prototype.append;
+				Element.prototype.append = function (...nodes) {
+					for (const node of nodes)
+						if (node instanceof HTMLIFrameElement && node.title === 'Fraud-prevention font preferences') node.onload = null;
+					return append.apply(this, nodes);
+				};
+			});
+			const partial = await blockedPreferences.evaluate(() => OpenFingerprint.collect());
+			valid(partial);
+			assert.equal(partial.unavailable.fontPreferences, 'timeout');
+			assert.equal(Object.keys(partial.hints).length, 10 - Number(partial.excluded.includes('screen')));
+			assert.notEqual(partial.unavailable.fonts, 'timeout');
+			assert.notEqual(partial.unavailable.fontFallbacks, 'timeout');
+			assert.notEqual(partial.unavailable.gpu, 'timeout');
+			assert.equal(partial.fingerprint, null);
+			assert.equal(await blockedPreferences.locator('iframe').count(), 0);
+			await blockedPreferences.close();
+			report.checks.push({ browser: name, check: 'A stalled font-preference frame does not starve hints, other fonts or GPU; identity remains unknown', passed: true });
+
+			if (values.references && ['chromium', 'chrome'].includes(name)) {
+				for (const rate of [1, 4, 6]) {
+					const busy = await fresh();
+					const session = await context.newCDPSession(busy);
+					await session.send('Emulation.setCPUThrottlingRate', { rate });
+					await busy.addScriptTag({ url: `${origin}/fpjs.js` });
+					const result = await busy.evaluate(async () => {
+						const agent = await Reference.load({ monitoring: false });
+						const [ours] = await Promise.all([OpenFingerprint.collect(), agent.get()]);
+						return ours;
+					});
+					valid(result);
+					assert.equal(Object.keys(result.hints).length, 10);
+					report.measurements.push({ browser: name, library: 'custom', scenario: 'concurrent-open-source-fpjs', cpuSlowdown: rate, durationMs: result.durationMs, components: Object.keys(result.components).length, hints: Object.keys(result.hints).length, unavailable: result.unavailable, complete: !!result.fingerprint });
+					await session.detach();
+					await busy.close();
+				}
+			}
 
 			const cancelled = await page.evaluate(() => OpenFingerprint.collect({ timeoutMs: 1 }));
 			valid(cancelled);

@@ -468,6 +468,26 @@ Counts describe the submitted, validated evidence, not entropy, probability,
 confidence, a risk score or honest probe execution. Included counts omit excluded
 probes. Unavailable and excluded counts are separate and may overlap.
 
+With `detail: true`, `identification.evidence` also contains `durationMs` and
+optional `unavailable` and `timings` maps. `unavailable` maps known SDK probe names
+to `unsupported`, `unstable`, `timeout` or `error`; `timings` maps those names to
+`{ "durationMs": number, "blockingMs": number }`. Only the six schema-1 components
+and ten hints listed by the SDK can appear as keys, never arbitrary submitted
+names or values. Counts may therefore exceed map sizes for other accepted names.
+Empty maps are omitted. Older evidence without timings has no timing entries;
+an observed zero remains zero, not unknown. `durationMs` is the reported total
+collection duration, not server lookup or network latency. `blockingMs` covers
+only the initial synchronous portion of that probe call, not cumulative CPU time.
+
+These already-submitted, bounded diagnostics are returned for valid partial
+identifications too, so a failed collection can be diagnosed without returning
+profile hashes or raw probes. They remain forgeable client reports, introduce no
+new collection, retention, logging or outbound requests, and never affect matching
+or verdicts. Missing, invalid, expired or unavailable evidence has no diagnostics.
+The compact response is unchanged. RPC clients must regenerate to read
+`EvidenceSummary.unavailable` (field 6), `timings` (7) and optional `duration_ms` (8).
+Keep the check listener private; hosted gateways must authenticate backend callers.
+
 The API verifies full profile hashes inside the submitted evidence but never returns
 them or the partial identity-group hashes. Those hashes remain internal matching inputs.
 Removing them from responses does not add customer isolation: deployments still need a
@@ -1156,7 +1176,7 @@ For example, using an ID returned by the public listener:
 | `origin`, `ja4`, `tlsClient` | The origin and TLS observations of the public identify listener. An unlisted JA4 has no `tlsClient`; it is unknown, not a mismatch. |
 | `automation`, `tampering`, `spoofing` | Typed `status`, `indicators`, `ruleVersion`, `unavailableProbes`, `source` and optional `reason`. An unknown verdict stays `unknown`; it does not turn into `false`. |
 | `behavior` | Typed `status`, `patterns`, `ruleVersion`, `source`, optional `reason` and optional `suspiciousClickPattern`. The flag is unset when evidence is insufficient; false stays explicitly present. Absent without `watch()` evidence; patterns and the flag are context, not a verdict. |
-| `evidence` | Counts only: `includedComponents`, `includedHints`, `unavailableProbes` and `excludedProbes`. No profile hashes, raw probes or behavioral input counts are returned. |
+| `evidence` | Counts (`includedComponents`, `includedHints`, `unavailableProbes`, `excludedProbes`), optional known-probe `unavailable`/`timings` maps and reported `durationMs`, also for valid partial evidence. No profile hashes, raw probes or behavioral input counts are returned. |
 
 Unset optional scalars and absent messages mean unknown/missing, never false or zero.
 An explicitly observed zero count remains present. Repeated fields and maps are empty

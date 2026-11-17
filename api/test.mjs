@@ -293,7 +293,10 @@ const identified = async (evidence, headers) => {
 	return response.body.identificationId;
 };
 /** What /v1/check reports about the identification apart from what the connection decides. */
-const core = ({ status, schema_version, evidence }) => ({ status, schema_version, evidence });
+const core = ({ status, schema_version, evidence }) => {
+    const { includedComponents, includedHints, unavailableProbes, excludedProbes } = evidence ?? {};
+    return { status, schema_version, evidence: evidence && { includedComponents, includedHints, unavailableProbes, excludedProbes } };
+};
 async function request(path, headers, body, method = 'POST') {
 	return fetch(origin + path, {
 		method,
@@ -437,8 +440,15 @@ try {
         if ('domain' in selected) expected.domain = domainExpected();
         if ('ip' in selected) expected.ip = unknown;
         assert.deepEqual(rest, expected);
-        if ('identificationId' in selected) assert.deepEqual(core(identification), checkedProfile(input));
-        else assert.equal(identification, undefined);
+        if ('identificationId' in selected) {
+            assert.deepEqual(core(identification), checkedProfile(input));
+            assert.deepEqual(identification.evidence, {
+                ...checkedProfile(input).evidence,
+                unavailable: input.unavailable,
+                timings: input.timings,
+                durationMs: input.durationMs
+            });
+        } else assert.equal(identification, undefined);
     }
 
     phase = 'automation evidence, unknowns and invalid parts';
@@ -666,7 +676,10 @@ try {
         while (i < body.length) {
             const tag = varint();
             if ((tag & 7) === 0) fields[tag >> 3] = varint();
-            else {
+            else if ((tag & 7) === 1) {
+                fields[tag >> 3] = body.readDoubleLE(i);
+                i += 8;
+            } else {
                 assert.equal(tag & 7, 2);
                 const size = varint();
                 fields[tag >> 3] = body.subarray(i, i + size);
@@ -688,7 +701,16 @@ try {
     assert.equal(protobufFields(wireDetail[11])[1].toString(), 'unknown');
     assert.equal(protobufFields(wireDetail[12])[1].toString(), 'unknown');
     assert.equal(protobufFields(wireDetail[14])[4].toString(), 'clicks_without_movement');
-    assert.equal(protobufFields(wireDetail[5])[2], 2);
+    const wireEvidence = protobufFields(wireDetail[5]);
+    assert.equal(wireEvidence[2], 2);
+    assert.equal(wireEvidence[8], restDetail.evidence.durationMs);
+    const unavailableEntry = protobufFields(wireEvidence[6]);
+    assert.equal(unavailableEntry[2].toString(), restDetail.evidence.unavailable[unavailableEntry[1].toString()]);
+    const timingEntry = protobufFields(wireEvidence[7]);
+    assert.equal(timingEntry[1].toString(), 'fontPreferences');
+    const timing = protobufFields(timingEntry[2]);
+    assert.equal(timing[1], restDetail.evidence.timings.fontPreferences.durationMs);
+    assert.equal(timing[2], restDetail.evidence.timings.fontPreferences.blockingMs);
     for (const id of ['short', 'AAAAAAAAAAAAAAAAAAAAAA']) {
         const response = await (await connectCheck({ identificationId: id, detail: true })).json();
         const expected = (await (await request('/v1/check', {}, { identificationId: id })).json()).identification;
