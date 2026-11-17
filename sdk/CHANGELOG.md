@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/Mokto/openfingerprint/compare/sdk-v0.13.0...sdk-v0.13.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **sdk:** collect environment hints before fonts and expose probe diagnostics in API evidence ([#144](https://github.com/Mokto/openfingerprint/issues/144)) ([696d693](https://github.com/Mokto/openfingerprint/commit/696d693f664a8351a91444cc03574c024ba4faf8))
+
 ## [0.13.0](https://github.com/Mokto/openfingerprint/compare/sdk-v0.12.0...sdk-v0.13.0) (2026-11-13)
 
 

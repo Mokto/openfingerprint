@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.26.1](https://github.com/Mokto/openfingerprint/compare/api-v0.26.0...api-v0.26.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **data:** refresh open domain snapshot (2026-11-16) ([#142](https://github.com/Mokto/openfingerprint/issues/142)) ([8276e07](https://github.com/Mokto/openfingerprint/commit/8276e07a648ac54d81831e3f49191477110755a0))
+* **sdk:** collect environment hints before fonts and expose probe diagnostics in API evidence ([#144](https://github.com/Mokto/openfingerprint/issues/144)) ([696d693](https://github.com/Mokto/openfingerprint/commit/696d693f664a8351a91444cc03574c024ba4faf8))
+
 ## [0.26.0](https://github.com/Mokto/openfingerprint/compare/api-v0.25.0...api-v0.26.0) (2026-11-14)
 
 
