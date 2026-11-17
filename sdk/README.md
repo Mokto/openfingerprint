@@ -254,7 +254,10 @@ before) and `ageMs` (time since the listener stored it, by the API's clock). An
 identification lives for an hour. Your backend can also compare the connection's IP
 address with what it expects and rate-limit by IP or, when visitor reconciliation is
 configured, `visitorId`. Checks do not return profile hashes, even with detail. See the
-[API guide](../api/README.md) for the full response.
+[API guide](../api/README.md) for the full response. With `detail: true`, valid
+identifications also expose known probes' availability states, collection duration
+and per-probe timings, including partial evidence. These are client-reported
+diagnostics, not attested execution times or identity inputs.
 
 ### Cooperative batching
 
@@ -266,6 +269,12 @@ paint nor an input-latency bound. A single native call, GPU initialization or ot
 browser work can still block longer than a slice. This targets responsiveness,
 not a guaranteed reduction in total collection time. The default budget remains
 two seconds.
+
+Environment hints finish before font work. Font-preference frame loading overlaps
+canvas and canvas-font measurements instead of holding up every later probe.
+A slow font probe therefore does not erase unrelated hints or prevent those other
+probes from starting. A missing required probe still leaves reconciliation unknown;
+this does not relax identity requirements or increase the budget.
 
 Version 0.5.1 checks the monotonic deadline before reads and after font-work yields,
 and aborts other pending probes whenever a deadline check observes expiry. This
@@ -333,6 +342,8 @@ canonical hashes, optional storage, availability, deadlines/cleanup, all 96 font
 candidates, time-budgeted yields, aborting a paused slice, port/frame cleanup,
 identity-before-diagnostics delivery, detached snapshots, callback failure isolation,
 delayed-timeout cancellation before reads/after yields with concurrent pending audio,
+retained hints under slow fonts, stalled font-preference frames, Chromium CPU throttling
+at 1×/4×/6× with concurrent open-source FingerprintJS collection,
 Safari-policy fixtures, retained signal detail and calibrated font-preference parity with
 FingerprintJS 5.3.0 at DPR 1, 1.25, 2 and 3. Reference collectors are development
 fixtures, not part of the standalone client. Monitoring/beacons are disabled.
@@ -364,7 +375,7 @@ establish equivalent quality.
 
 | Library         | Scheduling and latency considerations                                                                                                                                                                                                                                                                                                                                         |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| OpenFingerprint | Native audio overlaps; canvas/font/hint probes finish before GPU initialization. Font work yields by time budget. Optional early identity precedes excluded diagnostics; the final promise still includes them.                                                                                                                                                               |
+| OpenFingerprint | Native audio overlaps; hints finish first. Font-preference loading overlaps canvas/font measurements; GPU runs after canvas and canvas-font hashes. Font work yields by time budget. Optional early identity precedes excluded diagnostics; the final promise still includes them.                                                                                                                                                               |
 | FingerprintJS   | `load()` waits for idle, with a 50 ms timer fallback and a 100 ms idle-callback timeout. Source dispatch yields roughly every 16 ms between sources, not inside an individual source. Async work overlaps across its load/get phases. Font DOM writes are batched, but font measurement itself is synchronous. Each `get()` waits for all components before producing the ID. |
 | ThumbmarkJS     | Eagerly dispatches components and overlaps their promises, but synchronous font/canvas/GPU work still blocks dispatch. Per-component timeouts default to five seconds and do not interrupt native work or cap the entire pipeline. Empty speech voices can add an 800 ms wait.                                                                                                |
 

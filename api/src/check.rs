@@ -130,7 +130,7 @@ struct Evidence {
     #[serde(default)]
     timings: BTreeMap<String, Timing>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Availability {
     Unsupported,
@@ -138,7 +138,7 @@ enum Availability {
     Timeout,
     Error,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Timing {
     duration_ms: f64,
@@ -257,27 +257,28 @@ impl Evidence {
     }
 }
 
+const COMPONENTS: [&str; 6] = [
+    "audio",
+    "canvas",
+    "fontFallbacks",
+    "fontPreferences",
+    "fonts",
+    "gpu",
+];
+const HINTS: [&str; 10] = [
+    "architecture",
+    "browser",
+    "display",
+    "features",
+    "hardware",
+    "locale",
+    "math",
+    "media",
+    "platform",
+    "screen",
+];
+
 pub(crate) fn visitor_profile(value: serde_json::Value) -> Option<crate::visitor::Profile> {
-    const COMPONENTS: [&str; 6] = [
-        "audio",
-        "canvas",
-        "fontFallbacks",
-        "fontPreferences",
-        "fonts",
-        "gpu",
-    ];
-    const HINTS: [&str; 10] = [
-        "architecture",
-        "browser",
-        "display",
-        "features",
-        "hardware",
-        "locale",
-        "math",
-        "media",
-        "platform",
-        "screen",
-    ];
     let evidence: Evidence = serde_json::from_value(value).ok()?;
     if !evidence.valid() {
         return None;
@@ -420,6 +421,11 @@ struct EvidenceCounts {
     included_hints: usize,
     unavailable_probes: usize,
     excluded_probes: usize,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    unavailable: BTreeMap<&'static str, Availability>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    timings: BTreeMap<&'static str, Timing>,
+    duration_ms: f64,
 }
 
 /// A fact object (`value` plus `status`) reduced to its bare value.
@@ -568,6 +574,29 @@ pub(crate) fn check_evidence(
                 .count(),
             unavailable_probes: evidence.unavailable.len(),
             excluded_probes: evidence.excluded.len(),
+            unavailable: COMPONENTS
+                .into_iter()
+                .chain(HINTS)
+                .filter_map(|name| {
+                    evidence
+                        .unavailable
+                        .get(name)
+                        .copied()
+                        .map(|status| (name, status))
+                })
+                .collect(),
+            timings: COMPONENTS
+                .into_iter()
+                .chain(HINTS)
+                .filter_map(|name| {
+                    evidence
+                        .timings
+                        .get(name)
+                        .copied()
+                        .map(|timing| (name, timing))
+                })
+                .collect(),
+            duration_ms: evidence.duration_ms,
         });
         check.automation = evidence.automation.map(crate::automation::check);
         check.tampering = evidence.tampering.map(crate::tampering::check);
@@ -1199,6 +1228,62 @@ pub(crate) mod tests {
             assert_eq!(result.reason, Some("invalid_evidence"));
             assert!(result.evidence.is_none());
             assert!(result.profile.schema_version.is_none());
+        }
+    }
+
+    #[test]
+    fn probe_diagnostics_are_bounded_and_never_identity_inputs() {
+        let input = payload();
+        let baseline = serde_json::to_value(check_evidence(input.clone(), None, None)).unwrap();
+        let mut input = input;
+        input["unavailable"] = serde_json::json!({
+            "audio": "timeout", "gpu": "unsupported", "fonts": "unstable",
+            "fontFallbacks": "error", "private.example": "error"
+        });
+        input["timings"] = serde_json::json!({
+            "audio": {"durationMs": 2000, "blockingMs": 0},
+            "fontPreferences": {"durationMs": 1.5, "blockingMs": 0.5},
+            "private.example": {"durationMs": 1, "blockingMs": 1}
+        });
+        input["durationMs"] = serde_json::json!(2000);
+        let result = serde_json::to_value(check_evidence(input.clone(), None, None)).unwrap();
+        assert_eq!(result["status"], baseline["status"]);
+        assert_eq!(result["schema_version"], baseline["schema_version"]);
+        assert_eq!(
+            result["evidence"]["unavailable"],
+            serde_json::json!({
+                "audio": "timeout", "gpu": "unsupported", "fonts": "unstable", "fontFallbacks": "error"
+            })
+        );
+        assert_eq!(result["evidence"]["durationMs"], 2000.0);
+        assert_eq!(result["evidence"]["timings"]["audio"]["blockingMs"], 0.0);
+        assert_eq!(
+            result["evidence"]["timings"]["fontPreferences"]["durationMs"],
+            1.5
+        );
+        assert_eq!(result["evidence"]["unavailableProbes"], 5);
+        let encoded = serde_json::to_string(&result).unwrap();
+        assert!(!encoded.contains("private.example"));
+        assert!(!encoded.contains(&sha256("fixture")));
+        let mut compacted = serde_json::json!({"identification": result});
+        compact(&mut compacted);
+        assert_eq!(compacted, serde_json::json!({}));
+
+        input["fingerprint"] = serde_json::Value::Null;
+        let result = serde_json::to_value(check_evidence(input.clone(), None, None)).unwrap();
+        assert_eq!(result["status"], "insufficient_signals");
+        assert_eq!(result["evidence"]["unavailable"]["audio"], "timeout");
+        assert!(visitor_profile(input.clone()).is_none());
+
+        for duration in [
+            serde_json::json!(-1),
+            serde_json::json!(60001),
+            serde_json::json!("secret"),
+        ] {
+            input["timings"]["audio"]["durationMs"] = duration;
+            let result = check_evidence(input.clone(), None, None);
+            assert_eq!(result.profile.status, "invalid_input");
+            assert!(result.evidence.is_none());
         }
     }
 

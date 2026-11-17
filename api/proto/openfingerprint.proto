@@ -116,6 +116,14 @@ message EvidenceSummary {
   optional uint32 included_hints = 3;
   optional uint32 unavailable_probes = 4;
   optional uint32 excluded_probes = 5;
+  map<string, string> unavailable = 6;
+  map<string, ProbeTiming> timings = 7;
+  optional double duration_ms = 8;
+}
+
+message ProbeTiming {
+  optional double duration_ms = 1;
+  optional double blocking_ms = 2;
 }
 
 // The automation, tampering or spoofing rule.
