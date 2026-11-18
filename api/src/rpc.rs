@@ -557,6 +557,25 @@ mod tests {
             CheckResponse::decode_from_slice(&rpc.encode_to_vec()).unwrap(),
             rpc
         );
+        let mut gpu = crate::visitor::tests::record();
+        crate::visitor::tests::change(&mut gpu, "components", "gpu", "changed GPU capabilities");
+        let gpu_id = crate::identify::new_id().unwrap();
+        state.identifications.store(&gpu_id, &gpu).await.unwrap();
+        let matched = Box::pin(parity(&state, &gpu_id)).await;
+        assert_eq!(matched.visitor_id.as_ref(), Some(&visitor));
+        let reconciliation = matched
+            .identification
+            .as_option()
+            .unwrap()
+            .reconciliation
+            .as_option()
+            .unwrap();
+        assert_eq!(reconciliation.method.as_deref(), Some("gpu-v1"));
+        assert_eq!(reconciliation.rule_version, Some(3));
+        assert_eq!(
+            CheckResponse::decode_from_slice(&matched.encode_to_vec()).unwrap(),
+            matched
+        );
         let mut missing = crate::visitor::tests::record();
         missing.evidence = crate::check::tests::payload();
         let missing_id = crate::identify::new_id().unwrap();

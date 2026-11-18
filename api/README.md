@@ -928,8 +928,8 @@ return no browser identity.
 Statuses include `resolved`, `insufficient_evidence`, `ambiguous`, `unavailable`,
 `namespace_mismatch`, `invalid_site`, `invalid_observation_time` and
 `expired_identification`; `invalid_evidence` is returned for rejected stored evidence.
-Methods are `new`, `exact` and `locale-v1`. These are categorical decisions, not
-confidence percentages or calibrated accuracy claims.
+Methods are `new`, `exact`, `locale-v1` and `gpu-v1`. These are categorical decisions,
+not confidence percentages or calibrated accuracy claims.
 
 #### Initial rules
 
@@ -949,21 +949,30 @@ user-agent classifier.
    `locale` must equal an immutable reference profile. All four complete identity
    groups must match too, with the same schema and exclusions. This permits language
    or time-zone changes, not arbitrary hardware, software or rendering changes.
-3. Candidate retrieval is an indexed composite-signature lookup capped at eight
-   visitors plus an overflow sentinel. Multiple candidates abstain; none is selected
-   by score, ordering or group count. Existing exact mappings take precedence.
-4. Sufficient evidence without a qualifying candidate creates a visitor. Partial
+3. Migration 003 adds `gpu-v1` for complete schema-1 profiles without exclusions:
+   every component except `gpu` and all ten hints, including `locale`, must equal
+   an immutable reference. Only the GPU hash may differ. A missing or failed GPU
+   probe still prevents visitor issuance; this rule does not repair collection.
+4. Candidate retrieval uses indexed composite signatures capped at eight visitors
+   plus an overflow sentinel per rule. Multiple candidates, including different
+   visitors selected by the locale and GPU rules, abstain. None is selected by
+   score, ordering or group count. Existing exact mappings take precedence.
+5. Sufficient evidence without a qualifying candidate creates a visitor. Partial
    groups and core-only matches never authorize reconciliation.
-5. Accepted changed fingerprints become permanent exact aliases. They do not become
+6. Accepted changed fingerprints become permanent exact aliases. They do not become
    new reference profiles. Existing visitors are never automatically merged, and
    a chain of small changes cannot expand the baseline.
 
-These groups are correlated, not independent votes. The locale rule is a narrow
-experimental policy, **not independently calibrated on real devices**. Identical
-non-locale evidence can belong to different browsers; the rule can then merge their
-observations. Even exact evidence cannot distinguish identical configurations.
-Browser updates and cumulative changes outside the rule can still split a returning
-browser. Neither a visitor ID nor absence of automation establishes trust.
+These groups are correlated, not independent votes. Both drift rules are narrow
+experimental policies, **not independently calibrated on real devices**. Identical
+non-locale evidence can belong to different browsers, and distinct browsers can
+share all fifteen non-GPU probe hashes. These rules can merge their observations;
+the synthetic labelled regression deliberately exposes this tradeoff. Even exact
+evidence cannot distinguish identical configurations. Browser updates and changes
+outside a rule can still split a returning browser. Locale and GPU changes cannot
+be combined through aliases to expand an immutable reference. Neither a visitor ID
+nor absence of automation establishes trust. No external provider ID, account,
+authentication session or browser-supplied previous visitor ID authorizes matching.
 
 Automation, tampering, spoofing and behavior verdicts, network inputs, headers and
 JA4 never participate in matching. The SDK gains no probes, cache, cookies or stored
@@ -1095,9 +1104,13 @@ migration transactionally under an exclusive database advisory lock. An interrup
 migration rolls back; rerunning resumes after the last committed migration.
 
 Migration 001 establishes durable exact matching. Migration 002 backfills locale
-indexes from retained immutable reference hashes, **without assigning or merging IDs**.
-An index may reference several existing visitors; that makes future fuzzy lookups
-ambiguous while their established exact mappings stay intact.
+indexes; migration 003 backfills GPU-drift indexes from the fifteen required
+non-GPU hashes in eligible immutable references. Neither assigns or merges IDs,
+rewrites profiles or aliases, or changes frozen decisions. Missing historical inputs
+stay unsupported. An index may reference several existing visitors; that makes
+future fuzzy lookups ambiguous while their established exact mappings stay intact.
+In particular, two already-issued IDs that differ only in GPU evidence remain two
+IDs; this upgrade is not an authorized historical merge.
 
 To add a rule, add a new numbered SQL migration and register it in `MIGRATIONS` in
 `src/visitor.rs`, implement its bounded comparison and locking, and extend the labelled
@@ -1127,10 +1140,12 @@ node api/test-visitors.mjs
 ```
 
 Without that variable the runner explicitly reports a skip; CI supplies PostgreSQL.
-Tests cover exact repeats, locale changes, partial groups, incomplete evidence, site/
-namespace/customer-scope isolation, scoped defaults and required scopes, expired
-observations with persistent identities, concurrent replicas,
-frozen decisions, rule migration ambiguity, rollback/failure and REST/protobuf parity.
+Tests cover exact repeats, locale and GPU changes, rejection of additional drift,
+partial groups, incomplete evidence, Safari's exact-only policy, site/namespace/
+customer-scope isolation, scoped defaults and required scopes, expired observations
+with persistent identities, concurrent replicas, immutable references and aliases,
+frozen decisions, migration backfill ambiguity and conflicting rule candidates,
+deletion races, rollback/failure and REST/protobuf parity.
 Independently assigned **synthetic** browser labels exercise both expected false splits
 and unavoidable indistinguishable-evidence false merges; they are not real-device
 measurements or population accuracy. The existing evaluation recorder does not retain

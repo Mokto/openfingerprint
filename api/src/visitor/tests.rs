@@ -130,7 +130,7 @@ fn rehash(evidence: &mut Value) {
     .into();
 }
 
-fn change(record: &mut crate::identify::Record, section: &str, name: &str, value: &str) {
+pub(crate) fn change(record: &mut crate::identify::Record, section: &str, name: &str, value: &str) {
     record.evidence[section][name] = crate::check::sha256(value).into();
     rehash(&mut record.evidence);
 }
@@ -141,6 +141,7 @@ fn completeness_and_exclusions_are_not_group_count_heuristics() {
     let profile = crate::check::visitor_profile(baseline.evidence.clone()).unwrap();
     assert_eq!(profile.identity_groups.len(), 4);
     assert!(profile.locale_signature.is_some());
+    assert!(profile.gpu_signature().is_some());
     for (section, name) in [("components", "canvas"), ("hints", "locale")] {
         let mut missing = record();
         missing.evidence[section]
@@ -175,6 +176,7 @@ fn completeness_and_exclusions_are_not_group_count_heuristics() {
     rehash(&mut safari.evidence);
     let profile = crate::check::visitor_profile(safari.evidence).unwrap();
     assert!(profile.locale_signature.is_none());
+    assert!(profile.gpu_signature().is_none());
     assert_eq!(profile.identity_groups.len(), 2);
     let mut invalid = record();
     invalid.evidence["fingerprint"] = "a".repeat(64).into();
@@ -426,6 +428,307 @@ async fn exact_locale_partial_groups_isolation_and_persistent_aliases() {
 
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
+async fn gpu_drift_uses_the_immutable_reference_and_keeps_aliases_exact() {
+    let db = Database::new().await;
+    let store = db.store("study");
+    store.migrate().await.unwrap();
+    let baseline = record();
+    let first = store.resolve(Some("customer-a"), "first", &baseline).await;
+    assert_eq!(first.status, "resolved");
+    let mut gpu = record();
+    change(&mut gpu, "components", "gpu", "changed GPU capabilities");
+    let matched = store.resolve(Some("customer-a"), "gpu", &gpu).await;
+    assert_eq!(matched.visitor_id, first.visitor_id);
+    assert_eq!(matched.method.as_deref(), Some("gpu-v1"));
+    assert_eq!(matched.rule_version, 3);
+    assert_eq!(
+        store.resolve(Some("customer-a"), "gpu", &gpu).await,
+        matched
+    );
+    let restarted = db.store("study");
+    let alias = restarted
+        .resolve(Some("customer-a"), "gpu-alias", &gpu)
+        .await;
+    assert_eq!(alias.visitor_id, first.visitor_id);
+    assert_eq!(alias.method.as_deref(), Some("exact"));
+
+    let other_customer = store.resolve(Some("customer-b"), "gpu", &gpu).await;
+    assert_eq!(other_customer.method.as_deref(), Some("new"));
+    assert_ne!(other_customer.visitor_id, first.visitor_id);
+    let mut other_site = record();
+    other_site.evidence = gpu.evidence.clone();
+    other_site.origin = "https://other.example.test".into();
+    assert_ne!(
+        store
+            .resolve(Some("customer-a"), "other-site", &other_site)
+            .await
+            .visitor_id,
+        first.visitor_id
+    );
+
+    let mut combined = record();
+    combined.evidence = gpu.evidence.clone();
+    change(&mut combined, "hints", "locale", "changed locale too");
+    let separate = store
+        .resolve(Some("customer-a"), "no-chain", &combined)
+        .await;
+    assert_eq!(separate.method.as_deref(), Some("new"));
+    assert_ne!(separate.visitor_id, first.visitor_id);
+    let client = store.pool.get().await.unwrap();
+    let reference: Value = client
+        .query_one(
+            "SELECT profile FROM of_visitors WHERE visitor_id=$1",
+            &[&first.visitor_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(reference["components"], baseline.evidence["components"]);
+    assert_eq!(reference["hints"], baseline.evidence["hints"]);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn gpu_rule_requires_every_other_probe_and_does_not_relax_exclusions() {
+    let db = Database::new().await;
+    let store = db.store("study");
+    store.migrate().await.unwrap();
+    for (section, names) in [
+        ("components", crate::check::COMPONENTS.as_slice()),
+        ("hints", crate::check::HINTS.as_slice()),
+    ] {
+        for name in names.iter().filter(|name| **name != "gpu") {
+            let first = store.resolve(Some(name), "first", &record()).await;
+            let mut changed = record();
+            change(&mut changed, "components", "gpu", "GPU changed");
+            change(&mut changed, section, name, "another probe changed too");
+            let separate = store.resolve(Some(name), "changed", &changed).await;
+            assert_eq!(separate.method.as_deref(), Some("new"), "{section}.{name}");
+            assert_ne!(separate.visitor_id, first.visitor_id, "{section}.{name}");
+        }
+    }
+    let mut missing = record();
+    missing.evidence["components"]
+        .as_object_mut()
+        .unwrap()
+        .remove("gpu");
+    missing.evidence["unavailable"]["gpu"] = "timeout".into();
+    rehash(&mut missing.evidence);
+    let incomplete = store.resolve(None, "missing-gpu", &missing).await;
+    assert_eq!(incomplete.status, "insufficient_evidence");
+    assert!(incomplete.visitor_id.is_none());
+
+    let mut safari = record();
+    safari.evidence["excluded"] = json!(["audio", "canvas", "screen"]);
+    rehash(&mut safari.evidence);
+    let first = store.resolve(None, "safari", &safari).await;
+    change(&mut safari, "components", "gpu", "GPU changed");
+    let separate = store.resolve(None, "safari-gpu", &safari).await;
+    assert_eq!(separate.method.as_deref(), Some("new"));
+    assert_ne!(separate.visitor_id, first.visitor_id);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn gpu_migration_backfills_references_without_merging_or_rewriting_decisions() {
+    let db = Database::new().await;
+    let store = db.store("study");
+    store.migrate_to(2).await.unwrap();
+    let baseline = record();
+    let first = store.resolve(None, "before-gpu-rule", &baseline).await;
+    assert_eq!(first.rule_version, 2);
+    for index in 0..10 {
+        let mut enrolled = record();
+        change(
+            &mut enrolled,
+            "components",
+            "gpu",
+            &format!("independent GPU-{index}"),
+        );
+        let decision = store
+            .resolve(None, &format!("enrolled-{index}"), &enrolled)
+            .await;
+        assert_ne!(decision.visitor_id, first.visitor_id);
+    }
+    store.migrate().await.unwrap();
+    store.migrate().await.unwrap();
+    assert_eq!(
+        store.resolve(None, "before-gpu-rule", &baseline).await,
+        first
+    );
+    let exact = store.resolve(None, "after-gpu-rule", &baseline).await;
+    assert_eq!(exact.visitor_id, first.visitor_id);
+    assert_eq!(exact.method.as_deref(), Some("exact"));
+    assert_eq!(exact.rule_version, 3);
+    let mut gpu = record();
+    change(&mut gpu, "components", "gpu", "unseen GPU");
+    let ambiguous = store.resolve(None, "many-gpu-roots", &gpu).await;
+    assert_eq!(ambiguous.status, "ambiguous");
+    assert!(ambiguous.visitor_id.is_none());
+    let client = store.pool.get().await.unwrap();
+    assert_eq!(
+        client
+            .query_one(
+                "SELECT count(*) FROM of_rule_indexes WHERE rule='gpu-v1'",
+                &[]
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        11
+    );
+    client
+        .execute(
+            "DELETE FROM of_visitors WHERE visitor_id<>$1",
+            &[&first.visitor_id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.resolve(None, "many-gpu-roots", &gpu).await, ambiguous);
+    let matched = store.resolve(None, "one-gpu-root", &gpu).await;
+    assert_eq!(matched.visitor_id, first.visitor_id);
+    assert_eq!(matched.method.as_deref(), Some(GPU_RULE));
+    assert_eq!(
+        client
+            .query_one(
+                "SELECT count(*) FROM of_rule_indexes WHERE rule='gpu-v1'",
+                &[]
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        1
+    );
+    client.batch_execute("UPDATE of_visitors SET profile=jsonb_set(profile, '{hints,browser}', to_jsonb(repeat('a', 64)))").await.unwrap();
+    change(&mut gpu, "components", "gpu", "another unseen GPU");
+    assert_eq!(
+        store
+            .resolve(None, "corrupt-gpu-reference", &gpu)
+            .await
+            .status,
+        "unavailable"
+    );
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn gpu_rule_migration_racing_resolutions_keeps_complete_indexes_and_frozen_decisions() {
+    for _ in 0..8 {
+        let db = Database::new().await;
+        let old_reader = db.store("study");
+        old_reader.migrate_to(2).await.unwrap();
+        let baseline = record();
+        let first = old_reader.resolve(None, "first", &baseline).await;
+        let mut gpu = record();
+        change(
+            &mut gpu,
+            "components",
+            "gpu",
+            "GPU changed during migration",
+        );
+        let migrator = db.store("study");
+        let (migration, raced) =
+            tokio::join!(migrator.migrate(), old_reader.resolve(None, "raced", &gpu));
+        migration.unwrap();
+        assert_eq!(raced.status, "resolved");
+        match raced.rule_version {
+            2 => {
+                assert_eq!(raced.method.as_deref(), Some("new"));
+                assert_ne!(raced.visitor_id, first.visitor_id);
+            }
+            3 => {
+                assert_eq!(raced.method.as_deref(), Some(GPU_RULE));
+                assert_eq!(raced.visitor_id, first.visitor_id);
+            }
+            other => panic!("unexpected migration revision {other}"),
+        }
+        assert_eq!(old_reader.resolve(None, "first", &baseline).await, first);
+        assert_eq!(old_reader.resolve(None, "raced", &gpu).await, raced);
+        let client = old_reader.pool.get().await.unwrap();
+        let counts = client.query_one("SELECT (SELECT count(*) FROM of_visitors), (SELECT count(*) FROM of_rule_indexes WHERE rule='gpu-v1')", &[]).await.unwrap();
+        assert_eq!(counts.get::<_, i64>(0), counts.get::<_, i64>(1));
+        db.cleanup().await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn gpu_and_locale_candidates_must_agree_instead_of_following_rule_order() {
+    let db = Database::new().await;
+    let store = db.store("study");
+    store.migrate_to(2).await.unwrap();
+    let mut locale = record();
+    change(&mut locale, "hints", "locale", "other locale");
+    let a = store.resolve(None, "locale-reference", &locale).await;
+    let mut gpu = record();
+    change(&mut gpu, "components", "gpu", "other GPU");
+    let b = store.resolve(None, "gpu-reference", &gpu).await;
+    assert_ne!(a.visitor_id, b.visitor_id);
+    store.migrate().await.unwrap();
+    let ambiguous = store.resolve(None, "conflicting-rules", &record()).await;
+    assert_eq!(ambiguous.status, "ambiguous");
+    assert!(ambiguous.visitor_id.is_none());
+    assert_eq!(
+        store.resolve(None, "a-exact", &locale).await.visitor_id,
+        a.visitor_id
+    );
+    assert_eq!(
+        store.resolve(None, "b-exact", &gpu).await.visitor_id,
+        b.visitor_id
+    );
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn gpu_drift_converges_across_concurrent_replicas_without_an_existing_reference() {
+    let db = Database::new().await;
+    db.store("study").migrate().await.unwrap();
+    let mut tasks = tokio::task::JoinSet::new();
+    for index in 0..32 {
+        let replica = db.store("study");
+        tasks.spawn(async move {
+            let mut gpu = record();
+            change(
+                &mut gpu,
+                "components",
+                "gpu",
+                &format!("concurrent GPU-{index}"),
+            );
+            let id = format!("gpu-{index}");
+            let decision = replica.resolve(None, &id, &gpu).await;
+            (id, gpu, decision)
+        });
+    }
+    let store = db.store("study");
+    let mut identities = std::collections::HashSet::new();
+    while let Some(task) = tasks.join_next().await {
+        let (id, gpu, decision) = task.unwrap();
+        let retried = store.resolve(None, &id, &gpu).await;
+        assert_eq!(retried.status, "resolved");
+        if decision.status != "unavailable" {
+            assert_eq!(retried, decision);
+        }
+        identities.insert(retried.visitor_id.unwrap());
+    }
+    assert_eq!(identities.len(), 1);
+    let client = store.pool.get().await.unwrap();
+    assert_eq!(
+        client
+            .query_one("SELECT count(*) FROM of_visitors", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        1
+    );
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
 async fn migrations_preserve_ids_frozen_decisions_and_ambiguous_roots() {
     let db = Database::new().await;
     let store = db.store("study");
@@ -491,7 +794,10 @@ async fn migrations_preserve_ids_frozen_decisions_and_ambiguous_roots() {
         .unwrap();
     assert!(store.migrate().await.is_err());
     client
-        .execute("INSERT INTO of_migrations VALUES (3, 'future')", &[])
+        .execute(
+            "INSERT INTO of_migrations VALUES ($1, 'future')",
+            &[&((MIGRATIONS.len() + 1) as i32)],
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -762,7 +1068,7 @@ async fn independently_labelled_synthetic_cases_expose_splits_and_indistinguisha
             false_splits += usize::from(label == other_label && visitor != other_visitor);
         }
     }
-    assert_eq!((false_merges, false_splits), (2, 2));
+    assert_eq!((false_merges, false_splits), (5, 2));
     println!(
         "Synthetic observation-pair comparisons only: false merges={false_merges}, false splits={false_splits}; real-device cases=0"
     );
@@ -883,7 +1189,7 @@ async fn deleting_a_visitor_removes_it_from_its_customer_scope_only() {
         }
     };
     assert_eq!(rows("of_fingerprints", &a).await, 2);
-    assert_eq!(rows("of_rule_indexes", &a).await, 1);
+    assert_eq!(rows("of_rule_indexes", &a).await, 2);
     let frozen = |id: String| {
         let pool = store.pool.clone();
         async move {
@@ -963,8 +1269,17 @@ async fn deletion_racing_a_resolve_never_leaves_a_decision_for_the_deleted_visit
             .visitor_id
             .unwrap();
         let resolve = tokio::spawn({
-            let (store, scope, observation) = (store.clone(), scope.clone(), observation.clone());
-            async move { store.resolve(Some(&scope), "second", &observation).await }
+            let (store, scope) = (store.clone(), scope.clone());
+            let mut next = record();
+            if round % 2 != 0 {
+                change(
+                    &mut next,
+                    "components",
+                    "gpu",
+                    "GPU changed during deletion",
+                );
+            }
+            async move { store.resolve(Some(&scope), "second", &next).await }
         });
         let delete = tokio::spawn({
             let (store, scope, visitor) = (store.clone(), scope.clone(), visitor.clone());
