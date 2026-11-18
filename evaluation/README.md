@@ -162,3 +162,7 @@ The browser check runs real SDK collection in Chromium, Firefox and WebKit on **
 host**, two visits each, blocks external requests and writes only an aggregate synthetic
 report to `.test-results/identification/smoke-report.json`. It tests the measurement pipeline,
 not physical-device accuracy; it reports **zero real-device observations**. Both run in CI.
+
+For the on-hold GPU-only reconciliation proposal, see the
+[controlled GPU-drift investigation](gpu-drift.md). Its runnable one-host lab measures
+backend changes and invalid context-loss reads, not different-device false merges.
