@@ -16,11 +16,13 @@ use crate::check::ApiError;
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 const MIGRATION_LOCK: i64 = 0x4f46505649534954;
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     include_str!("../migrations/001_visitors.sql"),
     include_str!("../migrations/002_locale_rule.sql"),
+    include_str!("../migrations/003_gpu_rule.sql"),
 ];
 const LOCALE_RULE: &str = "locale-v1";
+const GPU_RULE: &str = "gpu-v1";
 const CANDIDATE_LIMIT: usize = 8;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,6 +35,31 @@ pub(crate) struct Profile {
     pub excluded: Vec<String>,
     pub identity_groups: BTreeMap<String, String>,
     pub locale_signature: Option<String>,
+}
+
+impl Profile {
+    fn gpu_signature(&self) -> Option<String> {
+        if self.schema_version != 1 || !self.excluded.is_empty() || self.locale_signature.is_none()
+        {
+            return None;
+        }
+        self.components.get("gpu")?;
+        // This order is part of migration 003's persisted index signature.
+        let hashes = crate::check::COMPONENTS
+            .iter()
+            .filter(|name| **name != "gpu")
+            .map(|name| self.components.get(*name).map(String::as_str))
+            .chain(
+                crate::check::HINTS
+                    .iter()
+                    .map(|name| self.hints.get(*name).map(String::as_str)),
+            )
+            .collect::<Option<Vec<_>>>()?;
+        Some(crate::check::sha256(&format!(
+            "openfingerprint:visitor:gpu:1|{}",
+            hashes.join("|")
+        )))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -293,6 +320,9 @@ impl Store {
             if let Some(signature) = &profile.locale_signature {
                 locks.push(lock_key(namespace, site, LOCALE_RULE, signature));
             }
+            if let Some(signature) = profile.gpu_signature() {
+                locks.push(lock_key(namespace, site, GPU_RULE, &signature));
+            }
         }
         locks.sort_unstable();
         locks.dedup();
@@ -349,30 +379,49 @@ impl Store {
         if let Some(row) = transaction.query_opt("SELECT visitor_id FROM of_fingerprints WHERE namespace=$1 AND site=$2 AND schema_version=$3 AND fingerprint=$4",
             &[&namespace, &site, &profile.schema_version, &profile.fingerprint]).await.map_err(|_| ())? {
             visitor = Some(row.get::<_, String>(0));
-        } else if version >= 2 && let Some(signature) = &profile.locale_signature {
-            let candidates = transaction.query("SELECT visitor_id FROM of_rule_indexes WHERE namespace=$1 AND site=$2 AND rule=$3 AND signature=$4 ORDER BY visitor_id LIMIT $5",
-                &[&namespace, &site, &LOCALE_RULE, signature, &((CANDIDATE_LIMIT + 1) as i64)]).await.map_err(|_| ())?;
-            if candidates.len() > 1 {
-                let mut decision = Decision::unknown("ambiguous");
-                decision.rule_version = version as u32;
-                return Ok(decision);
-            }
-            if let Some(candidate) = candidates.first() {
-                let candidate_id: String = candidate.get(0);
-                let row = transaction.query_one("SELECT profile FROM of_visitors WHERE namespace=$1 AND site=$2 AND visitor_id=$3",
-                    &[&namespace, &site, &candidate_id]).await.map_err(|_| ())?;
-                let reference: Profile = serde_json::from_value(row.get(0)).map_err(|_| ())?;
-                if reference.schema_version != profile.schema_version
-                    || reference.excluded != profile.excluded
-                    || reference.components != profile.components
-                    || reference.identity_groups != profile.identity_groups
-                    || reference.hints.iter().filter(|(key, _)| *key != "locale")
-                        .ne(profile.hints.iter().filter(|(key, _)| *key != "locale"))
-                {
-                    return Err(());
+        } else {
+            let gpu_signature = profile.gpu_signature();
+            for (revision, rule, signature) in [
+                (2, LOCALE_RULE, profile.locale_signature.as_deref()),
+                (3, GPU_RULE, gpu_signature.as_deref()),
+            ] {
+                let Some(signature) = signature.filter(|_| version >= revision) else { continue };
+                let candidates = transaction.query("SELECT visitor_id FROM of_rule_indexes WHERE namespace=$1 AND site=$2 AND rule=$3 AND signature=$4 ORDER BY visitor_id LIMIT $5",
+                    &[&namespace, &site, &rule, &signature, &((CANDIDATE_LIMIT + 1) as i64)]).await.map_err(|_| ())?;
+                if candidates.len() > 1 {
+                    let mut decision = Decision::unknown("ambiguous");
+                    decision.rule_version = version as u32;
+                    return Ok(decision);
                 }
-                visitor = Some(candidate_id);
-                method = LOCALE_RULE;
+                if let Some(candidate) = candidates.first() {
+                    let candidate_id: String = candidate.get(0);
+                    let row = transaction.query_one("SELECT profile FROM of_visitors WHERE namespace=$1 AND site=$2 AND visitor_id=$3",
+                        &[&namespace, &site, &candidate_id]).await.map_err(|_| ())?;
+                    let reference: Profile = serde_json::from_value(row.get(0)).map_err(|_| ())?;
+                    let equal = reference.schema_version == profile.schema_version
+                        && reference.excluded == profile.excluded
+                        && if rule == LOCALE_RULE {
+                            reference.components == profile.components
+                                && reference.identity_groups == profile.identity_groups
+                                && reference.hints.iter().filter(|(key, _)| *key != "locale")
+                                    .eq(profile.hints.iter().filter(|(key, _)| *key != "locale"))
+                        } else {
+                            reference.gpu_signature().as_deref() == Some(signature)
+                                && reference.components.iter().filter(|(key, _)| *key != "gpu")
+                                    .eq(profile.components.iter().filter(|(key, _)| *key != "gpu"))
+                                && reference.hints == profile.hints
+                                && reference.identity_groups.iter().filter(|(key, _)| *key != "rendering")
+                                    .eq(profile.identity_groups.iter().filter(|(key, _)| *key != "rendering"))
+                        };
+                    if !equal { return Err(()) }
+                    if visitor.as_ref().is_some_and(|id| id != &candidate_id) {
+                        let mut decision = Decision::unknown("ambiguous");
+                        decision.rule_version = version as u32;
+                        return Ok(decision);
+                    }
+                    visitor = Some(candidate_id);
+                    if method == "exact" { method = rule }
+                }
             }
         }
         let visitor = match visitor {
@@ -383,11 +432,15 @@ impl Store {
                 let value = serde_json::to_value(profile).map_err(|_| ())?;
                 transaction.execute("INSERT INTO of_visitors (namespace, site, visitor_id, profile) VALUES ($1, $2, $3, $4)",
                     &[&namespace, &site, &visitor, &value]).await.map_err(|_| ())?;
-                if version >= 2
-                    && let Some(signature) = &profile.locale_signature
-                {
-                    transaction.execute("INSERT INTO of_rule_indexes (namespace, site, rule, signature, visitor_id) VALUES ($1, $2, $3, $4, $5)",
-                        &[&namespace, &site, &LOCALE_RULE, signature, &visitor]).await.map_err(|_| ())?;
+                let gpu_signature = profile.gpu_signature();
+                for (revision, rule, signature) in [
+                    (2, LOCALE_RULE, profile.locale_signature.as_deref()),
+                    (3, GPU_RULE, gpu_signature.as_deref()),
+                ] {
+                    if let Some(signature) = signature.filter(|_| version >= revision) {
+                        transaction.execute("INSERT INTO of_rule_indexes (namespace, site, rule, signature, visitor_id) VALUES ($1, $2, $3, $4, $5)",
+                            &[&namespace, &site, &rule, &signature, &visitor]).await.map_err(|_| ())?;
+                    }
                 }
                 visitor
             }

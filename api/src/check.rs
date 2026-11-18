@@ -257,7 +257,7 @@ impl Evidence {
     }
 }
 
-const COMPONENTS: [&str; 6] = [
+pub(crate) const COMPONENTS: [&str; 6] = [
     "audio",
     "canvas",
     "fontFallbacks",
@@ -265,7 +265,7 @@ const COMPONENTS: [&str; 6] = [
     "fonts",
     "gpu",
 ];
-const HINTS: [&str; 10] = [
+pub(crate) const HINTS: [&str; 10] = [
     "architecture",
     "browser",
     "display",
