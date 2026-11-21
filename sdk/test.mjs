@@ -183,30 +183,35 @@ try {
 			return route.continue();
 		});
 		const page = await context.newPage();
-		const mockGpu = () => {
-				const original = HTMLCanvasElement.prototype.getContext;
-				const gpu = new Proxy({
-					getParameter: parameter => {
-						if (parameter === 'MAX_VERTEX_ATTRIBS') return window.gpuLimit ?? 16;
-						if (['VENDOR', 'RENDERER', 'SHADING_LANGUAGE_VERSION', 'VERSION'].includes(parameter)) return parameter;
-						if (['MAX_VIEWPORT_DIMS', 'ALIASED_LINE_WIDTH_RANGE', 'ALIASED_POINT_SIZE_RANGE'].includes(parameter))
-							return new Float32Array([1, 32]);
-						if (parameter === 'COMPRESSED_TEXTURE_FORMATS') return new Uint32Array();
-						return 32;
-					},
-					getExtension: name => name === 'WEBGL_lose_context' ? { loseContext() {} } : null,
-					getShaderPrecisionFormat: () => ({ rangeMin: 127, rangeMax: 127, precision: 23 }),
-					getSupportedExtensions: () => [],
-					isContextLost: () => false,
-					getError: () => 'NO_ERROR',
-				}, { get: (target, key) => key in target ? target[key] : key });
-				HTMLCanvasElement.prototype.getContext = function (type, ...args) {
-					return type === 'webgl' ? gpu : original.call(this, type, ...args);
-				};
+		const mockGpu = (fault) => {
+			const original = HTMLCanvasElement.prototype.getContext;
+			let lost = fault === 'already-lost';
+			const gpu = new Proxy({
+				getParameter: parameter => {
+					if (parameter === 'MAX_VERTEX_ATTRIBS') {
+						if (fault === 'lost-during-read') lost = true;
+						if (fault === 'null-limit') return null;
+						return window.gpuLimit ?? 16;
+					}
+					if (['VENDOR', 'RENDERER', 'SHADING_LANGUAGE_VERSION', 'VERSION'].includes(parameter)) return parameter;
+					if (['MAX_VIEWPORT_DIMS', 'ALIASED_LINE_WIDTH_RANGE', 'ALIASED_POINT_SIZE_RANGE'].includes(parameter))
+						return new Float32Array(fault === 'short-range' && parameter === 'MAX_VIEWPORT_DIMS' ? [1] : [1, 32]);
+					if (parameter === 'COMPRESSED_TEXTURE_FORMATS') return new Uint32Array();
+					return 32;
+				},
+				getExtension: name => name === 'WEBGL_lose_context' ? { loseContext() {} } : null,
+				getShaderPrecisionFormat: () => fault === 'null-precision' ? null : ({ rangeMin: 127, rangeMax: 127, precision: 23 }),
+				getSupportedExtensions: () => fault === 'null-extensions' ? null : [],
+				isContextLost: () => lost,
+				getError: () => fault === 'gl-error' ? 'INVALID_ENUM' : fault === 'reported-lost' ? 'CONTEXT_LOST_WEBGL' : 'NO_ERROR',
+			}, { get: (target, key) => key in target ? target[key] : key });
+			HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+				return type === 'webgl' ? gpu : original.call(this, type, ...args);
 			};
+		};
 		const fresh = async (init, arg, gpu = false) => {
 			const p = await context.newPage();
-			if (gpu) await p.addInitScript(mockGpu);
+			if (gpu) await p.addInitScript(mockGpu, gpu === true ? undefined : gpu);
 			if (init) await p.addInitScript(init, arg);
 			await p.goto(`${origin}/custom`);
 			return p;
@@ -943,45 +948,28 @@ try {
 			assert.equal(r.unavailable.fonts, 'error');
 			assert.equal(await p.locator('iframe').count(), 0);
 			await p.close();
-			for (const fault of ['already-lost', 'lost-during-read', 'gl-error', 'null-limit', 'short-range', 'null-precision', 'null-extensions']) {
-				p = await fresh((fault) => {
+			const checkGpuFailure = async (p, fault, status) => {
+				const result = await p.evaluate(() => OpenFingerprint.collect({ timeoutMs: 5000 }));
+				valid(result);
+				assert.equal(result.unavailable.gpu, status, `${name}: ${fault}`);
+				assert.equal(result.components.gpu, undefined);
+				assert.equal(result.automation.softwareRenderer, null);
+				assert(result.hints.browser);
+				await p.close();
+			};
+			for (const fault of ['already-lost', 'lost-during-read', 'reported-lost', 'gl-error', 'null-limit', 'short-range', 'null-precision', 'null-extensions']) {
+				await checkGpuFailure(await fresh(null, undefined, fault), fault, fault.includes('lost') ? 'unstable' : 'error');
+			}
+			// Native WebGL is not reliably available in Firefox on headless Linux CI.
+			if (name === 'chromium') {
+				await checkGpuFailure(await fresh(() => {
 					const original = HTMLCanvasElement.prototype.getContext;
 					HTMLCanvasElement.prototype.getContext = function (type, ...args) {
 						const ctx = original.call(this, type, ...args);
-						if (type !== 'webgl' || !ctx) return ctx;
-						window.gpuCaseRan = true;
-						if (fault === 'already-lost') {
-							ctx.getExtension('WEBGL_lose_context')?.loseContext();
-							window.gpuCaseRan = ctx.isContextLost();
-						} else if (fault === 'gl-error') {
-							ctx.enable(0);
-						} else if (fault === 'null-precision') {
-							ctx.getShaderPrecisionFormat = () => null;
-						} else if (fault === 'null-extensions') {
-							ctx.getSupportedExtensions = () => null;
-						} else {
-							const read = ctx.getParameter.bind(ctx);
-							ctx.getParameter = parameter => {
-								if (fault === 'lost-during-read' && parameter === ctx.MAX_VERTEX_ATTRIBS) {
-									ctx.getExtension('WEBGL_lose_context')?.loseContext();
-									window.gpuCaseRan = ctx.isContextLost();
-								}
-								if (fault === 'null-limit' && parameter === ctx.MAX_VERTEX_ATTRIBS) return null;
-								if (fault === 'short-range' && parameter === ctx.MAX_VIEWPORT_DIMS) return new Int32Array([1]);
-								return read(parameter);
-							};
-						}
+						if (type === 'webgl') ctx?.getExtension('WEBGL_lose_context')?.loseContext();
 						return ctx;
 					};
-				}, fault);
-				r = await p.evaluate(() => OpenFingerprint.collect());
-				valid(r);
-				assert.equal(await p.evaluate(() => window.gpuCaseRan), true, `${name}: ${fault} exercised`);
-				assert.equal(r.unavailable.gpu, fault.includes('lost') ? 'unstable' : 'error', `${name}: ${fault}`);
-				assert.equal(r.components.gpu, undefined);
-				assert.equal(r.automation.softwareRenderer, null);
-				assert(r.hints.browser);
-				await p.close();
+				}), 'native context loss', 'unstable');
 			}
 			for (const gpu of ['native', 'unsupported', 'error']) {
 				p = await fresh((mode) => {
