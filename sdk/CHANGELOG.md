@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/Mokto/openfingerprint/compare/sdk-v0.13.1...sdk-v0.13.2) (2026-11-21)
+
+
+### Bug Fixes
+
+* **sdk:** stop hashing invalid WebGL reads as GPU evidence ([#146](https://github.com/Mokto/openfingerprint/issues/146)) ([0a01a76](https://github.com/Mokto/openfingerprint/commit/0a01a7616342f2ad6dc53448455df963e04116d8))
+
 ## [0.13.1](https://github.com/Mokto/openfingerprint/compare/sdk-v0.13.0...sdk-v0.13.1) (2026-11-17)
 
 
