@@ -304,8 +304,12 @@ evidence it posts:
   `blockingMs` covers only the initial synchronous portion of a probe call, not
   cumulative CPU work or the longest later task.
 
-Missing probes do not receive a common success-like placeholder. Aggregate IDs
-may be null; excluded diagnostic evidence alone cannot produce an identity.
+Missing probes do not receive a common success-like placeholder. The GPU probe
+reports a lost WebGL context as `unstable` and malformed reads or other WebGL
+errors as `error`. Neither produces a GPU hash or a software-renderer observation.
+A partial aggregate can still be computed from other probes, but the API requires
+complete policy-included evidence to issue or match a visitor ID. Excluded
+diagnostic evidence alone cannot produce an identity.
 Never interpret missing IDs as matches. Preserve the schema, availability and
 exclusion metadata when comparing observations.
 

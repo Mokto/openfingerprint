@@ -345,7 +345,10 @@ function gpu(): Value {
 	const ctx = el.getContext('webgl', { antialias: false, depth: false, stencil: false });
 	if (!ctx) return unsupported;
 	try {
+		if (ctx.isContextLost()) return unstable;
 		const debug = ctx.getExtension('WEBGL_debug_renderer_info');
+		let valid = true;
+		const isText = (value: unknown) => typeof value === 'string' && value.length > 0;
 		const parameters = [
 			ctx.MAX_TEXTURE_SIZE,
 			ctx.MAX_CUBE_MAP_TEXTURE_SIZE,
@@ -371,8 +374,24 @@ function gpu(): Value {
 			ctx.SHADING_LANGUAGE_VERSION,
 			ctx.VERSION
 		].map((parameter) => {
-			const value = ctx.getParameter(parameter);
-			return ArrayBuffer.isView(value) ? Array.from(value as unknown as Iterable<number>) : value;
+			const raw = ctx.getParameter(parameter);
+			const value = ArrayBuffer.isView(raw) ? Array.from(raw as unknown as Iterable<number>) : raw;
+			if (parameter === ctx.SHADING_LANGUAGE_VERSION || parameter === ctx.VERSION) {
+				valid &&= isText(value);
+			} else if (
+				parameter === ctx.MAX_VIEWPORT_DIMS ||
+				parameter === ctx.ALIASED_LINE_WIDTH_RANGE ||
+				parameter === ctx.ALIASED_POINT_SIZE_RANGE ||
+				parameter === ctx.COMPRESSED_TEXTURE_FORMATS
+			) {
+				valid &&=
+					Array.isArray(value) &&
+					value.every(Number.isFinite) &&
+					(parameter === ctx.COMPRESSED_TEXTURE_FORMATS || value.length === 2);
+			} else {
+				valid &&= Number.isFinite(value);
+			}
+			return value;
 		});
 		const precision = [ctx.VERTEX_SHADER, ctx.FRAGMENT_SHADER].map((shader) =>
 			[
@@ -389,24 +408,48 @@ function gpu(): Value {
 		);
 		const anisotropy = ctx.getExtension('EXT_texture_filter_anisotropic');
 		const buffers = ctx.getExtension('WEBGL_draw_buffers');
+		const vendor = ctx.getParameter(ctx.VENDOR);
+		const renderer = ctx.getParameter(ctx.RENDERER);
+		const unmaskedVendor = debug ? ctx.getParameter(debug.UNMASKED_VENDOR_WEBGL) : null;
+		const unmaskedRenderer = debug ? ctx.getParameter(debug.UNMASKED_RENDERER_WEBGL) : null;
+		const maxAnisotropy = anisotropy
+			? ctx.getParameter(anisotropy.MAX_TEXTURE_MAX_ANISOTROPY_EXT)
+			: null;
+		const bufferLimits = buffers
+			? [
+					ctx.getParameter(buffers.MAX_DRAW_BUFFERS_WEBGL),
+					ctx.getParameter(buffers.MAX_COLOR_ATTACHMENTS_WEBGL)
+				]
+			: null;
+		const extensions = ctx.getSupportedExtensions();
+		const glError = ctx.getError();
+		if (ctx.isContextLost() || glError === ctx.CONTEXT_LOST_WEBGL) return unstable;
+		if (
+			glError !== ctx.NO_ERROR ||
+			!valid ||
+			!isText(vendor) ||
+			!isText(renderer) ||
+			(debug && (!isText(unmaskedVendor) || !isText(unmaskedRenderer))) ||
+			(anisotropy && !Number.isFinite(maxAnisotropy)) ||
+			(bufferLimits && !bufferLimits.every(Number.isFinite)) ||
+			!precision.every((values) => values.every((value) => value?.every(Number.isInteger))) ||
+			!Array.isArray(extensions) ||
+			!extensions.every(isText)
+		)
+			throw new Error('Invalid WebGL probe read');
 		return JSON.stringify([
-			ctx.getParameter(ctx.VENDOR),
-			ctx.getParameter(ctx.RENDERER),
-			debug ? ctx.getParameter(debug.UNMASKED_VENDOR_WEBGL) : null,
-			debug ? ctx.getParameter(debug.UNMASKED_RENDERER_WEBGL) : null,
+			vendor,
+			renderer,
+			unmaskedVendor,
+			unmaskedRenderer,
 			parameters,
 			precision,
-			anisotropy ? ctx.getParameter(anisotropy.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : null,
-			buffers
-				? [
-						ctx.getParameter(buffers.MAX_DRAW_BUFFERS_WEBGL),
-						ctx.getParameter(buffers.MAX_COLOR_ATTACHMENTS_WEBGL)
-					]
-				: null,
-			(ctx.getSupportedExtensions() || []).sort()
+			maxAnisotropy,
+			bufferLimits,
+			extensions.sort()
 		]);
 	} finally {
-		ctx.getExtension('WEBGL_lose_context')?.loseContext();
+		if (!ctx.isContextLost()) ctx.getExtension('WEBGL_lose_context')?.loseContext();
 	}
 }
 

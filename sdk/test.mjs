@@ -186,10 +186,19 @@ try {
 		const mockGpu = () => {
 				const original = HTMLCanvasElement.prototype.getContext;
 				const gpu = new Proxy({
-					getParameter: parameter => parameter === 'MAX_VERTEX_ATTRIBS' ? (window.gpuLimit ?? 16) : 32,
+					getParameter: parameter => {
+						if (parameter === 'MAX_VERTEX_ATTRIBS') return window.gpuLimit ?? 16;
+						if (['VENDOR', 'RENDERER', 'SHADING_LANGUAGE_VERSION', 'VERSION'].includes(parameter)) return parameter;
+						if (['MAX_VIEWPORT_DIMS', 'ALIASED_LINE_WIDTH_RANGE', 'ALIASED_POINT_SIZE_RANGE'].includes(parameter))
+							return new Float32Array([1, 32]);
+						if (parameter === 'COMPRESSED_TEXTURE_FORMATS') return new Uint32Array();
+						return 32;
+					},
 					getExtension: name => name === 'WEBGL_lose_context' ? { loseContext() {} } : null,
 					getShaderPrecisionFormat: () => ({ rangeMin: 127, rangeMax: 127, precision: 23 }),
 					getSupportedExtensions: () => [],
+					isContextLost: () => false,
+					getError: () => 'NO_ERROR',
 				}, { get: (target, key) => key in target ? target[key] : key });
 				HTMLCanvasElement.prototype.getContext = function (type, ...args) {
 					return type === 'webgl' ? gpu : original.call(this, type, ...args);
@@ -934,6 +943,46 @@ try {
 			assert.equal(r.unavailable.fonts, 'error');
 			assert.equal(await p.locator('iframe').count(), 0);
 			await p.close();
+			for (const fault of ['already-lost', 'lost-during-read', 'gl-error', 'null-limit', 'short-range', 'null-precision', 'null-extensions']) {
+				p = await fresh((fault) => {
+					const original = HTMLCanvasElement.prototype.getContext;
+					HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+						const ctx = original.call(this, type, ...args);
+						if (type !== 'webgl' || !ctx) return ctx;
+						window.gpuCaseRan = true;
+						if (fault === 'already-lost') {
+							ctx.getExtension('WEBGL_lose_context')?.loseContext();
+							window.gpuCaseRan = ctx.isContextLost();
+						} else if (fault === 'gl-error') {
+							ctx.enable(0);
+						} else if (fault === 'null-precision') {
+							ctx.getShaderPrecisionFormat = () => null;
+						} else if (fault === 'null-extensions') {
+							ctx.getSupportedExtensions = () => null;
+						} else {
+							const read = ctx.getParameter.bind(ctx);
+							ctx.getParameter = parameter => {
+								if (fault === 'lost-during-read' && parameter === ctx.MAX_VERTEX_ATTRIBS) {
+									ctx.getExtension('WEBGL_lose_context')?.loseContext();
+									window.gpuCaseRan = ctx.isContextLost();
+								}
+								if (fault === 'null-limit' && parameter === ctx.MAX_VERTEX_ATTRIBS) return null;
+								if (fault === 'short-range' && parameter === ctx.MAX_VIEWPORT_DIMS) return new Int32Array([1]);
+								return read(parameter);
+							};
+						}
+						return ctx;
+					};
+				}, fault);
+				r = await p.evaluate(() => OpenFingerprint.collect());
+				valid(r);
+				assert.equal(await p.evaluate(() => window.gpuCaseRan), true, `${name}: ${fault} exercised`);
+				assert.equal(r.unavailable.gpu, fault.includes('lost') ? 'unstable' : 'error', `${name}: ${fault}`);
+				assert.equal(r.components.gpu, undefined);
+				assert.equal(r.automation.softwareRenderer, null);
+				assert(r.hints.browser);
+				await p.close();
+			}
 			for (const gpu of ['native', 'unsupported', 'error']) {
 				p = await fresh((mode) => {
 					const original = HTMLCanvasElement.prototype.getContext;
@@ -1342,7 +1391,7 @@ try {
 			report.checks.push({
 				browser: name,
 				check:
-					'invalid inputs, unavailable APIs, blocked storage, hung audio and aggregate deadlines, unstable canvas, failed iframe cleanup, slow GPU retains earlier hashes, audio setup and sibling failure cleanup',
+					'invalid inputs, unavailable APIs, blocked storage, hung audio and aggregate deadlines, unstable canvas, failed iframe cleanup, invalid WebGL reads and slow GPU handling, audio setup and sibling failure cleanup',
 				passed: true
 			});
 
