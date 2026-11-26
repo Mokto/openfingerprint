@@ -263,9 +263,11 @@ diagnostics, not attested execution times or identity inputs.
 
 Font catalogue and fallback measurements now use approximately four-millisecond
 work slices, checked between native reads, rather than yielding every eight fonts.
-All candidates, texts, metrics, ordering and hashes are retained. A MessageChannel
-task gives other event-loop work an opportunity to run; it guarantees neither a
-paint nor an input-latency bound. A single native call, GPU initialization or other
+All candidates, texts, metrics, ordering and hashes are retained. The first
+handoff uses a MessageChannel task. Later slices use `scheduler.postTask()`
+where available so they need not wait on the message queue, and fall back to
+MessageChannel if task scheduling fails. Neither mechanism guarantees a paint
+or an input-latency bound. A single native call, GPU initialization or other
 browser work can still block longer than a slice. This targets responsiveness,
 not a guaranteed reduction in total collection time. The default budget remains
 two seconds.
