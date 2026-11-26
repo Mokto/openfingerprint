@@ -167,17 +167,25 @@ async function fontDocument(
 		frame.remove();
 		resume?.();
 	};
-	channel.port1.onmessage = () => {
-		resume?.();
-		resume = undefined;
+	channel.port1.onmessage = () => resume?.();
+	const schedule = async () => {
+		// Keep the first handoff on the normal queue so pending audio and frame callbacks can run.
+		if (sliceStart !== -Infinity && typeof globalThis.scheduler?.postTask === 'function') {
+			try {
+				await globalThis.scheduler.postTask(() => resume?.(), { signal });
+				return;
+			} catch {}
+		}
+		if (!signal.aborted) channel.port2.postMessage(null);
 	};
 	const pause = async () => {
 		if (signal.aborted || performance.now() >= deadline) return false;
 		if (performance.now() - sliceStart >= 4) {
-			await new Promise<void>((resolve) => {
+			await new Promise<void>((resolve, reject) => {
 				resume = resolve;
-				channel.port2.postMessage(null);
+				void schedule().catch(reject);
 			});
+			resume = undefined;
 			sliceStart = performance.now();
 		}
 		return !signal.aborted && performance.now() < deadline;

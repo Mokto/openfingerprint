@@ -637,7 +637,46 @@ try {
 				passed: true
 			});
 
+			if (['chromium', 'chrome'].includes(name)) {
+				const starved = await fresh(() => {
+					const Channel = MessageChannel;
+					window.channelPosts = 0;
+					window.nativeTasks = 0;
+					const postTask = scheduler.postTask.bind(scheduler);
+					scheduler.postTask = (...args) => {
+						window.nativeTasks++;
+						return postTask(...args);
+					};
+					globalThis.MessageChannel = class extends Channel {
+						constructor() {
+							super();
+							const post = this.port2.postMessage.bind(this.port2);
+							let first = true;
+							this.port2.postMessage = (...args) => {
+								window.channelPosts++;
+								if (!first) return;
+								first = false;
+								post(...args);
+							};
+						}
+					};
+				});
+				const result = await starved.evaluate(async () => {
+					const r = await OpenFingerprint.collect();
+					return { fonts: r.components.fonts, fallbacks: r.components.fontFallbacks, channelPosts, nativeTasks };
+				});
+				assert.equal(result.channelPosts, 2, 'Use the task scheduler after the first handoff in each font probe');
+				assert(result.nativeTasks > 0);
+				assert(result.fonts && result.fallbacks);
+				assert.equal(await starved.locator('iframe').count(), 0);
+				await starved.close();
+				report.checks.push({ browser: name, check: 'Font continuations complete with stalled MessageChannel delivery', passed: true });
+			}
+
 			const batching = await fresh(() => {
+				Object.defineProperty(globalThis, 'scheduler', {
+					value: { postTask: () => Promise.reject(new Error('Task scheduling failed')) }
+				});
 				const now = performance.now.bind(performance);
 				let offset = 0;
 				window.fontCalls = 0;
@@ -721,6 +760,7 @@ try {
 			});
 
 			const paused = await fresh(() => {
+				Object.defineProperty(globalThis, 'scheduler', { value: undefined });
 				Object.defineProperty(performance, 'now', { value: () => 0 });
 				const timeout = setTimeout;
 				globalThis.setTimeout = (callback, ms, ...args) =>
@@ -767,8 +807,31 @@ try {
 			assert.equal(await paused.locator('iframe').count(), 0);
 			await paused.close();
 
+			const stalledNative = await fresh(() => {
+				const now = performance.now.bind(performance);
+				let calls = 0;
+				Object.defineProperty(performance, 'now', { value: () => now() + calls++ * 5 });
+				window.nativeTaskStarted = false;
+				Object.defineProperty(globalThis, 'scheduler', {
+					value: { postTask: () => {
+						window.nativeTaskStarted = true;
+						return new Promise(() => {});
+					} }
+				});
+			});
+			const stalled = await stalledNative.evaluate(async () => {
+				const r = await OpenFingerprint.collect();
+				return { nativeTaskStarted, fonts: r.unavailable.fonts, fingerprint: r.fingerprint };
+			});
+			assert(stalled.nativeTaskStarted);
+			assert.equal(stalled.fonts, 'timeout');
+			assert.equal(stalled.fingerprint, null);
+			assert.equal(await stalledNative.locator('iframe').count(), 0);
+			await stalledNative.close();
+
 			for (const expire of ['between-reads', 'during-yield']) {
 				const delayed = await fresh((mode) => {
+					Object.defineProperty(globalThis, 'scheduler', { value: undefined });
 					let clock = 0;
 					Object.defineProperty(performance, 'now', { value: () => clock });
 					Object.defineProperty(navigator, 'userAgent', { value: 'Chrome/156', configurable: true });
@@ -990,7 +1053,7 @@ try {
 					r.components.fonts &&
 						r.components.fontPreferences &&
 						(r.excluded.includes('canvas') || r.components.canvas),
-					'A slow GPU must not discard earlier trusted hashes'
+					`${name}: a slow GPU must not discard earlier trusted hashes (${JSON.stringify(r.unavailable)})`
 				);
 				if (r.excluded.includes('canvas')) assert.equal(r.unavailable.canvas, 'timeout');
 				assert.equal(r.unavailable.gpu, 'timeout');
