@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.3](https://github.com/Mokto/openfingerprint/compare/sdk-v0.13.2...sdk-v0.13.3) (2026-11-28)
+
+
+### Bug Fixes
+
+* **deps:** update non-major dependencies ([#141](https://github.com/Mokto/openfingerprint/issues/141)) ([73e5ffb](https://github.com/Mokto/openfingerprint/commit/73e5ffb756a14b0039b9b9dc201350600e696eb7))
+* **sdk:** schedule later font probe slices with scheduler.postTask ([#150](https://github.com/Mokto/openfingerprint/issues/150)) ([e35eea8](https://github.com/Mokto/openfingerprint/commit/e35eea895a564ad3ad3542712d7618496f8a2817))
+
 ## [0.13.2](https://github.com/Mokto/openfingerprint/compare/sdk-v0.13.1...sdk-v0.13.2) (2026-11-21)
 
 
