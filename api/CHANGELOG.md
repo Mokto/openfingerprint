@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.26.2](https://github.com/Mokto/openfingerprint/compare/api-v0.26.1...api-v0.26.2) (2026-11-28)
+
+
+### Bug Fixes
+
+* **data:** refresh open domain snapshot (2026-11-23) ([#148](https://github.com/Mokto/openfingerprint/issues/148)) ([7302ce5](https://github.com/Mokto/openfingerprint/commit/7302ce5a9b9fd56a845b8fea678dd1d5b3ea00ac))
+* **deps:** update non-major dependencies ([#141](https://github.com/Mokto/openfingerprint/issues/141)) ([73e5ffb](https://github.com/Mokto/openfingerprint/commit/73e5ffb756a14b0039b9b9dc201350600e696eb7))
+* **sdk:** schedule later font probe slices with scheduler.postTask ([#150](https://github.com/Mokto/openfingerprint/issues/150)) ([e35eea8](https://github.com/Mokto/openfingerprint/commit/e35eea895a564ad3ad3542712d7618496f8a2817))
+
 ## [0.26.1](https://github.com/Mokto/openfingerprint/compare/api-v0.26.0...api-v0.26.1) (2026-11-17)
 
 
